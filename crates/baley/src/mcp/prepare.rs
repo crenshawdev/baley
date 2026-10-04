@@ -4,24 +4,31 @@
 //! The plan is pure: from what has been observed so far it gives the next
 //! step to perform, the `failed` answer, or the prepared result. The entry
 //! performs each step and asks again, so a refusal always comes before the
-//! step after it. Every refusal is a `failed` answer with `recorded: false`
-//! and the preparation itself creates nothing: no project, no
-//! `project.initialized` event, no catalog seed, no detection run. The owner
-//! sets those up with `baley init` and `baley config`.
+//! step after it. Every refusal is a `failed` answer with `recorded: false`:
+//! preparation records nothing itself. Checkout admission and the policy step
+//! are separate transactions, as on the command line, so a store failure at
+//! the step can follow a checkout admission that already recorded
+//! `checkout.seen`. That record stands. Preparation creates no project, no
+//! `project.initialized` event, no catalog seed and runs no detection: the
+//! owner sets those up with `baley init` and `baley config`.
 
 use std::path::{Path, PathBuf};
 
+use baley_core::checkout::PROJECT_ID_CONFLICT;
 use baley_core::policy::recorded::{RecordedPolicy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile, Unavailable};
 use baley_store::{
-    Actor, Admin, Caller, Command, CommandKind, Hash, ProjectId, RequestId, ServerCaller,
-    StoreError,
+    Actor, Admin, Caller, Command, CommandKind, Hash, Ledger, ProjectId, RequestId, ServerCaller,
+    StoreError, Views,
 };
 use serde_json::Value;
 
+use crate::checkout::{self, EntryError, EntryRefusal, Site};
 use crate::discovery::{self, Ancestor, Discovery, PROJECT_FILE};
 use crate::envelope::{Envelope, LEDGER_BUSY};
+use crate::ledger::commands::new_request_id;
 use crate::policy_step::{self, Reads};
+use crate::process::Process;
 use crate::{init, settings};
 
 /// The code for a project directory that cannot be walked, such as one
@@ -38,10 +45,15 @@ pub const PROJECT_NOT_IN_LEDGER: &str = "project-not-in-ledger";
 /// The code for a ledger that cannot take the call and is not just busy.
 pub const LEDGER_UNAVAILABLE: &str = "ledger-unavailable";
 
+/// The code for a checkout whose git facts could not be gathered.
+pub const CHECKOUT_FACTS_UNAVAILABLE: &str = "checkout-facts-unavailable";
+
 const PLACE_PROJECT_DIR: &str = "CLAUDE_PROJECT_DIR";
 const PLACE_SETTINGS: &str = "settings";
 const PLACE_PROJECT: &str = "project";
 const PLACE_LEDGER: &str = "ledger";
+const PLACE_GIT: &str = "git";
+const PLACE_CHECKOUT: &str = "checkout";
 
 /// A project read or write ready to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,31 +63,8 @@ pub struct Prepared {
     /// The canonical repository root discovery found. The caller keeps the
     /// project directory text exactly as it was given.
     pub root: PathBuf,
-}
-
-/// The two policies a write is judged under.
-#[derive(Debug)]
-pub struct WritePolicies {
-    /// The policy built with no host. Its `git.remote` names the remote the
-    /// checkout's facts come from, the one the command line uses, so the
-    /// server and the command line record one remote for one checkout.
-    pub facts: EffectivePolicy,
-    /// The policy built for the call's host, recorded at the root. The policy
-    /// step records it as `policy.effective` under (checkout, host), so the
-    /// host's section values apply.
-    pub recorded: RecordedPolicy,
-}
-
-/// Judges the gathered settings of a write for the call's `host` and the
-/// discovered `root`. The recorded checkout is the root's text, the path
-/// checkout admission keys its hostless version by. A fault, which includes a
-/// root that is not UTF-8, is the `config-unavailable` text, in `build`'s
-/// order.
-pub fn judge_settings(reads: &Reads, host: Host, root: &Path) -> Result<WritePolicies, String> {
-    let facts = policy_step::build(reads, None).map_err(|e| e.to_string())?;
-    let with_host = policy_step::build(reads, Some(host)).map_err(|e| e.to_string())?;
-    let recorded = recorded_policy(root, &with_host).map_err(|e| e.to_string())?;
-    Ok(WritePolicies { facts, recorded })
+    /// The domain command to run. `Some` exactly when a write was requested.
+    pub command: Option<Command>,
 }
 
 /// The identity a served write supplies, which preparation carries into the
@@ -122,6 +111,31 @@ pub fn prepared_command(
     }
 }
 
+/// The two policies a write is judged under.
+#[derive(Debug)]
+struct WritePolicies {
+    /// The policy built with no host. Its `git.remote` names the remote the
+    /// checkout's facts come from, the one the command line uses, so the
+    /// server and the command line record one remote for one checkout.
+    facts: EffectivePolicy,
+    /// The policy built for the call's host, recorded at the root. The policy
+    /// step records it as `policy.effective` under (checkout, host), so the
+    /// host's section values apply.
+    recorded: RecordedPolicy,
+}
+
+/// Judges the gathered settings of a write for the call's `host` and the
+/// discovered `root`. The recorded checkout is the root's text, the path
+/// checkout admission keys its hostless version by. A fault, which includes a
+/// root that is not UTF-8, is the `config-unavailable` text, in `build`'s
+/// order.
+fn judge_settings(reads: &Reads, host: Host, root: &Path) -> Result<WritePolicies, String> {
+    let facts = policy_step::build(reads, None).map_err(|e| e.to_string())?;
+    let with_host = policy_step::build(reads, Some(host)).map_err(|e| e.to_string())?;
+    let recorded = recorded_policy(root, &with_host).map_err(|e| e.to_string())?;
+    Ok(WritePolicies { facts, recorded })
+}
+
 /// Why a store step could not answer.
 #[derive(Debug)]
 enum LedgerFault {
@@ -129,6 +143,8 @@ enum LedgerFault {
     NoStore,
     /// The store returned this error.
     Store(StoreError),
+    /// Gathering or admitting the checkout refused it.
+    Checkout(EntryError),
 }
 
 /// What preparation has observed so far.
@@ -140,6 +156,20 @@ struct Seen {
     working: Option<Result<Option<SettingsFile>, Unavailable>>,
     /// The ledger's project ids.
     projects: Option<Result<Vec<ProjectId>, LedgerFault>>,
+    /// The global file and HEAD's copy of the project file.
+    reads: Option<Reads>,
+    /// Checkout facts gathered and the checkout admitted.
+    admitted: Option<Result<(), LedgerFault>>,
+    /// The version the policy step returned.
+    stepped: Option<Result<u64, LedgerFault>>,
+}
+
+/// What the call is, as the plan needs it.
+struct Call<'a> {
+    caller: &'a ServerCaller,
+    host: Host,
+    at: &'a str,
+    write: Option<&'a WriteRequest>,
 }
 
 /// One step the entry performs for the plan.
@@ -151,6 +181,23 @@ enum Step {
     ReadProjectFile(PathBuf),
     /// List the ledger's projects.
     ListProjects,
+    /// Read the global file and HEAD's copy of this working-tree file.
+    ReadSettings {
+        root: PathBuf,
+        working: SettingsFile,
+    },
+    /// Gather the checkout's facts and run checkout admission.
+    AdmitCheckout {
+        project: ProjectId,
+        root: PathBuf,
+        policy: EffectivePolicy,
+        path: String,
+    },
+    /// Run the policy step for the host's recorded policy.
+    RecordPolicy {
+        project: ProjectId,
+        recorded: RecordedPolicy,
+    },
 }
 
 /// What the plan wants next.
@@ -167,25 +214,52 @@ fn failed(code: &str, reason: impl Into<String>, place: &str) -> Next {
 
 /// The answer for a store step that could not answer. Only a busy ledger is
 /// retryable.
-fn ledger_failed(fault: &LedgerFault) -> Next {
+fn store_failed(error: &StoreError) -> Next {
+    match error {
+        StoreError::Busy => failed(
+            LEDGER_BUSY,
+            "the ledger is busy, so the call was not taken. Try it again",
+            PLACE_LEDGER,
+        ),
+        error => failed(LEDGER_UNAVAILABLE, error.to_string(), PLACE_LEDGER),
+    }
+}
+
+/// The answer for a step that failed. A fork and a git refusal are read
+/// through the same [`EntryError::refusal`] the command line uses, and the
+/// fork's text names the owner's step rather than telling the reader to run it.
+fn fault_failed(fault: &LedgerFault) -> Next {
     match fault {
         LedgerFault::NoStore => failed(
             LEDGER_UNAVAILABLE,
             "the ledger could not be opened when this server started, so no project call can be taken",
             PLACE_LEDGER,
         ),
-        LedgerFault::Store(StoreError::Busy) => failed(
-            LEDGER_BUSY,
-            "the ledger is busy, so the call was not taken. Try it again",
-            PLACE_LEDGER,
-        ),
-        LedgerFault::Store(error) => failed(LEDGER_UNAVAILABLE, error.to_string(), PLACE_LEDGER),
+        LedgerFault::Store(error) => store_failed(error),
+        LedgerFault::Checkout(error) => match error.refusal() {
+            EntryRefusal::Git(text) => failed(CHECKOUT_FACTS_UNAVAILABLE, text, PLACE_GIT),
+            EntryRefusal::Fork(conflict) => failed(
+                PROJECT_ID_CONFLICT,
+                format!(
+                    "the checkout at {} has the remote {}, but the project already has a checkout at {} with the remote {}, so this one is a fork. The owner gives this checkout its own project by running `baley init --new-id` in it",
+                    conflict.path,
+                    conflict.remote_url,
+                    conflict.other_path,
+                    conflict.other_remote_url
+                ),
+                PLACE_CHECKOUT,
+            ),
+            EntryRefusal::Store(error) => store_failed(error),
+        },
     }
 }
 
-/// The next step for a read, or its answer. Discovery starts from the
-/// project directory the caller holds and from nothing else.
-fn next(caller: &ServerCaller, seen: &Seen) -> Next {
+/// The next step for the call, or its answer. Discovery starts from the
+/// project directory the caller holds and from nothing else. A read stops at
+/// the known-project check. A write goes on, in the command line's order, to
+/// the settings, checkout admission and the policy step.
+fn next(call: &Call, seen: &Seen) -> Next {
+    let caller = call.caller;
     let Some(ancestors) = &seen.ancestors else {
         return Next::Do(Step::Discover(caller.project_directory().into()));
     };
@@ -228,7 +302,7 @@ fn next(caller: &ServerCaller, seen: &Seen) -> Next {
         return Next::Do(Step::ListProjects);
     };
     match projects {
-        Err(fault) => return ledger_failed(fault),
+        Err(fault) => return fault_failed(fault),
         Ok(known) if !known.contains(&project) => {
             return failed(
                 PROJECT_NOT_IN_LEDGER,
@@ -241,7 +315,65 @@ fn next(caller: &ServerCaller, seen: &Seen) -> Next {
         }
         Ok(_) => {}
     }
-    Next::Ready(Prepared { project, root })
+    let Some(request) = call.write else {
+        return Next::Ready(Prepared {
+            project,
+            root,
+            command: None,
+        });
+    };
+    let Some(working) = working.as_ref().ok().and_then(Option::as_ref) else {
+        return unavailable_file(&file);
+    };
+    write_next(call, request, seen, project, root, working)
+}
+
+/// The write's steps after the known-project check.
+fn write_next(
+    call: &Call,
+    request: &WriteRequest,
+    seen: &Seen,
+    project: ProjectId,
+    root: PathBuf,
+    working: &SettingsFile,
+) -> Next {
+    let Some(reads) = &seen.reads else {
+        return Next::Do(Step::ReadSettings {
+            root,
+            working: working.clone(),
+        });
+    };
+    let policies = match judge_settings(reads, call.host, &root) {
+        Ok(policies) => policies,
+        Err(fault) => return failed(CONFIG_UNAVAILABLE, fault, PLACE_SETTINGS),
+    };
+    match &seen.admitted {
+        None => {
+            return Next::Do(Step::AdmitCheckout {
+                project,
+                path: policies.recorded.checkout.clone(),
+                policy: policies.facts,
+                root,
+            });
+        }
+        Some(Err(fault)) => return fault_failed(fault),
+        Some(Ok(())) => {}
+    }
+    match &seen.stepped {
+        None => Next::Do(Step::RecordPolicy {
+            project,
+            recorded: policies.recorded,
+        }),
+        Some(Err(fault)) => fault_failed(fault),
+        Some(Ok(version)) => {
+            let command = prepared_command(&project, request, *version, call.at, call.caller);
+            Next::Ready(Prepared {
+                project,
+                root,
+                command: Some(command),
+            })
+        }
+    }
 }
 
 /// The answer for a project file that was there at the walk and is gone.
@@ -253,29 +385,56 @@ fn unavailable_file(file: &Path) -> Next {
     )
 }
 
-/// Prepares a project read for the session whose caller is given.
+/// Prepares a project read, or a write when `write` is given, for the session
+/// whose caller is given.
 ///
 /// It finds the project fresh on every call from the caller's project
 /// directory, reads the working-tree project file for its id and checks that
-/// the ledger lists it. It validates no settings, gathers no checkout facts
-/// and appends nothing. `store` is `None` when the ledger was not opened at
-/// startup. The refusal is the `failed` answer, boxed to keep the result small.
-pub fn prepare<S: Admin>(
+/// the ledger lists it. A read stops there: it validates no settings, gathers
+/// no checkout facts and appends nothing. A write then reads and validates
+/// the settings, gathers the checkout's facts through `process` and admits
+/// the checkout, runs the policy step for `host`, and returns the domain
+/// command carrying the version the step returned. Checkout admission and the
+/// policy step each record as Baley with the server caller at `at`, in their
+/// own transactions. `config` is the config folder, where the global file is.
+/// `store` is `None` when the ledger was not opened at startup.
+///
+/// A refusal is the `failed` answer, boxed to keep the result small.
+pub fn prepare<S: Admin + Views + Ledger>(
     store: Option<&S>,
     caller: &ServerCaller,
+    write: Option<&WriteRequest>,
+    config: &Path,
+    host: Host,
+    at: &str,
+    process: &mut dyn Process,
 ) -> Result<Prepared, Box<Envelope<Value>>> {
+    let call = Call {
+        caller,
+        host,
+        at,
+        write,
+    };
     let mut seen = Seen::default();
     loop {
-        match next(caller, &seen) {
+        match next(&call, &seen) {
             Next::Ready(prepared) => return Ok(prepared),
             Next::Failed(answer) => return Err(Box::new(answer)),
-            Next::Do(step) => perform(step, store, &mut seen),
+            Next::Do(step) => perform(step, store, &call, config, process, &mut seen),
         }
     }
 }
 
 /// Performs one step and records what it observed. It owns no policy.
-fn perform<S: Admin>(step: Step, store: Option<&S>, seen: &mut Seen) {
+fn perform<S: Admin + Views + Ledger>(
+    step: Step,
+    store: Option<&S>,
+    call: &Call,
+    config: &Path,
+    process: &mut dyn Process,
+    seen: &mut Seen,
+) {
+    let server = || Some(Caller::Server(call.caller.clone()));
     match step {
         Step::Discover(directory) => {
             seen.ancestors =
@@ -289,6 +448,50 @@ fn perform<S: Admin>(step: Step, store: Option<&S>, seen: &mut Seen) {
                     .projects()
                     .map(|listed| listed.into_iter().map(|(id, _)| id).collect())
                     .map_err(LedgerFault::Store),
+            });
+        }
+        Step::ReadSettings { root, working } => {
+            seen.reads = Some(policy_step::gather(config, &root, Some(&working), process));
+        }
+        Step::AdmitCheckout {
+            project,
+            root,
+            policy,
+            path,
+        } => {
+            seen.admitted = Some(match store {
+                None => Err(LedgerFault::NoStore),
+                Some(store) => {
+                    let site = Site {
+                        root: &root,
+                        policy: &policy,
+                        path: &path,
+                    };
+                    checkout::gather_and_admit(
+                        store,
+                        &project,
+                        &site,
+                        process,
+                        new_request_id(),
+                        call.at,
+                        server(),
+                    )
+                    .map_err(LedgerFault::Checkout)
+                }
+            });
+        }
+        Step::RecordPolicy { project, recorded } => {
+            seen.stepped = Some(match store {
+                None => Err(LedgerFault::NoStore),
+                Some(store) => policy_step::step(
+                    store,
+                    &project,
+                    &recorded,
+                    new_request_id(),
+                    call.at,
+                    server(),
+                )
+                .map_err(LedgerFault::Store),
             });
         }
     }
@@ -368,7 +571,7 @@ mod tests {
 
     #[test]
     fn discovery_that_starts_from_the_working_directory_instead_of_the_project_directory() {
-        let next = next(&caller("/p", "/w"), &Seen::default());
+        let next = next(&read_call(&caller("/p", "/w")), &Seen::default());
         assert!(
             matches!(next, Next::Do(Step::Discover(ref d)) if d == "/p"),
             "{next:?}"
@@ -378,7 +581,7 @@ mod tests {
     #[test]
     fn a_read_asks_for_the_file_then_the_ledger_and_nothing_else() {
         let caller = caller("/real/r/p", "/w");
-        let next_step = |seen: &Seen| match next(&caller, seen) {
+        let next_step = |seen: &Seen| match next(&read_call(&caller), seen) {
             Next::Do(step) => step,
             other => panic!("expected a step, got {other:?}"),
         };
@@ -388,7 +591,7 @@ mod tests {
         );
         assert_eq!(next_step(&with_file(walked())), Step::ListProjects);
         assert!(matches!(
-            next(&caller, &known(with_file(walked()), &[ID])),
+            next(&read_call(&caller), &known(with_file(walked()), &[ID])),
             Next::Ready(_)
         ));
     }
@@ -396,7 +599,7 @@ mod tests {
     #[test]
     fn a_prepared_read_whose_root_is_the_callers_text_instead_of_the_canonical_root() {
         let caller = caller("/link/to/r/p", "/w");
-        let next = next(&caller, &known(with_file(walked()), &[ID]));
+        let next = next(&read_call(&caller), &known(with_file(walked()), &[ID]));
         match next {
             Next::Ready(prepared) => {
                 assert_eq!(prepared.root, Path::new("/real/r"));
@@ -413,7 +616,7 @@ mod tests {
             &["00000000-0000-4000-8000-000000000000"],
         );
         let value = assert_failed(
-            next(&caller("/real/r/p", "/w"), &seen),
+            next(&read_call(&caller("/real/r/p", "/w")), &seen),
             "project-not-in-ledger",
             "project",
             false,
@@ -430,7 +633,7 @@ mod tests {
             ..Seen::default()
         };
         assert_failed(
-            next(&caller("/gone", "/w"), &seen),
+            next(&read_call(&caller("/gone", "/w")), &seen),
             "project-context-invalid",
             "CLAUDE_PROJECT_DIR",
             false,
@@ -448,7 +651,7 @@ mod tests {
                 ..Seen::default()
             };
             assert_failed(
-                next(&caller("/r/p", "/w"), &seen),
+                next(&read_call(&caller("/r/p", "/w")), &seen),
                 "not-a-project",
                 "CLAUDE_PROJECT_DIR",
                 false,
@@ -472,7 +675,7 @@ mod tests {
             let mut seen = walked();
             seen.working = Some(read);
             let value = assert_failed(
-                next(&caller("/real/r/p", "/w"), &seen),
+                next(&read_call(&caller("/real/r/p", "/w")), &seen),
                 "config-unavailable",
                 "settings",
                 false,
@@ -492,7 +695,7 @@ mod tests {
         let ask = |fault: LedgerFault| {
             let mut seen = with_file(walked());
             seen.projects = Some(Err(fault));
-            next(&caller("/real/r/p", "/w"), &seen)
+            next(&read_call(&caller("/real/r/p", "/w")), &seen)
         };
         assert_failed(
             ask(LedgerFault::Store(StoreError::Busy)),
@@ -655,5 +858,181 @@ mod tests {
         assert_eq!(prepared.request_id, RequestId(REQUEST.into()));
         assert_eq!(prepared.kind, CommandKind("capture.record".into()));
         assert!(prepared.scope.is_empty());
+    }
+
+    fn read_call(caller: &ServerCaller) -> Call<'_> {
+        Call {
+            caller,
+            host: Host::ClaudeCode,
+            at: AT,
+            write: None,
+        }
+    }
+
+    fn write_call<'a>(caller: &'a ServerCaller, request: &'a WriteRequest) -> Call<'a> {
+        Call {
+            write: Some(request),
+            ..read_call(caller)
+        }
+    }
+
+    /// The next step of a write for the known project, given what was seen.
+    fn write_step(seen: &Seen) -> Next {
+        let caller = caller("/real/r/p", "/w");
+        let request = write_request(1);
+        next(&write_call(&caller, &request), seen)
+    }
+
+    fn known_project() -> Seen {
+        known(with_file(walked()), &[ID])
+    }
+
+    fn with_reads(mut seen: Seen, text: &str) -> Seen {
+        seen.reads = Some(reads(text));
+        seen
+    }
+
+    fn admitted(mut seen: Seen) -> Seen {
+        seen.admitted = Some(Ok(()));
+        seen
+    }
+
+    fn git_fault() -> LedgerFault {
+        LedgerFault::Checkout(EntryError::Gather(
+            "git remote get-url upstream exited with code 2".into(),
+        ))
+    }
+
+    fn fork_fault() -> LedgerFault {
+        LedgerFault::Checkout(EntryError::Admit(checkout::AdmitError::Fork(
+            baley_core::checkout::ProjectIdConflict {
+                path: "/real/r".into(),
+                remote_url: "https://example.test/mine".into(),
+                other_path: "/other/r".into(),
+                other_remote_url: "https://example.test/theirs".into(),
+            },
+        )))
+    }
+
+    #[test]
+    fn a_write_that_requests_settings_checkout_admission_and_the_step_out_of_order() {
+        let Next::Do(Step::ReadSettings { root, .. }) = write_step(&known_project()) else {
+            panic!("a known project's write must read the settings first");
+        };
+        assert_eq!(root, Path::new("/real/r"));
+
+        let Next::Do(Step::AdmitCheckout {
+            policy,
+            path,
+            root,
+            project,
+        }) = write_step(&with_reads(known_project(), SECTIONED))
+        else {
+            panic!("settings read, so checkout admission is next");
+        };
+        assert_eq!(policy.host, None, "facts come from the no-host policy");
+        assert_eq!(path, "/real/r");
+        assert_eq!(root, Path::new("/real/r"));
+        assert_eq!(project, ProjectId(ID.into()));
+
+        let Next::Do(Step::RecordPolicy { recorded, .. }) =
+            write_step(&admitted(with_reads(known_project(), SECTIONED)))
+        else {
+            panic!("checkout admitted, so the policy step is next, not the command");
+        };
+        assert_eq!(recorded.host, Some(Host::ClaudeCode));
+    }
+
+    #[test]
+    fn a_read_that_requests_the_settings_checkout_admission_or_the_step() {
+        let caller = caller("/real/r/p", "/w");
+        let Next::Ready(prepared) = next(&read_call(&caller), &known_project()) else {
+            panic!("a read is ready at the known-project check");
+        };
+        assert_eq!(prepared.command, None);
+        assert_eq!(prepared.root, Path::new("/real/r"));
+    }
+
+    #[test]
+    fn a_settings_refusal_that_still_requests_checkout_admission() {
+        let seen = with_reads(known_project(), "escalate_on_failure = \"yes\"\n");
+        assert_failed(write_step(&seen), "config-unavailable", "settings", false);
+    }
+
+    #[test]
+    fn a_fork_or_git_refusal_that_still_requests_the_step() {
+        for fault in [git_fault(), fork_fault()] {
+            let mut seen = with_reads(known_project(), SECTIONED);
+            seen.admitted = Some(Err(fault));
+            assert!(
+                matches!(write_step(&seen), Next::Failed(_)),
+                "a refused checkout admission must end the preparation"
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_that_does_not_carry_the_version_the_step_returned() {
+        let mut seen = admitted(with_reads(known_project(), SECTIONED));
+        seen.stepped = Some(Ok(5));
+        let Next::Ready(prepared) = write_step(&seen) else {
+            panic!("the step's version is observed, so the command is ready");
+        };
+        let command = prepared.command.unwrap();
+        assert_eq!(command.policy_version, 5);
+        assert_eq!(command.request_id, RequestId(REQUEST.into()));
+        assert_eq!(command.recorded_at, AT);
+    }
+
+    #[test]
+    fn a_git_refusal_that_has_another_code_or_place_or_is_retryable() {
+        let mut seen = with_reads(known_project(), SECTIONED);
+        seen.admitted = Some(Err(git_fault()));
+        let value = assert_failed(
+            write_step(&seen),
+            "checkout-facts-unavailable",
+            "git",
+            false,
+        );
+        assert_eq!(
+            value["reason"],
+            "git remote get-url upstream exited with code 2"
+        );
+    }
+
+    #[test]
+    fn a_fork_answer_that_tells_the_model_to_run_init_instead_of_naming_the_owners_step() {
+        let mut seen = with_reads(known_project(), SECTIONED);
+        seen.admitted = Some(Err(fork_fault()));
+        let value = assert_failed(write_step(&seen), "project-id-conflict", "checkout", false);
+        let reason = value["reason"].as_str().unwrap();
+        for part in [
+            "/real/r",
+            "https://example.test/mine",
+            "/other/r",
+            "https://example.test/theirs",
+            "The owner gives this checkout its own project by running `baley init --new-id`",
+        ] {
+            assert!(reason.contains(part), "{part} missing from {reason}");
+        }
+        assert!(!reason.contains("Run `baley init"), "{reason}");
+    }
+
+    #[test]
+    fn a_store_failure_at_checkout_admission_or_the_step_that_is_not_failed_or_misses_busy() {
+        let busy = LedgerFault::Checkout(EntryError::Admit(checkout::AdmitError::Store(
+            StoreError::Busy,
+        )));
+        let mut seen = with_reads(known_project(), SECTIONED);
+        seen.admitted = Some(Err(busy));
+        assert_failed(write_step(&seen), "ledger-busy", "ledger", true);
+
+        let mut seen = admitted(with_reads(known_project(), SECTIONED));
+        seen.stepped = Some(Err(LedgerFault::Store(StoreError::Unavailable(
+            "the ledger is fenced".into(),
+        ))));
+        assert_failed(write_step(&seen), "ledger-unavailable", "ledger", false);
+        seen.stepped = Some(Err(LedgerFault::Store(StoreError::Busy)));
+        assert_failed(write_step(&seen), "ledger-busy", "ledger", true);
     }
 }
