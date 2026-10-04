@@ -258,7 +258,8 @@ impl SqliteStore {
         // the read connection, so they take neither the queue nor a write.
         // No project is looked at: each is brought to this binary's views
         // on its first use.
-        if epoch == EPOCH && store.snapshot(|conn| store.views.pending(conn))? {
+        // A fenced store creates nothing either: its file is not trusted.
+        if epoch == EPOCH && !store.fenced() && store.snapshot(|conn| store.views.pending(conn))? {
             // An epoch raised by a newer binary since it was read above
             // leaves this store read-only, and read-only creates nothing.
             match store.write(|tx| store.views.create(tx)) {
@@ -267,6 +268,22 @@ impl SqliteStore {
             }
         }
         Ok(store)
+    }
+
+    /// Whether a failed startup `quick_check` fences every write.
+    pub(crate) fn fenced(&self) -> bool {
+        matches!(self.health, StartupHealth::Unhealthy { .. })
+    }
+
+    /// The error every write returns on a fenced store. A damaged file needs
+    /// no newer binary, so this is not a read-only refusal.
+    fn check_fence(&self) -> Result<(), StoreError> {
+        match &self.health {
+            StartupHealth::Unhealthy { report } => Err(StoreError::Unavailable(format!(
+                "writes are refused because the startup quick_check failed: {report}"
+            ))),
+            StartupHealth::NotChecked | StartupHealth::Healthy => Ok(()),
+        }
     }
 
     /// What the startup `quick_check` found: not checked unless the server
@@ -439,11 +456,12 @@ impl SqliteStore {
     }
 
     /// The write connection's `BEGIN IMMEDIATE`, the epoch, `f` and commit,
-    /// for a caller that holds the queue.
+    /// for a caller that holds the queue. A fenced store refuses first.
     fn transaction<T>(
         &self,
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        self.check_fence()?;
         let mut conn = lock(&self.writer);
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -475,6 +493,7 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        self.check_fence()?;
         let _turn = self.queue.wait().map_err(io)?;
         let mut conn = lock(&self.writer);
         f(&mut conn)
@@ -776,6 +795,110 @@ mod tests {
         let home = crate::checks::private_folder();
         let store = SqliteStore::open(home.path(), AT, server()).expect("open");
         assert_eq!(store.startup_health(), &StartupHealth::NotChecked);
+    }
+
+    /// A damaged store opened as the server opens it.
+    fn fenced_store(home: &Path) -> SqliteStore {
+        drop(open(home));
+        damage(home);
+        SqliteStore::open(home, AT, server()).expect("a fenced store still opens")
+    }
+
+    fn trace_rows(home: &Path) -> i64 {
+        raw(home)
+            .query_row("SELECT count(*) FROM trace", [], |row| row.get(0))
+            .expect("count")
+    }
+
+    // Catches a fence that turns the failed check into an open error, which
+    // would leave the session without reads.
+    #[test]
+    fn a_server_open_of_a_damaged_store_returns_an_error_instead_of_a_fenced_store() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        damage(home.path());
+        let opened = SqliteStore::open(home.path(), AT, server());
+        assert!(opened.is_ok(), "{:?}", opened.err());
+    }
+
+    // Catches a write that goes through, records a row, or fails with
+    // anything but the report.
+    #[test]
+    fn a_trace_write_on_a_fenced_store_succeeds_or_omits_the_report() {
+        let home = crate::checks::private_folder();
+        let store = fenced_store(home.path());
+        let StartupHealth::Unhealthy { report } = store.startup_health().clone() else {
+            panic!("the damaged store was not fenced");
+        };
+        let refused = store.record_trace(&trace("refused"));
+        assert!(
+            matches!(&refused, Err(StoreError::Unavailable(text)) if text.contains(&report)),
+            "{refused:?}"
+        );
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a fence that also blocks reads.
+    #[test]
+    fn a_fenced_store_fails_to_read_its_epoch() {
+        let home = crate::checks::private_folder();
+        let store = fenced_store(home.path());
+        assert_eq!(store.epoch(), Ok(EPOCH));
+    }
+
+    // Catches the maintenance path, which holds the write connection
+    // outside a transaction, running on a fenced store.
+    #[test]
+    fn a_scrub_on_a_fenced_store_runs() {
+        let home = crate::checks::private_folder();
+        let store = fenced_store(home.path());
+        assert!(matches!(store.scrub(), Err(StoreError::Unavailable(_))));
+    }
+
+    // Catches a fence recorded in the file, not in the store that ran the
+    // check: the command line must keep writing the same file.
+    #[test]
+    fn a_command_line_open_of_the_damaged_file_cannot_write_a_trace_row() {
+        let home = crate::checks::private_folder();
+        drop(fenced_store(home.path()));
+        let cli = open(home.path());
+        cli.record_trace(&trace("written")).expect("write");
+        assert_eq!(trace_rows(home.path()), 1);
+    }
+
+    fn view_set_3() -> Options {
+        Options {
+            startup_check: true,
+            view_set_version: NonZeroU32::new(3).expect("nonzero"),
+            ..Options::default()
+        }
+    }
+
+    // Catches the check running after the view declarations are written,
+    // which would write into a file the check is about to distrust.
+    #[test]
+    fn a_fenced_open_leaves_a_new_view_set_pending() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        damage(home.path());
+        let store = SqliteStore::open(home.path(), AT, view_set_3()).expect("open");
+        assert!(matches!(
+            store.startup_health(),
+            StartupHealth::Unhealthy { .. }
+        ));
+        let pending = store.snapshot(|conn| store.views().pending(conn));
+        assert_eq!(pending, Ok(true));
+    }
+
+    // Guards the case above against passing for the wrong reason: a healthy
+    // server open does declare the new view set.
+    #[test]
+    fn a_healthy_server_open_leaves_a_new_view_set_pending() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        let store = SqliteStore::open(home.path(), AT, view_set_3()).expect("open");
+        let pending = store.snapshot(|conn| store.views().pending(conn));
+        assert_eq!(pending, Ok(false));
     }
 
     // A second open finds the schema and keeps it: one epoch row, and the
