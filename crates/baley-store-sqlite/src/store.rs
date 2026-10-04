@@ -2,6 +2,7 @@
 //! 0001, Opening the store; Processes and concurrency; EVD-R8, R19, R20).
 
 use crate::checks::{self, Judgement};
+use crate::health::{StartupHealth, judge_quick_check, runs_quick_check};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -48,6 +49,10 @@ pub struct Options {
     pub timing: Arc<dyn Timing>,
     /// Optional measurement of time spent waiting for a write's queue turn.
     pub queue_wait: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
+    /// Set by the per-session server only. Open then runs `PRAGMA quick_check`
+    /// on an existing schema, and a failure fences every write while reads go
+    /// on. Command-line and guard opens leave it off.
+    pub startup_check: bool,
 }
 
 impl Default for Options {
@@ -61,6 +66,7 @@ impl Default for Options {
             view_set_version: NonZeroU32::new(2).expect("nonzero"),
             timing: Arc::new(Monotonic),
             queue_wait: None,
+            startup_check: false,
         }
     }
 }
@@ -76,6 +82,7 @@ impl fmt::Debug for Options {
             .field("trace_cap", &self.trace_cap)
             .field("projectors", &views)
             .field("view_set_version", &self.view_set_version)
+            .field("startup_check", &self.startup_check)
             .finish_non_exhaustive()
     }
 }
@@ -123,6 +130,8 @@ pub struct SqliteStore {
     /// recorded since. The hash tells a chain rewritten under the mark, as
     /// by a restore, from the one that was checked.
     readable: Mutex<BTreeMap<ProjectId, Head>>,
+    /// What the startup `quick_check` found.
+    health: StartupHealth,
     pub(crate) home: std::path::PathBuf,
 }
 
@@ -140,6 +149,10 @@ impl SqliteStore {
     /// are checked, and missing tables, indexes and catalog rows are created
     /// through the write path. A read-only store creates none of those.
     /// No project's views are looked at.
+    /// With `Options::startup_check` set, an existing schema at this binary's
+    /// epoch gets `PRAGMA quick_check` after the epoch, digest and file
+    /// setting checks and before any view is declared. A schema this open
+    /// creates skips it. Other opens never run it.
     /// The caller creates the home, which must exist. Before anything else,
     /// open checks the real home and each store file present: not a link,
     /// the right kind, owned by the effective user, and no permission bit
@@ -184,7 +197,9 @@ impl SqliteStore {
         )?;
         let writer = connect(&path)?;
 
-        let epoch = match stored_epoch(&writer)? {
+        let existing = stored_epoch(&writer)?;
+        let schema_existed = existing.is_some();
+        let epoch = match existing {
             Some(epoch) if epoch == EPOCH => {
                 let digest = writer
                     .query_row(
@@ -216,6 +231,14 @@ impl SqliteStore {
         if epoch == EPOCH {
             check_file_settings(&writer)?;
         }
+        // Only a store this binary writes is checked, and a schema this open
+        // created has nothing to check. It runs before the view declarations
+        // so a damaged file is not written to.
+        let health = if epoch == EPOCH && runs_quick_check(options.startup_check, schema_existed) {
+            judge_quick_check(quick_check(&writer))
+        } else {
+            StartupHealth::NotChecked
+        };
         let store = Self {
             writer: Mutex::new(writer),
             reader: Mutex::new(reader),
@@ -228,6 +251,7 @@ impl SqliteStore {
             projectors,
             schema: options.schema,
             readable: Mutex::new(BTreeMap::new()),
+            health,
             home: home.to_path_buf(),
         };
         // Most opens find every view and the view set in place, and ask on
@@ -243,6 +267,12 @@ impl SqliteStore {
             }
         }
         Ok(store)
+    }
+
+    /// What the startup `quick_check` found: not checked unless the server
+    /// option was set and the schema already existed.
+    pub fn startup_health(&self) -> &StartupHealth {
+        &self.health
     }
 
     /// The views declared at open.
@@ -571,6 +601,19 @@ fn check_file_settings(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Runs `PRAGMA quick_check` and returns its text rows, or the error text
+/// when it could not run.
+fn quick_check(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut statement = conn
+        .prepare("PRAGMA quick_check")
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
 /// A panic during a write leaves the connection as the unwinding
 /// transaction left it: rolled back. Nothing to repair.
 pub(crate) fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
@@ -671,6 +714,68 @@ mod tests {
             kind: kind.into(),
             data: "{}".into(),
         }
+    }
+
+    fn server() -> Options {
+        Options {
+            startup_check: true,
+            ..Options::default()
+        }
+    }
+
+    /// Breaks a `CHECK` constraint of a table open never reads. The data
+    /// changes and the schema does not, so only `quick_check` sees it.
+    fn damage(home: &Path) {
+        let conn = raw(home);
+        conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .expect("pragma");
+        conn.execute(
+            "INSERT INTO project (project_id, name, created_at, head_hash) VALUES ('damaged', 'n', ?1, x'00')",
+            params![AT],
+        )
+        .expect("damage");
+    }
+
+    // Catches a server open that never runs the check, or judges a sound
+    // file unhealthy.
+    #[test]
+    fn a_server_open_of_a_healthy_existing_store_does_not_report_healthy() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        let store = SqliteStore::open(home.path(), AT, server()).expect("open");
+        assert_eq!(store.startup_health(), &StartupHealth::Healthy);
+    }
+
+    // Catches a check whose failure is dropped or reported without its text.
+    #[test]
+    fn a_server_open_of_a_damaged_store_does_not_report_the_fault() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        damage(home.path());
+        let store = SqliteStore::open(home.path(), AT, server()).expect("open");
+        assert!(
+            matches!(store.startup_health(), StartupHealth::Unhealthy { report } if report.contains("project")),
+            "{:?}",
+            store.startup_health()
+        );
+    }
+
+    // Catches the check running for a command-line or guard open.
+    #[test]
+    fn an_open_without_the_option_runs_the_check_on_a_damaged_store() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        damage(home.path());
+        let store = open(home.path());
+        assert_eq!(store.startup_health(), &StartupHealth::NotChecked);
+    }
+
+    // Catches the check running on a schema this open just created.
+    #[test]
+    fn a_server_open_that_creates_the_schema_runs_the_check() {
+        let home = crate::checks::private_folder();
+        let store = SqliteStore::open(home.path(), AT, server()).expect("open");
+        assert_eq!(store.startup_health(), &StartupHealth::NotChecked);
     }
 
     // A second open finds the schema and keeps it: one epoch row, and the

@@ -22,13 +22,6 @@ pub enum StartupHealth {
 /// Judges what running `PRAGMA quick_check` produced: its text rows, or the
 /// error text when the pragma itself failed. Only a single `ok` row is
 /// healthy. A check that could not run cannot show the store healthy.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the server open reads it once it runs quick_check"
-    )
-)]
 pub(crate) fn judge_quick_check(outcome: Result<Vec<String>, String>) -> StartupHealth {
     match outcome {
         Ok(rows) if matches!(rows.as_slice(), [only] if only == "ok") => StartupHealth::Healthy,
@@ -41,13 +34,6 @@ pub(crate) fn judge_quick_check(outcome: Result<Vec<String>, String>) -> Startup
 
 /// Whether an open runs `quick_check`: only a server open of a schema that
 /// already existed. A schema this open just created has nothing to check.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the server open reads it once it runs quick_check"
-    )
-)]
 pub(crate) fn runs_quick_check(server_open: bool, schema_existed: bool) -> bool {
     server_open && schema_existed
 }
