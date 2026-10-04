@@ -240,28 +240,37 @@ sequenceDiagram
   H->>S: tools/call baley_apply with an operation and its request id
   S->>S: discover the project from CLAUDE_PROJECT_DIR
   S->>S: read the project id from the working tree's baley.toml
+  break the directory cannot be read, is not in a project, or its baley.toml cannot be read
+    S-->>H: failed project-context-invalid, not-a-project or config-unavailable, recorded false
+  end
   S->>L: list the ledger's projects
-  opt the project is not in the ledger
+  break the ledger is busy or unavailable
+    S-->>H: failed ledger-busy or ledger-unavailable, recorded false
+  end
+  break the project is not in the ledger
     S-->>H: failed project-not-in-ledger, recorded false
   end
   S->>L: look the request up by its command kind and request id
+  break the ledger is busy or unavailable, or holds a record of the request that cannot be read
+    S-->>H: failed ledger-busy or ledger-unavailable, recorded false
+  end
   alt the ledger already holds the request
     S->>L: the operation's transaction answers the replay
     L-->>S: the original receipt
     S-->>H: the receipt, nothing new recorded
   else a new request
     S->>S: read the global file and HEAD's copy of baley.toml, then validate the settings
-    opt the settings do not validate
+    break the settings do not validate
       S-->>H: failed config-unavailable, recorded false
     end
     S->>G: checkout facts from the remote the no-host policy names
     G-->>S: the remote and the head
     S->>L: checkout admission, checkout.seen only when the checkout is new or changed
-    opt the facts cannot be read or the checkout is a fork
-      S-->>H: failed checkout-facts-unavailable or project-id-conflict, recorded false, nothing recorded in the project
+    break the facts cannot be read, the checkout is a fork, or the ledger is busy or unavailable
+      S-->>H: failed checkout-facts-unavailable, project-id-conflict, ledger-busy or ledger-unavailable, recorded false
     end
     S->>L: policy step, policy.effective under the checkout and claude-code only when it changed
-    opt the ledger is busy or unavailable
+    break the ledger is busy or unavailable
       S-->>H: failed ledger-busy or ledger-unavailable, recorded false
     end
     L-->>S: the policy version in force
@@ -271,7 +280,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 4. A project write, in the order the server prepares it. A request the ledger already holds goes straight to the operation's transaction, which keeps the final say on a replay, so a retry made after the owner broke `baley.toml` still gets its receipt. Every refusal branch answers `failed` with `recorded: false`, and a fork records nothing in the project. Checkout admission and the policy step are separate transactions, as on the command line, so a failure at the step leaves the admission's `checkout.seen` recorded. The guard takes none of this route.*
+*Figure 4. A project write, in the order the server prepares it. A request the ledger already holds goes straight to the operation's transaction, which keeps the final say on a replay, so a retry made after the owner broke `baley.toml` still gets its receipt. A refusal ends preparation at its step: it answers `failed` with `recorded: false`, and a fork records nothing in the project. Checkout admission and the policy step are separate transactions, as on the command line, so a failure at the step leaves the admission's `checkout.seen` recorded. The guard takes none of this route.*
 
 ```mermaid
 sequenceDiagram
