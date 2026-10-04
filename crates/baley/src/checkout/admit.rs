@@ -53,7 +53,8 @@ impl From<StoreError> for AdmitError {
 ///
 /// It prints nothing. It runs before the policy step and never in its
 /// transaction. Its callers are the ledger commands, `purge`, `config set`
-/// and `baley init`; the server follows per request in Build 3.
+/// and `baley init`, and the session server's write preparation, which passes
+/// the call's caller and the server's time. The guard never runs it.
 ///
 /// A checkout whose row already holds its root commit and remote URL opens
 /// no command, so not even `command.completed` is recorded. Any other

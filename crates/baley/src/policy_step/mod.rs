@@ -20,7 +20,9 @@ pub use record::{RECORD_COMMAND, record};
 ///
 /// `baley init`, `purge`, `config set`, `anchor` and `acknowledge-restore`
 /// call it, each right after checkout admission and in a transaction of its
-/// own. The server and guard follow per request in Build 3.
+/// own. So does the session server's write preparation (`mcp::prepare`), once
+/// per project write, with the host's recorded policy, the call's caller and
+/// the server's time. A project read never calls it, and the guard does not.
 pub fn step(
     store: &(impl Admin + Views + Ledger),
     project: &ProjectId,

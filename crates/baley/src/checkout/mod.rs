@@ -67,17 +67,21 @@ impl EntryError {
 pub(crate) struct Site<'a> {
     /// The repository root, where git runs.
     pub root: &'a Path,
-    /// The built policy, which names the remote.
+    /// The built policy, which names the remote. The server passes the policy
+    /// that names no host, as the command line does.
     pub policy: &'a EffectivePolicy,
     /// The checkout's path text, `RecordedPolicy::checkout`.
     pub path: &'a str,
 }
 
 /// Gathers the facts of `site` and admits it under `project`, for the callers
-/// that do both at once: the ledger commands, `purge` and `config set`. It
-/// prints nothing, and it runs before the policy step.
+/// that do both at once: the ledger commands, `purge`, `config set` and the
+/// session server's write preparation. It prints nothing, and it runs before
+/// the policy step.
 ///
-/// `caller` goes to checkout admission unchanged.
+/// `caller` goes to checkout admission unchanged. For the server, `site.policy`
+/// is the policy that names no host, so the remote is the command line's, and
+/// the stored version checkout admission carries is the hostless one.
 pub(crate) fn gather_and_admit(
     store: &(impl Ledger + Views),
     project: &ProjectId,
