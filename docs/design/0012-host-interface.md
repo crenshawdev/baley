@@ -134,15 +134,9 @@ Apply operations are the writes of every area, each named in its document: scope
 |---|---|---|
 | `host` | `claude-code` | |
 | `binary_version` | version | |
-| `service` | `systemd`, `launchd`, `launcher` | How Baley starts |
-| `transport` | `stdio`, `http` | |
 | `registered` | table | Where the MCP registration and the hook were written |
 | `stubs` | list | Path and hash of every stub rendered |
 | `sandbox` | table | What was written and what `doctor` found |
-
-### connection (not an event; a `session` view row)
-
-Host, version, protocol revision, transport, working directory, session id, connected at, last call at.
 
 ### The caller on every recorded event
 
@@ -161,23 +155,22 @@ Handle, operation, request id, claim, started at, state, result reference.
 
 | View | Key | Content |
 |---|---|---|
-| `session` | user | Connected sessions and workers with host, transport and directory |
 | `install` | user, host | The current install record and the last doctor result |
 
 ## 7. States
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Idle: no server running
-  Idle --> Starting: launcher finds no server, or the service starts
-  Starting --> Serving: listening on stdio and HTTP
-  Serving --> Serving: sessions and workers connect and disconnect
-  Serving --> Draining: last session gone, on-demand start, quiet period elapsed
-  Serving --> Draining: service stop or upgrade
-  Draining --> Idle: accepted writes finished
+  [*] --> Starting: Claude Code starts baley serve for the session
+  Starting --> Serving: project judged, ledger opened when it can be, session id minted
+  Serving --> Serving: calls arrive from the session and its subagents
+  Serving --> Draining: end of input or termination
+  Draining --> Checkpointing: accepted work finished, or ten seconds passed
+  Checkpointing --> Exited: one PASSIVE attempt that never waits
+  Exited --> [*]
 ```
 
-*Figure 1. States of the server.*
+*Figure 1. States of a session's server. Nothing checkpoints and no timer runs while the connection is open: the server ends only when its input ends or it is told to terminate.*
 
 ```mermaid
 stateDiagram-v2
@@ -196,25 +189,19 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
   participant H as Host
-  participant L as Launcher
   participant S as Baley server
   participant A as Adapter
-  H->>L: start MCP server (stdio)
-  L->>S: connect to the local port
-  alt no server
-    L->>S: start the server
-  end
-  H->>L: initialize (client info)
-  L->>S: initialize + client info + working directory
-  S->>A: select adapter for host and version
+  H->>S: start baley serve over stdio with CLAUDE_PROJECT_DIR set
+  S->>S: record the project and the working directory, mint the session id
+  H->>S: initialize or discover
   S-->>H: tools (fixed order), one-line instructions
-  H->>L: tools/call baley_query document
-  L->>S: the call with cwd
-  S->>S: resolve the project from cwd
+  H->>S: tools/call baley_query document, with the client info
+  S->>A: select adapter for host and version
+  S->>S: take the project from CLAUDE_PROJECT_DIR
   S-->>H: one part, next part id
 ```
 
-*Figure 3. A session connecting through the launcher.*
+*Figure 3. A session starting its server and making a call.*
 
 ```mermaid
 sequenceDiagram
@@ -272,13 +259,7 @@ sequenceDiagram
   participant HC as Host config
   O->>B: baley install claude-code
   B->>OS: detect OS, place binary at a versioned path
-  B->>O: run in the background?
-  alt yes
-    B->>OS: write and start the systemd user unit or launchd agent
-    B->>HC: register the HTTP server
-  else no
-    B->>HC: register the launcher (stdio)
-  end
+  B->>HC: register the stdio server
   B->>HC: install the hook, write the sandbox configuration
   B->>HC: render the skill stubs and the agent stubs from the tables
   alt settings missing
@@ -297,8 +278,6 @@ sequenceDiagram
 | `owner.name` | text | git `user.name` | global | 0012 | The owner recorded on every approval (HST-R10) |
 | `[host.<name>]` sections | see [0003](0003-configuration-and-routing.md) | | both | 0003 | Per-host overrides the adapter applies |
 
-The service choice, transport and port are recorded by install, not settings; `baley service` changes them.
-
 ## 10. Instructions served
 
 | Instruction | Served to | Carries requirements |
@@ -313,27 +292,28 @@ The text of every instruction is owned by the area it serves; this area serves i
 
 ## 11. Build status
 
-The binary crate holds the inherited engine: one stdio server bound to one project per process, Claude Code only.
+The library holds the per-session server (`crates/baley/src/mcp/`), and `baley serve` starts it. The binary also holds the inherited engine, parked for Build 9 to delete (`crates/baley/src/inherited.rs:1-4`). Nothing in production reaches it, and its tests still run.
 
 | Requirement | Status | Where |
 |---|---|---|
-| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/baley/src/main.rs:103, 182-186`, `crates/baley/src/server.rs:810-817`); no HTTP, no service, no launcher |
-| HST-R4 | Not built | No client check yet, and the host model list is Claude-only (`crates/baley/src/config/roles.rs:16`). The refusal is built with Build 3's session server task (T4) |
-| HST-R5 | Built | Three tools (`crates/baley/src/server.rs:983-1001`), append-only operation names asserted (`server.rs:474-511`), flat schema plus `schema` operation (`server.rs:617-664, 751-808`) |
-| HST-R6 | Built | Parts at 24,576 bytes (`crates/baley/src/read/instructions.rs:5`, `server.rs:751`); `document` and `document-search` only (`server.rs:301-304`) |
-| HST-R7 | Partly built | One admission queue serializes every call (`crates/baley/src/review_ingress.rs:656-747`); no per-call working directory. The port holds the caller value (`crates/baley-store/src/caller.rs:569-576`), `Work::push` stamps the command's caller on every event it appends (`crates/baley-store-sqlite/src/transact.rs:851-874`) and the `event.caller` column stores it (`crates/baley-store-sqlite/src/schema.rs:51`). No current command fills the caller: the session server (T4), per-request preparation (T5), captures (T8) and the guard's records (T10) do |
+| HST-R1 | Built | `baley serve` runs one stdio server for the session (`crates/baley/src/main.rs:61-62, 187-200`, `crates/baley/src/mcp/serve.rs:123-201`), and it advertises only the two tested revisions (`crates/baley/src/mcp/tools.rs:65-68`, `crates/baley/src/mcp/handler.rs:118-120`) |
+| HST-R2, HST-R3 | Withdrawn | Nothing to build: each session starts its own stdio server (ADR 0034) |
+| HST-R4 | Built | The 2025 decoder reads `initialize` and the 2026 decoder reads the request's `_meta` (`crates/baley/src/mcp/client.rs:24-40`). The host is selected per call (`crates/baley/src/mcp/client.rs:95-126`, `crates/baley/src/mcp/handler.rs:54-79, 122-130`), and a missing or unsupported client is answered `failed` `unknown-host` before the queue (`crates/baley/src/mcp/gate.rs:71-110, 162-178`). The supported hosts are `Host::ALL` (`crates/baley-core/src/policy/schema.rs:108`) |
+| HST-R5 | Built | Three tools in a fixed order (`crates/baley/src/mcp/tools.rs:83-120`), append-only operation names asserted (`crates/baley/src/mcp/operations.rs:391-503, 516-520`), a flat schema plus the `schema` operation (`crates/baley/src/mcp/tools.rs:122-141`, `crates/baley/src/mcp/operations.rs:314-386`), and `failed` as its own arm of the envelope (`crates/baley/src/envelope.rs:80-139`). The gate raises a protocol error only for an unknown tool (`crates/baley/src/mcp/gate.rs:77, 153-160`) |
+| HST-R6 | Partly built | Parts at 24,576 bytes (`crates/baley/src/read/instructions.rs:5-7`, `crates/baley/src/mcp/operations.rs:296-297, 359-386`), `help` and `schema` answer (`crates/baley/src/mcp/operations.rs:305-347`), and the tools carry a fixed order and cache hints (`crates/baley/src/mcp/tools.rs:70-81`). `document` and `document-search` answer `operation-unavailable` with the build that replaces them (`crates/baley/src/mcp/operations.rs:98-99, 263-275`) until the served reads are rebuilt (T7) |
+| HST-R7 | Partly built | The session context is gathered once and judged (`crates/baley/src/mcp/context.rs:20-50, 127-158`), each call's context and caller are formed (`crates/baley/src/mcp/context.rs:213-237, 286-314`), and decisions run one at a time on the worker behind one queue (`crates/baley/src/mcp/queue.rs:15-93`, `crates/baley/src/mcp/worker.rs:80-171`, `crates/baley/src/mcp/admission.rs:28-59`). The port holds the caller value (`crates/baley-store/src/caller.rs:569-576`), `Work::push` stamps the command's caller on every event it appends (`crates/baley-store-sqlite/src/transact.rs:851-885`) and the `event.caller` column stores it (`crates/baley-store-sqlite/src/schema.rs:51`). No call records a caller yet: `run_decision` forms it and sets it aside (`crates/baley/src/mcp/handler.rs:82-98`) until per-request preparation (T5), and captures (T8) and the guard's records (T10) fill the other forms |
 | HST-R8 | Not built | Suite runs inside one call |
-| HST-R9, HST-R10 | Partly built | Owner questions are gate records answered by `execution-authorize` with any non-blank owner and time (`crates/baley/src/execution_service.rs:364-501`) |
-| HST-R11 | Partly built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-41`). The caller has a place for each instruction's identity, version and hash (`crates/baley-store/src/caller.rs:273-298`), and no call fills it until the compiled instruction identities (T7) and the session server (T4) land |
-| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:142-178`), with no stub rendering and no install. The effort table and the requested and effective records are Build 4's first dispatch task |
-| HST-R13 | Not built | The full read contract is sent as instructions (`crates/baley/src/server.rs:963-968`) |
-| HST-R14 | Built | Dispatch answers id and route, never a prompt (`crates/baley/src/execution/boundary.rs:93-147`) |
-| HST-R15 | Partly built | `baley exec` sets the key in the command's environment and redacts both streams (`crates/baley/src/exec.rs:87-199`, `crates/baley/src/process.rs:125-131, 283-303` for `owner_command` and `stdio_plan`). The inherited review engine still makes provider calls with keys it reads itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 moves outside calls to the host session. |
-| HST-R16 | Partly built | The CLI has `serve`, `guard`, `skill-description`, the render commands, the ledger commands (`verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor`, `acknowledge-restore`), `exec`, `init`, `config` (`show`, `set` and `interview`) and `models` (`list`, `add`, `remove` and `update`) (`crates/baley/src/main.rs:27-98`); the other commands are later builds. |
+| HST-R9, HST-R10 | Not built | The parked engine holds owner questions as gate records answered by `execution-authorize` with any non-blank owner and time (`crates/baley/src/execution_service.rs:364-500`). The session server answers that operation as unavailable (`crates/baley/src/mcp/operations.rs:128-195`) until Build 5 |
+| HST-R11 | Partly built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-41`). The caller has a place for each instruction's identity, version and hash (`crates/baley-store/src/caller.rs:273-298`), and no call fills it until the compiled instruction identities (T7) and per-request preparation (T5) land |
+| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:139-176`), with no stub rendering and no install. The effort table and the requested and effective records are Build 4's first dispatch task |
+| HST-R13 | Built | The initialize instructions are one line naming `help` (`crates/baley/src/mcp/tools.rs:52-63`, asserted at `crates/baley/src/mcp/tools.rs:226-232`) |
+| HST-R14 | Not built | The parked engine builds a dispatch answer of an id and a route, never a prompt (`crates/baley/src/execution/boundary.rs:93-147`). The session server answers `execute-next` as unavailable (`crates/baley/src/mcp/operations.rs:112`) until Build 5 |
+| HST-R15 | Partly built | `baley exec` sets the key in the command's environment and redacts both streams (`crates/baley/src/exec.rs:87-203`, `crates/baley/src/process.rs:125-131, 283-302` for `owner_command` and `stdio_plan`). The parked review engine still makes provider calls with keys it reads itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 moves outside calls to the host session. |
+| HST-R16 | Partly built | The CLI has `serve`, which Claude Code starts and the owner does not, `guard`, `skill-description`, the render commands, the ledger commands (`verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor`, `acknowledge-restore`), `exec`, `init`, `config` (`show`, `set` and `interview`) and `models` (`list`, `add`, `remove` and `update`) (`crates/baley/src/main.rs:24-95`). It has no `service` command, and the other commands are later builds. |
 | HST-R17 | Not built | The tracked `hooks/hooks.json` is hand-written, and the remaining registrations are hand-written in owner-local files outside the repository's tracked content |
-| HST-R18 | Partly built | Store failures are MCP errors (`crates/baley/src/server.rs:888-898`); refused applies recorded best effort (`server.rs:1922-1933`) |
-| HST-R19 | Partly built | Frames and hook input are bounded (`crates/baley/src/review_ingress.rs:17-23`, `crates/baley/src/guard/mod.rs:15`). Every git child runs with its registered deadline, enforced by `validate_launch` (`crates/baley/src/process.rs:218-249`, `crates/baley/src/git_process.rs`). The suite runner's `sh -c` (`crates/baley/src/execution/runner.rs`) runs with none, owned by Build 5; a command under `baley exec` runs with none by design. |
-| HST-R20 | Not built | |
+| HST-R18 | Partly built | The `failed` answer is built: a code, a place, `recorded: false` and `retryable`, returned as a successful tool result (`crates/baley/src/envelope.rs:80-139`, `crates/baley/src/mcp/gate.rs:66-69`). The server uses it for `unknown-host` (`crates/baley/src/mcp/gate.rs:162-178`), `server-overloaded` (`crates/baley/src/mcp/admission.rs:50-59`) and the project and caller faults (`crates/baley/src/mcp/gate.rs:112-151`). No operation reaches the store yet, so no store failure is answered and no refused apply is recorded until per-request preparation (T5) |
+| HST-R19 | Partly built | The decoder bounds a whole frame at 4 MiB and its depth at 128 (`crates/baley/src/mcp/frame.rs:14-18, 143`). A frame over a bound or not JSON is discarded to its newline and answered with a JSON-RPC error while reading goes on (`crates/baley/src/mcp/frame.rs:470-493`, `crates/baley/src/mcp/transport.rs:52-73, 218-247`). Hook input is bounded (`crates/baley/src/guard/mod.rs:15`). Every git child runs with its registered deadline, enforced by `validate_launch` (`crates/baley/src/process.rs:218-249`, `crates/baley/src/git_process.rs`). The suite runner's `sh -c` (`crates/baley/src/execution/runner.rs`) runs with none, owned by Build 5, and a command under `baley exec` runs with none by design. |
+| HST-R20 | Built | Each descriptor carries the marker (`crates/baley/src/mcp/tools.rs:83-120`, asserted at `crates/baley/src/mcp/tools.rs:186-196`) |
 
 ## 12. Open questions
 
