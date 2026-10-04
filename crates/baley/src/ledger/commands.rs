@@ -198,7 +198,7 @@ fn purge_policy_version(
     let (PurgePolicy::RunStep, Some((_, root, working))) = (choice, checkout) else {
         return Ok(0);
     };
-    let reads = policy_step::gather(config, &root, working.as_ref());
+    let reads = policy_step::gather(config, &root, working.as_ref(), &mut crate::process::System);
     let policy = policy_step::build(&reads).map_err(|e| Render::refusal(e.to_string()))?;
     let recorded = recorded_policy(&root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
     let site = Site {
@@ -308,8 +308,12 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
             let path = folder.join(PROJECT_FILE);
             let read = settings::read(&path);
             let id = init::observe_file(read.clone());
-            let reads =
-                policy_step::gather(config, &root, read.as_ref().ok().and_then(Option::as_ref));
+            let reads = policy_step::gather(
+                config,
+                &root,
+                read.as_ref().ok().and_then(Option::as_ref),
+                &mut crate::process::System,
+            );
             Gathered {
                 settings: Settings {
                     project_file: Some(ProjectFile { path, id }),

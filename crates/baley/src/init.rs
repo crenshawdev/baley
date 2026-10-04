@@ -590,7 +590,12 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
     let path = root.join(PROJECT_FILE);
     let file = settings::read(&path);
     let working = file.as_ref().ok().and_then(Option::as_ref).cloned();
-    let reads = policy_step::gather(&folders.config, &root, working.as_ref());
+    let reads = policy_step::gather(
+        &folders.config,
+        &root,
+        working.as_ref(),
+        &mut crate::process::System,
+    );
     let Prepared {
         existing,
         naming,

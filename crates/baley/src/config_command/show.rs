@@ -36,7 +36,8 @@ fn attempt(host: Option<Host>, names: &[String]) -> Result<Render, Render> {
             let path = folder.join(PROJECT_FILE);
             let working = settings::read(&path);
             let head = working.as_ref().ok().and_then(Option::as_ref);
-            let reads = policy_step::gather(&folders.config, &root, head);
+            let reads =
+                policy_step::gather(&folders.config, &root, head, &mut crate::process::System);
             report(
                 schema,
                 host,

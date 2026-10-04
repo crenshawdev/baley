@@ -8,6 +8,7 @@ use baley_core::policy::{
 };
 
 use crate::committed::{self, Committed};
+use crate::process::Process;
 use crate::settings;
 
 /// What the gatherer found, for [`build`].
@@ -22,9 +23,16 @@ pub struct Reads {
 
 /// Reads the global file in the `config` folder and, when a working-tree
 /// project file is given, HEAD's copy of it from the repository at `root`.
-pub fn gather(config: &Path, root: &Path, working: Option<&SettingsFile>) -> Reads {
+/// The caller supplies the process git runs through: the command line passes
+/// the system's, and the session server passes its own.
+pub fn gather(
+    config: &Path,
+    root: &Path,
+    working: Option<&SettingsFile>,
+    process: &mut dyn Process,
+) -> Reads {
     let global = settings::read(&config.join(settings::GLOBAL_FILE));
-    let head = working.map(|working| committed::read(root, working, &mut crate::process::System));
+    let head = working.map(|working| committed::read(root, working, process));
     Reads { global, head }
 }
 

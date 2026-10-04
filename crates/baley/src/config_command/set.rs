@@ -71,7 +71,8 @@ fn attempt(
         Some((folder, root)) => {
             let working = settings::read(&folder.join(PROJECT_FILE));
             let head = working.as_ref().ok().and_then(Option::as_ref);
-            let reads = policy_step::gather(&folders.config, &root, head);
+            let reads =
+                policy_step::gather(&folders.config, &root, head, &mut crate::process::System);
             (
                 Some(ProjectSeen {
                     folder,
@@ -196,7 +197,12 @@ fn regather(config: &Path, project: &Project) -> Result<Reads, Unavailable> {
             cause: "the file was not found".to_owned(),
         },
     })?;
-    Ok(policy_step::gather(config, &project.root, Some(&working)))
+    Ok(policy_step::gather(
+        config,
+        &project.root,
+        Some(&working),
+        &mut crate::process::System,
+    ))
 }
 
 /// Each host's accepted model names from the `user` project's `model_catalog`
