@@ -387,22 +387,22 @@ Not applicable. This area reads no setting of its own. The start runs the settin
 
 ## 11. Build status
 
-The binary crate holds the inherited engine. It parses and edits `ROADMAP.md` and `REQUIREMENTS.md` under `.planning/`, which this design replaces.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `plan-read` and `context-intake` (`crates/baley/src/mcp/operations.rs:105-106`) and `plan-submit` and `context-submit` (`crates/baley/src/mcp/operations.rs:153-154`) as `operation-unavailable`, and the operation baseline names Build 4 for them. It answers `verification-complete` (`crates/baley/src/mcp/operations.rs:133`), the roadmap tick, the same way and names Build 5. The baseline has no start, story or phase spelling. Production reaches `baley init` in this area (`crates/baley/src/init.rs:567-576`). Parsing and editing `ROADMAP.md` and `REQUIREMENTS.md` under `.planning/` is the parked engine's.
 
 | Requirement | Status | Where |
 |---|---|---|
 | PRJ-R1, PRJ-R2, PRJ-R5, PRJ-R7 | Not built | No start operation exists |
-| PRJ-R3 | Partly built | Context submissions are validated field by field (`crates/baley/src/context/validation.rs:17-103`); no scope submission exists |
-| PRJ-R4 | Not built | `REQUIREMENTS.md` rows are seeded at plan-submit (`crates/baley/src/plan_service.rs:410-437`); no assignment check |
+| PRJ-R3 | Not built | Only the parked engine validates a context submission field by field (`crates/baley/src/context_service.rs:60-63`, `crates/baley/src/context/validation.rs:5-106`), and no scope submission exists. The session server answers `context-submit` as unavailable (`crates/baley/src/mcp/operations.rs:154`) until Build 4 |
+| PRJ-R4 | Not built | The parked engine seeds `REQUIREMENTS.md` rows at plan-submit (`crates/baley/src/plan_service.rs:410-437`) and has no assignment check. The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153`) until Build 4 |
 | PRJ-R6 | Partly built | `baley init` is built as its own command (`crates/baley/src/init.rs:567-576`); the start operation that runs it is Build 4 (#25) |
 | PRJ-R8, PRJ-R9 | Not built | |
-| PRJ-R10 | Not built | Phase ids parsed as floating-point numbers (`crates/baley/src/derivation/model.rs:22`); order is the textual order of `ROADMAP.md` (`crates/baley/src/derivation/parse.rs:150-191`) |
-| PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw; `ROADMAP.md` is edited only to tick a phase (`crates/baley/src/verification/completion.rs:266-303`) |
-| PRJ-R14, PRJ-R15, PRJ-R16 | Not built | A second context approval is refused `native-context-exists` (`crates/baley/src/context_service.rs:184-192`); truth version is always 1 (`crates/baley/src/context/persistence.rs:33-49`); the plan check accepts only version 1 (`crates/baley/src/plan/limits.rs:401-408`) |
+| PRJ-R10 | Not built | The parked engine parses phase ids as floating-point numbers (`crates/baley/src/derivation/model.rs:20-22`) and takes their order from the textual order of `ROADMAP.md` (`crates/baley/src/derivation/parse.rs:150-191`) |
+| PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw exists. The parked engine edits `ROADMAP.md` only to tick a phase (`crates/baley/src/verification/completion.rs:264-303`), and the session server answers `verification-complete` as unavailable (`crates/baley/src/mcp/operations.rs:133`) until Build 5 |
+| PRJ-R14, PRJ-R15, PRJ-R16 | Not built | The parked engine refuses a second context approval `native-context-exists` (`crates/baley/src/context_service.rs:184-193`), writes truth version 1 always (`crates/baley/src/context/persistence.rs:33-49`), and its plan check accepts only version 1 (`crates/baley/src/plan/limits.rs:401-408`). The session server answers `context-submit` and `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153-154`) until Build 4 |
 | PRJ-R17 | Not built | |
-| PRJ-R18 | Partly built | Context intake answers `unavailable` for a phase not on the roadmap (`crates/baley/src/context_service.rs:35-53`) |
-| PRJ-R19 | Partly built | Context submit, draft and approve by digest with `stale-draft` and `unknown-draft` (`crates/baley/src/context_service.rs:116-207`); drafts are memory-only and lost on restart (`crates/baley/src/context_service.rs:131-137`); owner and time are any non-blank strings |
-| PRJ-R20 | Not built | `PROJECT.md` is never read or written (`crates/baley/src`, no reader) |
+| PRJ-R18 | Not built | Only the parked engine answers `unavailable` at context intake for a phase not on the roadmap (`crates/baley/src/context_service.rs:35-53`). The session server answers `context-intake` as unavailable (`crates/baley/src/mcp/operations.rs:106`) until Build 4 |
+| PRJ-R19 | Not built | Only the parked engine submits, drafts and approves a context by digest, with `stale-draft` and `unknown-draft` (`crates/baley/src/context_service.rs:116-207`). Its drafts are memory-only and lost on restart (`crates/baley/src/session/mod.rs:427-437`), and owner and time are any non-blank strings. The session server answers `context-submit` as unavailable (`crates/baley/src/mcp/operations.rs:154`) until Build 4 |
+| PRJ-R20 | Not built | No `project.described` event is recorded. Only the parked engine reads `PROJECT.md`, to name the pause branch (`crates/baley/src/pause/branch.rs:131`), and nothing writes it |
 
 ## 12. Open questions
 
