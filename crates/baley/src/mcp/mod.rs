@@ -31,3 +31,6 @@ pub mod lifecycle;
 
 /// The thread Baley owns that runs accepted decisions one at a time in queue order.
 pub mod worker;
+
+/// Carries frames between stdio and rmcp through the bounded decoder.
+pub mod transport;
