@@ -7,3 +7,6 @@ pub mod context;
 
 /// Decodes the calling client in both protocol eras and selects a supported host.
 pub mod client;
+
+/// The literal operation baseline and the build that replaces each retired spelling.
+pub mod operations;

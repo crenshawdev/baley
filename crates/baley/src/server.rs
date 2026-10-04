@@ -2010,6 +2010,15 @@ mod wire_tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn the_library_baseline_still_equals_the_services_derived_operation_lists() {
+        use baley::mcp::operations::{APPLY_OPERATIONS, QUERY_OPERATIONS};
+        let query: Vec<_> = QUERY_OPERATIONS.iter().map(|op| op.name).collect();
+        let apply: Vec<_> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
+        assert_eq!(query, query_operation_names().collect::<Vec<_>>());
+        assert_eq!(apply, apply_operation_names().collect::<Vec<_>>());
+    }
+
     fn answer(tool: &str) -> Result<CallToolResponse, ErrorData> {
         let project = tempfile::tempdir().unwrap();
         tokio::runtime::Builder::new_current_thread()
