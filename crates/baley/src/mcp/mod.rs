@@ -16,3 +16,6 @@ pub mod operations;
 
 /// The three tools, what the server says about itself and what `baley_version` answers.
 pub mod tools;
+
+/// Bounded line framing: a frame over 4 MiB or 128 levels deep is discarded and answered, never ending the input.
+pub mod frame;
