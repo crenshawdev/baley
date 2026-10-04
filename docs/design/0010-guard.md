@@ -253,24 +253,24 @@ Not applicable. The guard gives no instructions; an agent sees only the host's o
 
 ## 11. Build status
 
-The binary crate holds the inherited engine; its guard is close to this design.
+The running `baley guard` is the binary's inherited guard. It uses the core scanner and the core reason text. The guard's rules are also built as pure decisions in `baley-core`'s guard module (`crates/baley-core/src/guard/`) and in the library's `hook_input` and `protected_paths` modules, and Build 3 T10 calls them from the hook. Until then the live hook still runs its inherited discovery, settings, protections and audit, which T10 replaces.
 
 | Requirement | Status | Where |
 |---|---|---|
-| GRD-R1 | Partly built | One Claude Code hook (`hooks/hooks.json`) whose matcher is `Bash\|Write\|Edit`, so `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob` and `NotebookEdit` are not matched yet |
-| GRD-R2 | Partly built | Bash walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); Write/Edit has no discovery (`crates/baley/src/guard/mod.rs:116-126`) |
-| GRD-R3 | Partly built | For `Bash` (`crates/baley/src/guard/bash.rs:47-151, 456-470`); `Monitor` and `PowerShell` commands are not matched yet (GRD-R1) |
-| GRD-R4 | Built | `crates/baley/src/guard/bash.rs:481-486` |
-| GRD-R5 | Built | `crates/baley/src/guard/bash.rs:160-252, 369-435` |
-| GRD-R6 | Built | `crates/baley/src/guard/bash.rs:369-435` |
-| GRD-R7 | Built | `crates/baley/src/guard/audit.rs:150-195` |
-| GRD-R8 | Built | `crates/baley/src/guard/audit.rs:9-127` |
-| GRD-R9 | Not built | An unrecordable ask becomes allow (`crates/baley/src/guard/bash.rs:444-454`) |
-| GRD-R10 | Built | `crates/baley/src/guard/bash.rs:491-501` |
-| GRD-R11 | Partly built | Settings files and rendered stubs denied (`crates/baley/src/guard/mod.rs:323-357`); `.planning` paths still listed (`mod.rs:358-385`); no lease check; `NotebookEdit` is not matched yet (GRD-R1) |
+| GRD-R1 | Partly built | One Claude Code hook (`hooks/hooks.json:5`) whose matcher is `Bash\|Write\|Edit`, so `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob` and `NotebookEdit` are not matched yet. T10 widens it. The library classifies all nine tools (`crates/baley/src/hook_input/mod.rs:101-195`) |
+| GRD-R2 | Partly built | The pure decisions take whether a project is bound as an input (`crates/baley-core/src/guard/answer.rs:61-70, 138-144`). The live hook still walks up to `.planning` for `Bash` (`crates/baley/src/guard/bash.rs:28-45`), and its Write/Edit path has no discovery (`crates/baley/src/guard/mod.rs:186-207`). Discovery from `CLAUDE_PROJECT_DIR` is T10's |
+| GRD-R3 | Partly built | The scanner is in the core (`crates/baley-core/src/guard/scan.rs:19-123`), the PowerShell ask is a core decision (`crates/baley-core/src/guard/answer.rs:138-144`), and the library classifies `Bash`, `Monitor` command and watch forms, and `PowerShell` (`crates/baley/src/hook_input/mod.rs:101-195`). The live hook scans `Bash` only (`crates/baley/src/guard/bash.rs:359-376`) |
+| GRD-R4 | Partly built | The core answer (`crates/baley-core/src/guard/answer.rs:61-73`). The live hook asks on a push with the core reason (`crates/baley/src/guard/bash.rs:371-398, 414-419`) |
+| GRD-R5 | Partly built | The core answer, with the settings read from a complete policy (`crates/baley-core/src/guard/answer.rs:82-102`, `crates/baley-core/src/guard/settings.rs:12-54`) and the three settings in the schema (`crates/baley-core/src/policy/schema.rs:296-316`). The live hook decides from its inherited JSON settings (`crates/baley/src/guard/bash.rs:63-155, 272-338`) with the core reason text. T10 replaces them |
+| GRD-R6 | Partly built | The core answer (`crates/baley-core/src/guard/answer.rs:90-100`). The live hook gathers the branch and the `.git/HEAD` fallback itself (`crates/baley/src/guard/bash.rs:157-270`) and decides at `crates/baley/src/guard/bash.rs:272-338` |
+| GRD-R7 | Partly built | The core answer for torn settings and the two remembered denials (`crates/baley-core/src/guard/answer.rs:106-131`). The live hook honours a remembered hard fail but not a remembered refuse (`crates/baley/src/guard/bash.rs:291-298`), until T10 |
+| GRD-R8 | Partly built | The inherited hook records commit and push answers into the old store (`crates/baley/src/guard/audit.rs:51-123`). The `guard.answered` records of section 6 and the other tools' records are T10's |
+| GRD-R9 | Partly built | The core mapping from an answer and the audit precondition (`crates/baley-core/src/guard/recording.rs:27-34`). The live hook still passes an unrecordable ask (`audit_failed`, `crates/baley/src/guard/bash.rs:347-357`) and invents an identity for a call with no call id (`crates/baley/src/guard/audit.rs:9-20`) until T10 |
+| GRD-R10 | Built | `crates/baley/src/guard/bash.rs:404-413` |
+| GRD-R11 | Partly built | The library write decision and its lease input (`crates/baley/src/protected_paths/write.rs:18-99`), with path resolution and containment (`crates/baley/src/protected_paths/resolve.rs:151-238`, `crates/baley/src/protected_paths/contain.rs:23-58`). Build 5 owns the lease. The live hook still applies its inherited `.planning`, `config.v4.json` and rendered-skill protections through its own resolver (`crates/baley/src/guard/mod.rs:186-207, 246-334, 351-391`), which T10 deletes, and `NotebookEdit` is not matched yet (GRD-R1) |
 | GRD-R12 | Not built | Only Claude Code's form is written, inline in the guard (`crates/baley/src/guard/mod.rs:223-244`). The renderer this requirement describes is built with Build 3 T10 |
-| GRD-R13 | Not built | No doctor, and the sandbox settings, the `Read` and `Edit` deny rules and the guard's refusal of a `Read`, `Grep` or `Glob` call are all unbuilt. The sandbox probe is a spike (`spikes/host-matrix`) that Build 3 T12 extends to separate home and config folders and the built-in file tools |
-| GRD-R14 | Built | `crates/baley/src/guard/mod.rs:15, 105-129`, `crates/baley/src/guard/bash.rs:254-367` |
+| GRD-R13 | Partly built | The library read decision (`crates/baley/src/protected_paths/read.rs:22-105`) is built and T10 calls it. The sandbox settings and the `Read` and `Edit` deny rules are T11's, and the doctor is T13's. The sandbox probe is a spike (`spikes/host-matrix`) that Build 3 T12 extends to separate home and config folders and the built-in file tools |
+| GRD-R14 | Partly built | The live hook reads input to the bound and answers `Write` and `Edit` input it cannot read with a deny (`crates/baley/src/guard/mod.rs:15, 105-174`), and runs git for the branch (`crates/baley/src/guard/bash.rs:157-270`). The library classifier applies the bound to every tool and denies unreadable input for the six path tools (`crates/baley/src/hook_input/mod.rs:19-21, 133-149, 225-233`) |
 
 ## 12. Open questions
 
