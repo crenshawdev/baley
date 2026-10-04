@@ -348,7 +348,16 @@ mod tests {
         );
         let policy = effective_policy(Schema::standard(), host, Some(&file), None).unwrap();
         let recorded = recorded_policy(Path::new(path), &policy).unwrap();
-        policy_step::record(store, &project(), &recorded, 5, request(n.into()), &at(n)).unwrap()
+        policy_step::record(
+            store,
+            &project(),
+            &recorded,
+            5,
+            request(n.into()),
+            &at(n),
+            None,
+        )
+        .unwrap()
     }
 
     fn policy_version(store: &SqliteStore, path: &str) -> u64 {

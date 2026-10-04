@@ -7,9 +7,9 @@ use baley_core::policy::recorded::{
     effective_payload, judge_policy, policy_key,
 };
 use baley_store::{
-    Actor, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed, ObservedDocument,
-    OutcomeKind, ProjectId, Recorded, Refusal, RequestId, StoreError, StreamName, Views,
-    request_digest,
+    Actor, Caller, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed,
+    ObservedDocument, OutcomeKind, ProjectId, Recorded, Refusal, RequestId, StoreError, StreamName,
+    Views, request_digest,
 };
 use serde_json::{Value, json};
 
@@ -31,6 +31,11 @@ const ATTEMPTS: usize = 3;
 /// it as stale when another record of the key lands first. The recorder then
 /// observes again and decides afresh, at most three times in all. It never
 /// shares a transaction with a caller's events.
+///
+/// `caller` is recorded on the command and so on every event it appends,
+/// `command.completed` included. It stays out of the request digest. The
+/// command line passes none. The actor is Baley's own either way, and the
+/// time is the one given.
 pub fn record(
     store: &(impl Ledger + Views),
     project: &ProjectId,
@@ -38,13 +43,22 @@ pub fn record(
     catalog_version: u64,
     request_id: RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<u64, StoreError> {
     let payload = effective_payload(recorded, &project.0, catalog_version);
     let key = policy_key(&recorded.checkout, recorded.host);
     let mut attempt = 1;
     loop {
         // A stale refusal records nothing, so the request id is still free.
-        match record_once(store, project, &key, &payload, &request_id, at) {
+        match record_once(
+            store,
+            project,
+            &key,
+            &payload,
+            &request_id,
+            at,
+            caller.clone(),
+        ) {
             Err(StoreError::Stale(_)) if attempt < ATTEMPTS => attempt += 1,
             result => return result,
         }
@@ -58,6 +72,7 @@ fn record_once(
     payload: &Value,
     request_id: &RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<u64, StoreError> {
     let stored = store.get(project, POLICY_VIEW, key)?;
     let body = stored.as_ref().map(|document| &document.body);
@@ -65,7 +80,7 @@ fn record_once(
         return Ok(version);
     }
     let replaces = body.map_or(0, stored_version);
-    let command = command(project, payload, replaces, request_id.clone(), at)?;
+    let command = command(project, payload, replaces, request_id.clone(), at, caller)?;
     let observed = Observed {
         documents: vec![ObservedDocument {
             view: POLICY_VIEW.into(),
@@ -119,6 +134,7 @@ fn command(
     policy_version: u64,
     request_id: RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<Command, StoreError> {
     let actor = Actor::Baley;
     let digest = request_digest(&json!({
@@ -139,7 +155,7 @@ fn command(
         policy_version,
         recorded_at: at.into(),
         actor,
-        caller: None,
+        caller,
     })
 }
 
@@ -218,6 +234,35 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn the_policy_command_digest_is_not_changed_by_a_caller() {
+        let payload = effective_payload(&escalates(true), ID, CATALOG);
+        let caller = Caller::Server(
+            baley_store::ServerCaller::new(
+                "/p",
+                "/p/sub",
+                "claude-code",
+                "3f2b8c1e-4d5a-4e6f-8a7b-9c0d1e2f3a4b",
+                &json!(7),
+            )
+            .unwrap(),
+        );
+        let without = command(&project(), &payload, 3, request(1), &at(1), None).unwrap();
+
+        let with = command(
+            &project(),
+            &payload,
+            3,
+            request(1),
+            &at(1),
+            Some(caller.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(with.caller, Some(caller));
+        assert_eq!(with.digest, without.digest);
+    }
+
     fn document(store: &SqliteStore, recorded: &RecordedPolicy) -> Document {
         let key = policy_key(&recorded.checkout, recorded.host);
         store.get(&project(), POLICY_VIEW, &key).unwrap().unwrap()
@@ -232,7 +277,16 @@ mod tests {
         let (_dir, store) = store();
         let recorded = escalates(true);
 
-        let version = record(&store, &project(), &recorded, CATALOG, request(1), &at(1)).unwrap();
+        let version = record(
+            &store,
+            &project(),
+            &recorded,
+            CATALOG,
+            request(1),
+            &at(1),
+            None,
+        )
+        .unwrap();
 
         let appended = effective(&store);
         assert_eq!(appended.len(), 1);
@@ -253,10 +307,28 @@ mod tests {
     fn an_unchanged_policy_does_not_open_a_command() {
         let (_dir, store) = store();
         let recorded = escalates(true);
-        let first = record(&store, &project(), &recorded, CATALOG, request(1), &at(1)).unwrap();
+        let first = record(
+            &store,
+            &project(),
+            &recorded,
+            CATALOG,
+            request(1),
+            &at(1),
+            None,
+        )
+        .unwrap();
         let before = head(&store);
 
-        let again = record(&store, &project(), &recorded, CATALOG, request(2), &at(2)).unwrap();
+        let again = record(
+            &store,
+            &project(),
+            &recorded,
+            CATALOG,
+            request(2),
+            &at(2),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(head(&store), before);
         assert_eq!(again, first);
@@ -272,11 +344,21 @@ mod tests {
             CATALOG,
             request(1),
             &at(1),
+            None,
         )
         .unwrap();
         let changed = escalates(false);
 
-        let second = record(&store, &project(), &changed, CATALOG, request(2), &at(2)).unwrap();
+        let second = record(
+            &store,
+            &project(),
+            &changed,
+            CATALOG,
+            request(2),
+            &at(2),
+            None,
+        )
+        .unwrap();
 
         let appended = effective(&store);
         assert_eq!(appended.len(), 2);
@@ -297,14 +379,30 @@ mod tests {
         let all = [&command_line, &claude, &other];
         let mut versions = Vec::new();
         for (n, recorded) in (1..).zip(all) {
-            let version = record(&store, &project(), recorded, CATALOG, request(n), &at(n));
+            let version = record(
+                &store,
+                &project(),
+                recorded,
+                CATALOG,
+                request(n),
+                &at(n),
+                None,
+            );
             versions.push(version.unwrap());
         }
         let before = head(&store);
 
         // Each is judged against its own document, so none records again.
         for ((n, recorded), first) in (4..).zip(all).zip(&versions) {
-            let version = record(&store, &project(), recorded, CATALOG, request(n), &at(n));
+            let version = record(
+                &store,
+                &project(),
+                recorded,
+                CATALOG,
+                request(n),
+                &at(n),
+                None,
+            );
             assert_eq!(version.unwrap(), *first);
         }
         assert_eq!(head(&store), before);
@@ -341,6 +439,7 @@ mod tests {
                     CATALOG,
                     request(9),
                     &at(9),
+                    None,
                 );
                 self.raced.set(Some(version?));
             }
@@ -460,7 +559,16 @@ mod tests {
             raced: Cell::new(None),
         };
 
-        let version = record(&racing, &project(), &recorded, CATALOG, request(1), &at(1)).unwrap();
+        let version = record(
+            &racing,
+            &project(),
+            &recorded,
+            CATALOG,
+            request(1),
+            &at(1),
+            None,
+        )
+        .unwrap();
 
         let appended = effective(&store);
         assert_eq!(appended.len(), 1);
@@ -480,6 +588,7 @@ mod tests {
             CATALOG,
             request(1),
             &at(1),
+            None,
         )
         .unwrap();
         let racer = policy(CHECKOUT, None, "roles.reviewer.effort = \"high\"\n");
@@ -490,7 +599,16 @@ mod tests {
         };
         let mine = escalates(false);
 
-        let version = record(&racing, &project(), &mine, CATALOG, request(2), &at(2)).unwrap();
+        let version = record(
+            &racing,
+            &project(),
+            &mine,
+            CATALOG,
+            request(2),
+            &at(2),
+            None,
+        )
+        .unwrap();
 
         let raced = racing.raced.get().unwrap();
         assert!(raced > first);

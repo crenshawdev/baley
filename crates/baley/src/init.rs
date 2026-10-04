@@ -709,7 +709,15 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
     // `project.initialized` and the first `policy.effective`. It prints
     // nothing, and init's own events keep policy version 0.
     let project = ProjectId(identity.id.clone());
-    policy_step::step(&store, &project, &recorded, new_request_id(), started_at).map_err(failed)?;
+    policy_step::step(
+        &store,
+        &project,
+        &recorded,
+        new_request_id(),
+        started_at,
+        None,
+    )
+    .map_err(failed)?;
     if !acted {
         lines.push(format!(
             "already initialized: {} names project {}, and the ledger at {} holds it",

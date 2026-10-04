@@ -430,6 +430,7 @@ fn run_step(
         recorded,
         new_request_id(),
         &SystemClock::now(),
+        None,
     )
     .map_err(|e| display::store_error(&e, Some(&project.0)))
 }

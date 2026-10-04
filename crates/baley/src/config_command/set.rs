@@ -278,6 +278,7 @@ fn record_policy(
         recorded,
         request_id,
         at,
+        None,
     )
     .map_err(|error| display::store_error(&error, Some(&project.id)))
 }
