@@ -162,7 +162,7 @@ Every event a call records carries one `caller` in its envelope, hashed with the
 - The server form is what the server records for a request. It holds the project directory, the working directory, the host, the Baley session the server minted, and the call identity: the request's JSON-RPC id, with its source. It may also hold the client version, the host's own session id, a work order id and instruction evidence.
 - The hook form is what the guard hook records for a tool call. It holds the host, the working directory and the call identity: Claude Code's tool-use id, with its source. It may also hold the project directory, the host's own session id, a work order id and instruction evidence. It has no Baley session, so a hook cannot claim one.
 
-Instruction evidence is a list of entries, each an instruction's identity, version and hash. Every text is checked when the caller is built and again when it is read back, and each has a byte limit. A command-line command and a reconciliation have no caller: the envelope has no `caller` key, and a caller is never `null`. No caller enters a request digest or request key, so a replay records nothing and the original caller stays on the event the request first produced. No call fills a caller yet ([section 11](#11-build-status)).
+Instruction evidence is a list of entries, each an instruction's identity, version and hash. Every text is checked when the caller is built and again when it is read back, and each has a byte limit. A command-line command and a reconciliation have no caller: the envelope has no `caller` key, and a caller is never `null`. No caller enters a request digest or request key, so a replay records nothing and the original caller stays on the event the request first produced. The server's preparation fills the server form on checkout admission, the policy step and the prepared command ([section 8](#8-workflows)), and [section 11](#11-build-status) says which operations reach it.
 
 ### long_call (table, not an event)
 
@@ -208,6 +208,7 @@ sequenceDiagram
   participant H as Host
   participant S as Baley server
   participant A as Adapter
+  participant L as Ledger
   H->>S: start baley serve over stdio with CLAUDE_PROJECT_DIR set
   S->>S: record the project and the working directory, mint the session id
   H->>S: initialize or discover
@@ -215,9 +216,62 @@ sequenceDiagram
   H->>S: tools/call baley_query schema, with the client info
   S->>A: select adapter for host and version
   S-->>H: one schema part, next part id
+  H->>S: tools/call baley_query document, with the client info
+  S->>A: select adapter for host and version
+  S->>S: after the gate and the queue, discover the project afresh from CLAUDE_PROJECT_DIR
+  S->>S: read the project id from the working tree's baley.toml
+  S->>L: list the ledger's projects
+  alt a step cannot go on
+    S-->>H: failed with a code and a place, recorded false
+  else the project is known
+    S->>L: the operation reads its record
+    S-->>H: the operation's answer
+  end
 ```
 
-*Figure 3. A session starting its server and making a call.*
+*Figure 3. A session starting its server and making calls. The second call is a project read. After the gate and the queue it discovers the project from the session's `CLAUDE_PROJECT_DIR`, reads the project id from the working tree's `baley.toml` and checks that the ledger lists it, then the operation answers. A read stops there and appends nothing. Any step before the answer that cannot go on is answered `failed` with `recorded: false` (section 5).*
+
+```mermaid
+sequenceDiagram
+  participant H as Host session
+  participant S as Baley server
+  participant G as Git
+  participant L as Ledger
+  H->>S: tools/call baley_apply with an operation and its request id
+  S->>S: discover the project from CLAUDE_PROJECT_DIR
+  S->>S: read the project id from the working tree's baley.toml
+  S->>L: list the ledger's projects
+  opt the project is not in the ledger
+    S-->>H: failed project-not-in-ledger, recorded false
+  end
+  S->>L: look the request up by its command kind and request id
+  alt the ledger already holds the request
+    S->>L: the operation's transaction answers the replay
+    L-->>S: the original receipt
+    S-->>H: the receipt, nothing new recorded
+  else a new request
+    S->>S: read the global file and HEAD's copy of baley.toml, then validate the settings
+    opt the settings do not validate
+      S-->>H: failed config-unavailable, recorded false
+    end
+    S->>G: checkout facts from the remote the no-host policy names
+    G-->>S: the remote and the head
+    S->>L: checkout admission, checkout.seen only when the checkout is new or changed
+    opt the facts cannot be read or the checkout is a fork
+      S-->>H: failed checkout-facts-unavailable or project-id-conflict, recorded false, nothing recorded in the project
+    end
+    S->>L: policy step, policy.effective under the checkout and claude-code only when it changed
+    opt the ledger is busy or unavailable
+      S-->>H: failed ledger-busy or ledger-unavailable, recorded false
+    end
+    L-->>S: the policy version in force
+    S->>L: the operation's transaction, carrying that version
+    L-->>S: the receipt
+    S-->>H: the receipt
+  end
+```
+
+*Figure 4. A project write, in the order the server prepares it. A request the ledger already holds goes straight to the operation's transaction, which keeps the final say on a replay, so a retry made after the owner broke `baley.toml` still gets its receipt. Every refusal branch answers `failed` with `recorded: false`, and a fork records nothing in the project. Checkout admission and the policy step are separate transactions, as on the command line, so a failure at the step leaves the admission's `checkout.seen` recorded. The guard takes none of this route.*
 
 ```mermaid
 sequenceDiagram
@@ -243,7 +297,7 @@ sequenceDiagram
   H->>S: apply worker-exit
 ```
 
-*Figure 4. Delivering a work order and relaying a question.*
+*Figure 5. Delivering a work order and relaying a question.*
 
 ```mermaid
 sequenceDiagram
@@ -265,7 +319,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 5. A long call.*
+*Figure 6. A long call.*
 
 ```mermaid
 sequenceDiagram
@@ -285,7 +339,7 @@ sequenceDiagram
   B-->>O: receipt, run baley doctor to check
 ```
 
-*Figure 6. Installing on a host.*
+*Figure 7. Installing on a host.*
 
 ## 9. Settings
 
