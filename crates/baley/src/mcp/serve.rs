@@ -13,6 +13,7 @@ use std::time::Instant;
 use baley_store_sqlite::{ExitCheckpoint, SkipReason, SqliteStore, StartupHealth};
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
+use tokio::task::{JoinError, JoinHandle};
 
 use super::context::{Observation, judge};
 use super::handler::SessionHandler;
@@ -97,6 +98,23 @@ async fn terminated(signal: &mut Terminate) {
     signal.recv().await;
 }
 
+/// Whether the service task did well, judged from what is already known. A
+/// service that failed to start drops the transport, which also wakes the input
+/// watch, so the failure can arrive second and must still be read. A task that
+/// is still running is never awaited: it can sit in stdin's blocking read, and
+/// the drain bound must not wait on it.
+async fn service_went_well(
+    read: Option<Result<bool, JoinError>>,
+    service: JoinHandle<bool>,
+) -> bool {
+    let result = match read {
+        Some(result) => Some(result),
+        None if service.is_finished() => Some(service.await),
+        None => None,
+    };
+    result.is_none_or(|result| result.unwrap_or(false))
+}
+
 /// Serves one session on stdin and stdout until input ends or SIGTERM, then
 /// drains and makes the one checkpoint attempt. Returns whether the run ended
 /// cleanly: the service started, input did not fail and the drain finished
@@ -138,14 +156,16 @@ pub async fn run() -> bool {
     });
 
     let mut clean = true;
+    let mut read = None;
     let first = tokio::select! {
         _ = control.input_ended() => Event::InputEnded,
         _ = terminated(&mut terminate) => Event::Terminate,
         finished = &mut service => {
-            clean &= finished.unwrap_or(false);
+            read = Some(finished);
             Event::InputEnded
         }
     };
+    clean &= service_went_well(read, service).await;
     clean &= control.ended() != Some(InputEnd::Failed);
 
     let began = Instant::now();
@@ -252,6 +272,51 @@ mod tests {
             assert!(!stripped.contains("complete"), "{outcome:?}: {line}");
         }
         assert!(checkpoint_line(None).find("complete").is_none());
+    }
+
+    async fn finished(task: JoinHandle<bool>) -> JoinHandle<bool> {
+        while !task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        task
+    }
+
+    #[tokio::test]
+    async fn a_service_that_already_failed_is_read_even_when_input_ending_won() {
+        let failed = finished(tokio::spawn(async { false })).await;
+        assert!(!service_went_well(None, failed).await);
+    }
+
+    #[tokio::test]
+    async fn a_service_that_already_stopped_cleanly_is_clean() {
+        let stopped = finished(tokio::spawn(async { true })).await;
+        assert!(service_went_well(None, stopped).await);
+    }
+
+    #[tokio::test]
+    async fn a_service_that_panicked_is_not_clean() {
+        let panicked = finished(tokio::spawn(async { panic!("service task") })).await;
+        assert!(!service_went_well(None, panicked).await);
+    }
+
+    #[tokio::test]
+    async fn a_result_the_select_already_read_decides_without_the_task() {
+        let task = tokio::spawn(std::future::pending::<bool>());
+        assert!(!service_went_well(Some(Ok(false)), task).await);
+        let task = tokio::spawn(std::future::pending::<bool>());
+        assert!(service_went_well(Some(Ok(true)), task).await);
+    }
+
+    #[tokio::test]
+    async fn a_service_still_running_is_not_waited_for() {
+        // It stands for a service blocked in stdin's read. One poll must finish.
+        let running = tokio::spawn(std::future::pending::<bool>());
+        let judged = std::pin::pin!(service_went_well(None, running));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match judged.poll(&mut context) {
+            std::task::Poll::Ready(went_well) => assert!(went_well),
+            std::task::Poll::Pending => panic!("judging waited for a running service"),
+        }
     }
 
     #[test]
