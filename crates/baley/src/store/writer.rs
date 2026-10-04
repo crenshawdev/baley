@@ -24,89 +24,11 @@ pub struct View {
     pub snapshot: Snapshot,
 }
 
-/// One deadline covers ingress, resident work and writer joins (D-211).
+/// The session server's shutdown drain bound: accepted work gets this long after
+/// input ends or SIGTERM arrives, then the exit checkpoint runs. Build 9 removes
+/// this inherited store module, and the constant moves with the session server
+/// rather than going with it.
 pub const SERVER_DRAIN_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Admission {
-    pub sequence: u64,
-    pub id: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrainLimit {
-    pub open_write: Option<String>,
-    pub bound: std::time::Duration,
-}
-
-pub fn drain_limit_diagnostic(limit: &DrainLimit) -> String {
-    let seconds = limit.bound.as_secs();
-    match &limit.open_write {
-        Some(id) => format!(
-            "baley: shutdown drain reached {seconds} seconds; open admitted write {id} left to journal recovery."
-        ),
-        None => format!(
-            "baley: shutdown drain reached {seconds} seconds while joining writers; any open intent is left to journal recovery."
-        ),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DrainAction {
-    Admit,
-    Refuse,
-    Next(String),
-    Wait,
-    Join,
-    DrainLimit(DrainLimit),
-}
-
-/// Observations only: this transition neither reads time nor touches storage.
-pub struct Drain<'a> {
-    pub admission_closed: bool,
-    pub admissions: &'a [Admission],
-    pub completed_prefix: u64,
-    pub open_write: Option<&'a str>,
-    pub elapsed: std::time::Duration,
-}
-
-impl Drain<'_> {
-    pub fn step(&self, incoming: Option<&str>) -> DrainAction {
-        if incoming.is_some() {
-            return if self.admission_closed {
-                DrainAction::Refuse
-            } else {
-                DrainAction::Admit
-            };
-        }
-        let pending = self
-            .admissions
-            .iter()
-            .filter(|admission| admission.sequence > self.completed_prefix)
-            .min_by_key(|admission| admission.sequence);
-        if self.open_write.is_none() && pending.is_none() {
-            return if self.admission_closed {
-                DrainAction::Join
-            } else {
-                DrainAction::Wait
-            };
-        }
-        if self.admission_closed && self.elapsed >= SERVER_DRAIN_BOUND {
-            return DrainAction::DrainLimit(DrainLimit {
-                open_write: self
-                    .open_write
-                    .map(str::to_owned)
-                    .or_else(|| pending.map(|admission| admission.id.clone())),
-                bound: SERVER_DRAIN_BOUND,
-            });
-        }
-        if self.open_write.is_some() {
-            DrainAction::Wait
-        } else {
-            DrainAction::Next(pending.expect("pending admission").id.clone())
-        }
-    }
-}
 
 /// Owner-serialized precondition; this does not compare-and-swap Markdown files.
 pub const STALE_SNAPSHOT: &str = "conditional snapshot precondition changed";
