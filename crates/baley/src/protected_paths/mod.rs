@@ -5,6 +5,7 @@
 
 mod contain;
 mod resolve;
+mod write;
 
 #[cfg(test)]
 mod tests;
@@ -14,3 +15,4 @@ pub use resolve::{
     Disk, Entry, Lookup, Part, ResolveFailure, canonical_cwd, resolve_existing_prefix,
     resolve_target, resolve_under,
 };
+pub use write::{Lease, ProtectedPaths, write_answer};

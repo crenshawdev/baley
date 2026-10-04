@@ -4,9 +4,10 @@
 //! a disk, reads the environment or starts a program.
 
 use super::{
-    Entry, Lookup, Part, ResolveFailure, contains, is_inside, resolve_existing_prefix,
-    resolve_target,
+    Entry, Lease, Lookup, Part, ProtectedPaths, ResolveFailure, contains, is_inside,
+    resolve_existing_prefix, resolve_target, write_answer,
 };
+use baley_core::guard::Answer;
 use std::collections::BTreeMap;
 use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
@@ -424,4 +425,163 @@ fn a_metadata_lookup_that_fails_other_than_missing_is_a_failure() {
         contains(Path::new("/h/x"), Path::new("/h/baley"), &broken("/h/x")),
         Err(ResolveFailure::Identity(_))
     ));
+}
+
+// Baley's config folder and ledger home under /u, a project at /p, a second
+// checkout at /q, a stub, and the links and second names that reach them.
+fn protected_tree() -> Tree {
+    tree()
+        .dir("/u")
+        .dir("/u/.config")
+        .dir("/u/.config/baley")
+        .file("/u/.config/baley/keys.env")
+        .file("/u/.config/baley/config.toml")
+        .dir("/u/.config/baley-old")
+        .file("/u/.config/baley-old/keys.env")
+        .dir("/u/.local")
+        .dir("/u/.local/share")
+        .dir("/u/.local/share/baley")
+        .file("/u/.local/share/baley/ledger.db")
+        .dir("/u/.claude")
+        .file("/u/.claude/CLAUDE.md")
+        .dir("/p")
+        .file("/p/baley.toml")
+        .dir("/p/src")
+        .file("/p/src/lib.rs")
+        .dir("/p/tests")
+        .dir("/p/tests/fixtures")
+        .file("/p/tests/fixtures/baley.toml")
+        .dir("/q")
+        .file("/q/baley.toml")
+        .dir("/elsewhere")
+        .link("/p/cfg", "/u/.config/baley")
+        .link("/p/project-link", "/p/baley.toml")
+        .hard("/p/hard-link", "/p/baley.toml")
+}
+
+fn protected_list() -> ProtectedPaths {
+    ProtectedPaths {
+        home: "/u/.local/share/baley".into(),
+        config: "/u/.config/baley".into(),
+        files: vec![
+            "/p/baley.toml".into(),
+            "/q/baley.toml".into(),
+            "/u/.claude/CLAUDE.md".into(),
+        ],
+    }
+}
+
+fn write(cwd: &str, target: &str, fs: &Tree) -> Answer {
+    write_answer(cwd, target, &protected_list(), &Lease::NoActiveDispatch, fs)
+}
+
+fn is_deny(answer: &Answer) -> bool {
+    matches!(answer, Answer::Deny(_))
+}
+
+#[test]
+fn a_write_inside_the_config_or_home_folder_is_denied_even_for_a_file_not_yet_created() {
+    let fs = protected_tree();
+    for target in [
+        "/u/.config/baley/keys.env",
+        "/u/.config/baley/config.toml",
+        "/u/.config/baley/new.toml",
+        "/u/.config/baley",
+        "/u/.local/share/baley/ledger.db",
+        "/u/.local/share/baley/ledger.db-wal",
+    ] {
+        assert!(is_deny(&write("/p", target, &fs)), "{target}");
+    }
+}
+
+#[test]
+fn a_denial_names_the_target_and_what_it_protects() {
+    let Answer::Deny(reason) = write("/p", "/u/.config/baley/keys.env", &protected_tree()) else {
+        panic!("denied");
+    };
+    assert!(reason.contains("/u/.config/baley/keys.env"), "{reason}");
+    assert!(reason.contains("config folder"), "{reason}");
+    let Answer::Deny(reason) = write("/p", "/q/baley.toml", &protected_tree()) else {
+        panic!("denied");
+    };
+    assert!(reason.contains("/q/baley.toml"), "{reason}");
+}
+
+#[test]
+fn the_session_and_checkout_project_files_are_denied_from_a_cwd_outside_the_project() {
+    let fs = protected_tree();
+    assert!(is_deny(&write("/elsewhere", "/p/baley.toml", &fs)));
+    assert!(is_deny(&write("/elsewhere", "../p/baley.toml", &fs)));
+    assert!(is_deny(&write("/q", "baley.toml", &fs)));
+    assert!(is_deny(&write("/elsewhere", "/q/baley.toml", &fs)));
+}
+
+#[test]
+fn a_supplied_stub_path_is_denied() {
+    assert!(is_deny(&write(
+        "/p",
+        "/u/.claude/CLAUDE.md",
+        &protected_tree()
+    )));
+}
+
+#[test]
+fn a_symbolic_link_to_a_protected_folder_or_file_is_denied() {
+    let fs = protected_tree();
+    assert!(is_deny(&write("/p", "cfg/keys.env", &fs)));
+    assert!(is_deny(&write("/p", "cfg/new.env", &fs)));
+    assert!(is_deny(&write("/p", "project-link", &fs)));
+}
+
+#[test]
+fn a_hard_link_to_a_protected_file_is_denied_by_identity() {
+    assert!(is_deny(&write("/p", "hard-link", &protected_tree())));
+}
+
+#[test]
+fn a_backslash_spelling_that_reaches_a_protected_file_is_denied() {
+    let fs = protected_tree();
+    assert!(is_deny(&write("/p", "src\\..\\baley.toml", &fs)));
+    assert!(is_deny(&write(
+        "/p",
+        "..\\u\\.config\\baley\\keys.env",
+        &fs
+    )));
+}
+
+#[test]
+fn a_target_whose_lookup_fails_is_denied_and_not_passed() {
+    let fs = protected_tree().failing(Ask::Present, "/p/src");
+    assert!(is_deny(&write("/p", "src/lib.rs", &fs)));
+    assert!(is_deny(&write("p", "src/lib.rs", &protected_tree())));
+}
+
+#[test]
+fn a_relative_or_unresolvable_protected_entry_denies_every_write() {
+    let fs = protected_tree();
+    let mut relative = protected_list();
+    relative.files.push("baley.toml".into());
+    assert!(is_deny(&write_answer(
+        "/p",
+        "src/lib.rs",
+        &relative,
+        &Lease::NoActiveDispatch,
+        &fs
+    )));
+    let unresolvable = protected_tree().failing(Ask::Present, "/q");
+    assert!(is_deny(&write("/p", "src/lib.rs", &unresolvable)));
+}
+
+#[test]
+fn a_baley_toml_elsewhere_a_sibling_and_a_project_file_are_allowed() {
+    let fs = protected_tree();
+    for target in [
+        "/p/tests/fixtures/baley.toml",
+        "/u/.config/baley-old/keys.env",
+        "/u/baley",
+        "/p/src/lib.rs",
+        "src/new.rs",
+    ] {
+        assert_eq!(write("/p", target, &fs), Answer::Pass, "{target}");
+    }
 }
