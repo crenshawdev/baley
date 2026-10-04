@@ -1,6 +1,8 @@
 //! One session's start and end.
 //!
 //! Start gathers the project and the store and serves the handler over stdio.
+//! The one opened ledger goes to the handler for every project call and stays
+//! here for the exit checkpoint.
 //! End is driven by [`super::lifecycle`]: input ending or SIGTERM closes
 //! admission, accepted work gets up to ten seconds, and exactly one checkpoint
 //! attempt follows. Nothing here runs a checkpoint or a timer while the
@@ -10,13 +12,13 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use baley_store_sqlite::{ExitCheckpoint, SkipReason, SqliteStore, StartupHealth};
+use baley_store_sqlite::{ExitCheckpoint, SkipReason, StartupHealth};
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
 use tokio::task::{JoinError, JoinHandle};
 
 use super::context::{Observation, judge};
-use super::handler::SessionHandler;
+use super::handler::{SessionHandler, SessionLedger};
 use super::lifecycle::{Action, Event, State, step};
 use super::transport::{InputEnd, StdioTransport};
 use super::worker::Worker;
@@ -61,10 +63,12 @@ pub fn abandoned_line() -> String {
     )
 }
 
-/// Opens the per-user ledger for the server. A failure leaves the server
-/// running without one: no operation needs the store yet, and Claude Code does
-/// not restart a stdio server that exits.
-fn open_store() -> Option<SqliteStore> {
+/// Opens the per-user ledger for the server and returns it with the config
+/// folder found on the way. A failure leaves the server running without one:
+/// a project call then answers `failed` `ledger-unavailable`, the calls that
+/// need no project keep answering, and Claude Code does not restart a stdio
+/// server that exits.
+fn open_store() -> Option<SessionLedger> {
     let folders = match Folders::resolve(Platform::current(), &Environment::read()) {
         Ok(folders) => folders,
         Err(refusal) => {
@@ -82,7 +86,10 @@ fn open_store() -> Option<SqliteStore> {
     if let StartupHealth::Unhealthy { report } = store.startup_health() {
         eprintln!("baley: the ledger failed its startup check, so writes are refused: {report}");
     }
-    Some(store)
+    Some(SessionLedger {
+        store,
+        config: folders.config,
+    })
 }
 
 #[cfg(unix)]
@@ -132,7 +139,7 @@ pub async fn run() -> bool {
     for note in &session.notes {
         eprintln!("baley: {note}");
     }
-    let store = open_store();
+    let ledger = open_store().map(Arc::new);
     let worker = match Worker::start() {
         Ok(worker) => Arc::new(worker),
         Err(error) => {
@@ -140,7 +147,7 @@ pub async fn run() -> bool {
             return false;
         }
     };
-    let handler = SessionHandler::new(session, Arc::clone(&worker));
+    let handler = SessionHandler::new(session, Arc::clone(&worker), ledger.clone());
     let (transport, mut control) = StdioTransport::new(tokio::io::stdin(), tokio::io::stdout());
     let mut service = tokio::spawn(async move {
         match handler.serve(transport).await {
@@ -185,7 +192,9 @@ pub async fn run() -> bool {
                         clean = false;
                         eprintln!("{}", abandoned_line());
                     }
-                    let outcome = store.as_ref().map(SqliteStore::checkpoint_at_exit);
+                    let outcome = ledger
+                        .as_ref()
+                        .map(|ledger| ledger.store.checkpoint_at_exit());
                     eprintln!("{}", checkpoint_line(outcome.as_ref()));
                 }
                 Action::Exit => return clean,
