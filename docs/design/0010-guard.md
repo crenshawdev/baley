@@ -274,4 +274,9 @@ The running `baley guard` is the binary's inherited guard. It uses the core scan
 
 ## 12. Open questions
 
-No question is open.
+The guard's tool-input facts below are not yet measured on Claude Code. Only the `Bash` input's `command` field has been observed. Build 3 T12 measures the rest live. Until then the guard applies the rule stated with each item.
+
+- **Field names.** The `tool_input` field names of `Monitor`'s WebSocket form, `PowerShell`, `NotebookEdit`, `Grep`'s `glob` and `Glob`'s `path` are not recorded. Meanwhile the guard reads the names section 5 lists. A path tool that lacks a field it needs is denied, so a wrong path-field name fails closed. A `Monitor` input with no `command` is a watch and passes, so a wrong name for `Monitor`'s command field would pass a `Monitor` command unjudged. A `PowerShell` call is judged by its tool name and none of its input is read.
+- **Pattern reach.** Whether a `Glob` `pattern` or a `Grep` `glob` can reach outside `path`, and whether either follows symbolic links inside a searched folder, is not known. Meanwhile the guard checks the folders a pattern names before its first wildcard whatever `path` is, refuses a `..` component after a wildcard, and does not look inside the searched folder. Links inside it are left to the sandbox and the `Read` deny rules (GRD-R13).
+- **Absent path.** Whether an absent `Grep` or `Glob` `path` means the hook's working directory is not known. Meanwhile the guard takes it as the working directory.
+- **On-disk case.** Whether `canonicalize` returns the on-disk case of a path on a case-insensitive macOS volume is not known. The identity check in GRD-R11 and GRD-R13 compares existing ancestors by (device, inode), so it covers either answer.
