@@ -101,8 +101,10 @@ fn config_expansions(token: &str) -> Vec<String> {
 #[test]
 fn compiled_instructions_name_only_what_exists() {
     let schema = super::config::schema();
-    let operations: BTreeSet<_> = super::server::query_operation_names()
-        .chain(super::server::apply_operation_names())
+    let operations: BTreeSet<_> = baley::mcp::operations::QUERY_OPERATIONS
+        .iter()
+        .chain(baley::mcp::operations::APPLY_OPERATIONS)
+        .map(|operation| operation.name)
         .collect();
     // Shipped skills only: the rendered files plus the hand-authored ones,
     // traced against skills/ independently of this assertion. The help
@@ -292,8 +294,9 @@ fn compiled_contracts_send_source_reads_to_host_tools() {
         "skills/bal-coverage/SKILL.md",
         "skills/bal-read-contract/SKILL.md",
         "executor dispatch_text",
-        "server initialize instructions",
     ];
+    // The server's initialize instructions are the one-line help pointer now, so
+    // the sentence rides in the baley_query description, checked below.
     let surfaces = compiled_read_surfaces();
     for carrier in carriers {
         let (_, text) = surfaces
@@ -327,7 +330,7 @@ fn no_compiled_surface_carries_a_phase_31_measurement_paragraph() {
 #[test]
 fn the_query_tool_description_sends_source_reads_to_host_tools() {
     let expected = "Read process records through document and document-search; read project source with the host's own tools.";
-    let tools = super::server::tools();
+    let tools = baley::mcp::tools::tools();
     let query = tools
         .iter()
         .find(|tool| tool.name == "baley_query")
@@ -562,7 +565,7 @@ fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
     surfaces.push(("executor dispatch_text", instructions::dispatch_text()));
     surfaces.push((
         "server initialize instructions",
-        super::server::info()
+        baley::mcp::tools::info()
             .instructions
             .expect("initialize instructions"),
     ));
