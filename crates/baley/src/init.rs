@@ -685,8 +685,15 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
             }
             Step::AdmitCheckout => {
                 let project = ProjectId(identity.id.clone());
-                checkout::admit(&store, &project, &checkout, new_request_id(), started_at)
-                    .map_err(|e| admission_render(EntryError::Admit(e), &identity.id))?;
+                checkout::admit(
+                    &store,
+                    &project,
+                    &checkout,
+                    new_request_id(),
+                    started_at,
+                    None,
+                )
+                .map_err(|e| admission_render(EntryError::Admit(e), &identity.id))?;
             }
             Step::RecordInitialized => {
                 if record_initialized(&store, &identity, new_request_id(), started_at)
@@ -1238,6 +1245,7 @@ mod tests {
             &checkout,
             request(7),
             T1,
+            None,
         )
         .unwrap();
     }

@@ -10,9 +10,9 @@ use baley_core::checkout::{
 };
 use baley_core::policy::recorded::{POLICY_VIEW, policy_key};
 use baley_store::{
-    Actor, Command, CommandKind, Decision, Document, IndexQuery, Ledger, NewEvent, Observed,
-    ObservedDocument, OutcomeKind, Page, PageRequest, ProjectId, Refusal, RequestId, StoreError,
-    StreamName, Views, request_digest,
+    Actor, Caller, Command, CommandKind, Decision, Document, IndexQuery, Ledger, NewEvent,
+    Observed, ObservedDocument, OutcomeKind, Page, PageRequest, ProjectId, Refusal, RequestId,
+    StoreError, StreamName, Views, request_digest,
 };
 use serde_json::{Value, json};
 
@@ -67,17 +67,24 @@ impl From<StoreError> for AdmitError {
 /// it landing in between makes the store refuse the command as stale. A
 /// stale refusal is read and decided afresh with the same request id, at
 /// most three tries in all.
+///
+/// `caller` is recorded on the command and so on every event it appends,
+/// `command.completed` included. It stays out of the request digest, so the
+/// same checkout and request id are the same request with or without one. The
+/// command line passes none. The actor is Baley's own either way, and the
+/// time is the one given.
 pub fn admit(
     store: &(impl Ledger + Views),
     project: &ProjectId,
     checkout: &Checkout,
     request_id: RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<(), AdmitError> {
     let mut attempt = 1;
     loop {
         // A stale refusal records nothing, so the request id is still free.
-        match admit_once(store, project, checkout, &request_id, at) {
+        match admit_once(store, project, checkout, &request_id, at, caller.clone()) {
             Err(AdmitError::Store(StoreError::Stale(_))) if attempt < ATTEMPTS => attempt += 1,
             result => return result,
         }
@@ -90,6 +97,7 @@ fn admit_once(
     checkout: &Checkout,
     request_id: &RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<(), AdmitError> {
     let key = policy_key(&checkout.path, None);
     let rows = all_rows(&mut |query| store.find(project, CHECKOUT_VIEW, query))?;
@@ -110,7 +118,14 @@ fn admit_once(
     }
     // The plan's version rides a refusal too: the judgement inside the
     // transaction can differ from this one, and the command is already built.
-    let command = command(project, checkout, plan.policy_version, request_id, at)?;
+    let command = command(
+        project,
+        checkout,
+        plan.policy_version,
+        request_id,
+        at,
+        caller,
+    )?;
     let observed = Observed {
         documents: vec![ObservedDocument {
             view: POLICY_VIEW.into(),
@@ -201,6 +216,7 @@ fn command(
     policy_version: u64,
     request_id: &RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<Command, StoreError> {
     let actor = Actor::Baley;
     let digest = request_digest(&json!({
@@ -221,7 +237,7 @@ fn command(
         policy_version,
         recorded_at: at.into(),
         actor,
-        caller: None,
+        caller,
     })
 }
 
@@ -235,8 +251,9 @@ mod tests {
     use baley_core::policy::recorded::recorded_policy;
     use baley_core::policy::{Host, Schema, effective_policy};
     use baley_store::{
-        Admin, Anchor, Claim, ClaimId, ClaimOwner, Claimed, Decide, DecideClaim, DecideReconcile,
-        Event, Head, HistoryFilter, ReconcileAuthority, Recorded, VerifyReport,
+        Admin, Anchor, COMMAND_CLAIMED, COMMAND_COMPLETED, COMMAND_RECONCILED, Claim, ClaimId,
+        ClaimOwner, Claimed, Decide, DecideClaim, DecideReconcile, Event, Head, HistoryFilter,
+        ReconcileAuthority, Recorded, ServerCaller, VerifyReport,
     };
     use baley_store_sqlite::SqliteStore;
 
@@ -312,11 +329,11 @@ mod tests {
     }
 
     fn admitted(store: &(impl Ledger + Views), n: u8, checkout: &Checkout) {
-        admit(store, &project(), checkout, request(n.into()), &at(n)).unwrap();
+        admit(store, &project(), checkout, request(n.into()), &at(n), None).unwrap();
     }
 
     fn refused(store: &(impl Ledger + Views), n: u8, checkout: &Checkout) -> ProjectIdConflict {
-        match admit(store, &project(), checkout, request(n.into()), &at(n)) {
+        match admit(store, &project(), checkout, request(n.into()), &at(n), None) {
             Err(AdmitError::Fork(conflict)) => conflict,
             other => panic!("expected a fork refusal, got {other:?}"),
         }
@@ -436,6 +453,125 @@ mod tests {
         assert_ne!(version, 0);
         assert_eq!(appended[1].payload["path"], json!("/w/c"));
         assert_eq!(appended[1].policy_version, 0);
+    }
+
+    const SESSION: &str = "3f2b8c1e-4d5a-4e6f-8a7b-9c0d1e2f3a4b";
+
+    /// A server caller for JSON-RPC call 7.
+    fn server_caller() -> Caller {
+        Caller::Server(
+            ServerCaller::new("/p", "/p/sub", "claude-code", SESSION, &json!(7)).unwrap(),
+        )
+    }
+
+    /// Every `command.claimed` and `command.reconciled` event in the project.
+    fn claim_events(store: &SqliteStore) -> Vec<Event> {
+        let filter = HistoryFilter {
+            types: vec![COMMAND_CLAIMED.into(), COMMAND_RECONCILED.into()],
+            git_commit: None,
+        };
+        let page = PageRequest {
+            limit: 100,
+            after: None,
+        };
+        let range = 1..=head(store);
+        store
+            .history(&project(), range, &filter, page)
+            .unwrap()
+            .items
+    }
+
+    fn completed(store: &SqliteStore) -> Vec<Event> {
+        events(store, "command/checkout.admit")
+            .into_iter()
+            .filter(|event| event.type_name == COMMAND_COMPLETED)
+            .collect()
+    }
+
+    #[test]
+    fn a_server_callers_checkout_is_not_recorded_without_its_caller_actor_or_time() {
+        let (_dir, store) = store();
+        let caller = server_caller();
+
+        admit(
+            &store,
+            &project(),
+            &checkout("/w/a", Some(ROOT), Some(URL_X)),
+            request(1),
+            &at(1),
+            Some(caller.clone()),
+        )
+        .unwrap();
+
+        let appended = seen(&store);
+        let done = completed(&store);
+        assert_eq!((appended.len(), done.len()), (1, 1));
+        for event in appended.iter().chain(&done) {
+            assert_eq!(event.caller.as_ref(), Some(&caller), "{}", event.type_name);
+            assert_eq!(event.actor, Actor::Baley, "{}", event.type_name);
+            assert_eq!(event.recorded_at, at(1), "{}", event.type_name);
+        }
+    }
+
+    #[test]
+    fn a_command_line_checkout_is_not_recorded_with_a_caller_after_a_server_one() {
+        let (_dir, store) = store();
+        admit(
+            &store,
+            &project(),
+            &checkout("/w/a", Some(ROOT), Some(URL_X)),
+            request(1),
+            &at(1),
+            Some(server_caller()),
+        )
+        .unwrap();
+
+        admitted(&store, 2, &checkout("/w/b", Some(ROOT), Some(URL_X)));
+
+        let second: Vec<_> = seen(&store)
+            .into_iter()
+            .chain(completed(&store))
+            .filter(|event| event.request_id == request(2))
+            .collect();
+        assert_eq!(second.len(), 2);
+        assert!(second.iter().all(|event| event.caller.is_none()));
+    }
+
+    #[test]
+    fn a_server_callers_checkout_is_not_left_with_a_claim_or_a_reconciliation() {
+        let (_dir, store) = store();
+
+        admit(
+            &store,
+            &project(),
+            &checkout("/w/a", Some(ROOT), Some(URL_X)),
+            request(1),
+            &at(1),
+            Some(server_caller()),
+        )
+        .unwrap();
+
+        assert!(store.open_claims(&project()).unwrap().is_empty());
+        assert!(claim_events(&store).is_empty());
+    }
+
+    #[test]
+    fn the_checkout_command_digest_is_not_changed_by_a_caller() {
+        let held = checkout("/w/a", Some(ROOT), Some(URL_X));
+        let without = command(&project(), &held, 3, &request(1), &at(1), None).unwrap();
+
+        let with = command(
+            &project(),
+            &held,
+            3,
+            &request(1),
+            &at(1),
+            Some(server_caller()),
+        );
+
+        let with = with.unwrap();
+        assert_eq!(with.caller, Some(server_caller()));
+        assert_eq!(with.digest, without.digest);
     }
 
     /// The real store, with `before` run once ahead of the first `transact`,
@@ -596,7 +732,7 @@ mod tests {
         for n in 0..=bound {
             let path = format!("/a/{n:04}");
             let bare = checkout(&path, Some(ROOT), None);
-            admit(&store, &project(), &bare, request(100 + n), &at(1)).unwrap();
+            admit(&store, &project(), &bare, request(100 + n), &at(1), None).unwrap();
         }
         admitted(&store, 1, &checkout("/z", Some(ROOT), Some(URL_X)));
         assert!(rows(&store).len() > bound as usize);
@@ -619,6 +755,7 @@ mod tests {
             &checkout("/w/a", Some(ROOT), None),
             request(1),
             &at(1),
+            None,
         )
         .unwrap();
 
@@ -646,6 +783,7 @@ mod tests {
             &checkout("/w/a", Some(ROOT), Some(URL_X)),
             request(4),
             &at(4),
+            None,
         )
         .unwrap();
 

@@ -12,7 +12,7 @@ use std::path::Path;
 
 use baley_core::checkout::Checkout;
 use baley_core::policy::EffectivePolicy;
-use baley_store::{Ledger, ProjectId, RequestId, Views};
+use baley_store::{Caller, Ledger, ProjectId, RequestId, Views};
 
 pub use admit::{ADMIT_COMMAND, AdmitError, admit};
 pub use gather::{Facts, gather, root_commit};
@@ -52,6 +52,8 @@ pub(crate) struct Site<'a> {
 /// Gathers the facts of `site` and admits it under `project`, for the callers
 /// that do both at once: the ledger commands, `purge` and `config set`. It
 /// prints nothing, and it runs before the policy step.
+///
+/// `caller` goes to checkout admission unchanged.
 pub(crate) fn gather_and_admit(
     store: &(impl Ledger + Views),
     project: &ProjectId,
@@ -59,6 +61,7 @@ pub(crate) fn gather_and_admit(
     process: &mut dyn Process,
     request_id: RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<(), EntryError> {
     let facts = gather(site.root, site.policy, process).map_err(EntryError::Gather)?;
     let checkout = Checkout {
@@ -66,5 +69,5 @@ pub(crate) fn gather_and_admit(
         root_commit: facts.root_commit,
         remote_url: facts.remote_url,
     };
-    admit(store, project, &checkout, request_id, at).map_err(EntryError::Admit)
+    admit(store, project, &checkout, request_id, at, caller).map_err(EntryError::Admit)
 }
