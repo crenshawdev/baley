@@ -19,3 +19,6 @@ pub mod tools;
 
 /// Bounded line framing: a frame over 4 MiB or 128 levels deep is discarded and answered, never ending the input.
 pub mod frame;
+
+/// The session queue: one running decision, four waiting, a 16 MiB cap, no caller identity.
+pub mod queue;
