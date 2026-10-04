@@ -1739,3 +1739,64 @@ fn a_branch_list_shown_without_quotes_or_in_file_order_is_caught() {
     });
     assert_eq!(lines[2], "  project: [\"release/1\", \"ma\\\"in\"]");
 }
+
+#[test]
+fn a_branch_list_set_taken_as_a_string_or_pointed_at_the_wrong_file_is_caught() {
+    for layer in [FileLayer::Project, FileLayer::Global] {
+        let refusal = judge_standard(layer, &[("git.protected_branches", "main")])
+            .expect_err("a list is never set from the command line");
+        assert_eq!(
+            refusal,
+            SetRefusal::ListNotSettable {
+                name: "git.protected_branches".into()
+            },
+            "{layer:?}"
+        );
+        assert_eq!(refusal.code(), "list-not-settable");
+        let text = refusal.to_string();
+        assert!(text.starts_with("list-not-settable: "), "{text}");
+        assert!(text.contains("git.protected_branches"), "{text}");
+        assert!(text.contains("does not write lists"), "{text}");
+        assert!(text.contains("baley.toml"), "{text}");
+        assert!(!text.contains("--project"), "{text}");
+    }
+}
+
+#[test]
+fn an_unknown_name_beside_a_branch_list_not_refused_as_unknown_first_is_caught() {
+    let refusal = judge_standard(
+        FileLayer::Project,
+        &[("git.protected_branches", "main"), ("git.nonsense", "1")],
+    )
+    .expect_err("refused");
+    assert_eq!(
+        refusal,
+        SetRefusal::UnknownSetting {
+            name: "git.nonsense".into()
+        }
+    );
+}
+
+#[test]
+fn a_branch_list_beside_a_wrong_layer_pair_not_refused_as_the_list_is_caught() {
+    // `git.remote` is project-scoped, so --global would be wrong-layer for it.
+    let refusal = judge_standard(
+        FileLayer::Global,
+        &[("git.remote", "origin"), ("git.protected_branches", "main")],
+    )
+    .expect_err("refused");
+    assert_eq!(refusal.code(), "list-not-settable");
+}
+
+#[test]
+fn a_branch_list_set_outside_a_project_not_refused_as_not_a_project_first_is_caught() {
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Project,
+        false,
+        None,
+        &[("git.protected_branches", "main")],
+    )
+    .expect_err("refused");
+    assert_eq!(refusal, SetRefusal::NotAProject);
+}
