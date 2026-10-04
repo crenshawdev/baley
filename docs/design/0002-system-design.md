@@ -86,7 +86,7 @@ graph LR
 | Actor | What it is | Its part |
 |---|---|---|
 | Owner | The person responsible for the work | Approves, rules and sets policy |
-| Baley | One Rust binary, run as one shared server per user | Decides, orchestrates, validates and keeps the record |
+| Baley | One Rust binary, started by each Claude Code session as its own MCP server over stdio | Decides, orchestrates, validates and keeps the record |
 | Host | Claude Code | Its main session relays and adjudicates, and the subagents it starts each do one piece of engineering judgment |
 | Outside reviewers | Model providers such as OpenAI, Gemini and DeepSeek | Review plans and diffs when the owner's policy asks for them; called by the host session, never by Baley. Baley itself only asks a provider which models a key in `keys.env` can use ([0003](0003-configuration-and-routing.md), CFG-R20) |
 | Repository | The project's git checkout | Holds the source; Baley reads git facts and runs tests and git there |
@@ -138,7 +138,7 @@ Every area document applies these.
 | SYS-P5 | **Owner authority.** Approving a plan, ruling on a finding, a waiver, a suite repair and each external landing step need the owner. An approval binds to the exact content by digest, with the owner and the time. Baley never acts on a finding, reruns or re-plans by itself. |
 | SYS-P6 | **One source of truth.** Every fact is an event in the ledger (0001): attributed, hash-chained, anchored on the forge. Views are projections that can be rebuilt. No Markdown or other file is a record. |
 | SYS-P7 | **Claim, act, record.** Any effect outside the ledger (git, forge, a test run) is claimed first, then done, then recorded. An interrupted effect is reconciled, never blindly repeated. |
-| SYS-P8 | **Ports and adapters.** The domain core is plain synchronous code. Everything outside it is behind a port: storage, host, forge, and the process runner for git and tests. Baley has no port to outside models. Baley identifies its host and version on every connection, from the client information the host sends, and that host's adapter chooses the mechanisms: notification or waiting in steps, how a work order is delivered, where effort goes. A new host means a new adapter. |
+| SYS-P8 | **Ports and adapters.** The domain core is plain synchronous code. Everything outside it is behind a port: storage, host, forge, and the process runner for git and tests. Baley has no port to outside models. Baley identifies its host and version from the client information the host sends, and that host's adapter chooses the mechanisms: notification or waiting in steps, how a work order is delivered, where effort goes. A new host means a new adapter. |
 | SYS-P9 | **Instructions are part of the binary.** Every instruction a model sees is compiled into Baley and served in bounded parts by id. Files a host must load (skills, agent definitions) are stubs Baley renders ([ADR 0009](../adr/0009-served-instructions.md)). |
 | SYS-P10 | **A small, typed wire.** Few MCP tools, typed operations, operation names that are only ever added. Nothing is sent twice and nothing is echoed back. A refusal names a code and a place. |
 | SYS-P11 | **Enforcement by mechanism.** A rule that matters is enforced by Baley or its guard, never by prose asking the model to comply. The guard checks git commands and file writes at the host's edge; Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder ([ADR 0008](../adr/0008-host-sandbox-isolation.md), [ADR 0020](../adr/0020-sandbox-is-a-write-barrier.md), [ADR 0033](../adr/0033-host-security-bar.md)). |
@@ -309,12 +309,12 @@ The one contract between Baley and every worker, including the outside reviews t
 
 | Id | Requirement | Why |
 |---|---|---|
-| SYS-R1 | One Baley server runs per user and serves every session and worker. | One process for the one per-user ledger; every session and worker reaches the same server. |
-| SYS-R2 | The server accepts MCP over stdio and over HTTP, and answers both protocol revisions 2025-11-25 and 2026-07-28 on each. | Each host gets the newest protocol it can speak, over either transport. |
-| SYS-R3 | At install Baley detects the operating system and asks whether to run in the background. If yes, Baley writes, starts and on uninstall removes its own systemd user unit (Linux) or launchd agent (macOS), `baley doctor` checks it, and hosts connect over HTTP. If no, the host starts a small stdio launcher that starts the shared server or joins it. The owner can change the choice later. | No service is required; HTTP is available to anyone who wants it; Baley always knows how it was started. |
-| SYS-R4 | Both start routes lead to the same single server; a launcher joins a running server and never starts a second one. The server exits after a quiet period when it was started on demand and no session is connected. | One server per user in every case. |
-| SYS-R5 | Connections are handled asynchronously at the edge; the decision core runs as synchronous code on a worker pool. A failure in one request never takes the server down, each session gets a bounded queue so none starves the others, memory stays bounded however large the ledger grows, and an upgrade replaces the server while sessions reconnect. | A shared server must be safe for every session at once. |
-| SYS-R6 | Writes use optimistic concurrency: events are appended, never overwritten; one short write transaction at a time; each command's decision is made inside its write from inputs read there, and a command whose inputs changed is refused as stale, never merged. No record is locked while an agent works. | Several sessions, the guard hook and the command line write at once; contention within a project is low because only one dispatch per phase is active. Builds on 0001 EVD-R6, EVD-R7, EVD-R8 and EVD-R26. |
+| SYS-R1 | Each Claude Code session starts its own Baley server over stdio. The session's subagents reach it through the session's connection, and every worker in this release is a subagent of its session. | The host already starts one stdio server per session and routes its subagents through it, so the process is the session and every call is tied to its project and session ([ADR 0034](../adr/0034-one-server-per-session.md)). |
+| SYS-R2 | The server accepts MCP over stdio only, and answers the protocol revisions 2025-11-25 and 2026-07-28, the two it has been tested on. | The session gets the newest revision it can speak, and no revision Baley has not been tested on is offered. |
+| SYS-R3 | Withdrawn. There is no install-time choice of start route and no service or launcher: Claude Code starts the server for each session ([ADR 0034](../adr/0034-one-server-per-session.md)). | |
+| SYS-R4 | Withdrawn. There is no single shared server to join and no idle exit; a server's lifetime is its session's (SYS-R1, SYS-R5). | |
+| SYS-R5 | A session's calls are handled asynchronously at the edge and decided one at a time on the server's own worker, as synchronous code. A failure in one call never takes the server down. One bounded queue serves the session and every subagent: one call running and four waiting, with at most 16 MiB of raw frames among them, and a call beyond either bound gets a retryable overload answer. Memory stays bounded however large the ledger grows. At end of input the server stops taking calls, lets accepted work run for at most ten seconds and makes one `PASSIVE` checkpoint attempt. | Subagents share their session's connection, so one queue keeps them from starving each other, and the bounds are what a session may cost. |
+| SYS-R6 | Writes use optimistic concurrency across processes: each session's server, the guard hook and the command line open the per-user store. Every write takes the writer queue, `BEGIN IMMEDIATE` and the epoch check, and each command's decision is made inside its transaction from inputs read there. Events are appended, never overwritten, and a command whose inputs changed is refused as stale, never merged. No record is locked while an agent works. | Several sessions' servers, the guard hook and the command line write the one per-user ledger from separate processes; contention within a project is low because only one dispatch per phase is active. Builds on 0001 EVD-R6, EVD-R7, EVD-R8 and EVD-R26. |
 | SYS-R7 | Long work (test runs, git and forge steps) is claimed and started, then recorded when it ends. Where the host supports being notified when a call finishes, Baley keeps the call open; everywhere else the session waits in steps, each call returning on completion or after a timeout with "still running". The host adapter chooses. | Hosts limit how long a tool call may run. |
 | SYS-R8 | Baley runs the test suite and each check's command itself. It judges results by exit code, with an optional standard report (such as JUnit XML) for which tests failed. | Evidence is first-hand, and every language works. |
 | SYS-R9 | Outside models are called by the host session, never by Baley. Baley decides whether an outside review runs and with which providers, and builds the complete prompt and material as a work order; the host session makes the call and returns typed findings. | Responsibility stays with the party that acts. |
@@ -329,7 +329,7 @@ The one contract between Baley and every worker, including the outside reviews t
 - **Trust.** Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
 - **Failure and recovery.** Claim, act, record (SYS-P7). A killed process is never taken as success. The log is good enough to diagnose a live failure.
 - **Resources.** Memory use and read cost are defects a user sees: no loading the whole store, bounded reads, streaming.
-- **Concurrency.** One user, one machine, one shared server; several sessions write through its single writer with optimistic concurrency (SYS-R6). No parallel or worktree execution.
+- **Concurrency.** One user, one machine, one server process per session; several processes write the one per-user ledger through the store, with no single writer, and optimistic concurrency keeps them from overwriting each other (SYS-R6). No parallel or worktree execution.
 - **Observability.** Every decision records its inputs, including the setting that decided a route.
 - **Testing.** Baley's own tests and the tests Baley derives for the projects it manages follow the same rules: a test checks one behavior of one unit with plain values, depends only on the language toolchain and its test libraries, starts no program, and gives the same result on any machine. There are no end-to-end tests; live behavior is checked by an acceptance run on Claude Code before release.
 
@@ -337,13 +337,13 @@ The one contract between Baley and every worker, including the outside reviews t
 
 Decision records this design produces.
 
-- One shared Baley server per user, over stdio and HTTP (SYS-R1 to SYS-R4): [ADR 0011](../adr/0011-one-shared-server.md)
-- Optimistic concurrency in the shared server (SYS-R6): [ADR 0012](../adr/0012-optimistic-concurrency.md)
+- One Baley server per Claude Code session over stdio, sharing the per-user ledger through the store (SYS-R1, SYS-R2, SYS-R5, SYS-R6): [ADR 0034](../adr/0034-one-server-per-session.md), superseding ADR 0011
+- Optimistic concurrency across the processes that write the ledger (SYS-R6): [ADR 0012](../adr/0012-optimistic-concurrency.md)
 - Outside models are called by the host session, not Baley (SYS-R9 to SYS-R12): [ADR 0013](../adr/0013-host-session-calls-outside-models.md), superseded in part by ADR 0027
 - Baley runs tests itself and judges by exit code (SYS-R8): [ADR 0014](../adr/0014-baley-runs-tests.md)
 - Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md), superseded in part by ADR 0027
 - Baley's own crenshawdev folders and provider keys in a plain `keys.env` (SYS-R11, SYS-R12, SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md), superseded in part by ADR 0032 and ADR 0033
-- One HTTP stack on tokio and hyper, with axum hosting the MCP server over HTTP (SYS-R2): [ADR 0028](../adr/0028-one-http-stack.md)
+- One HTTP client, `reqwest`, for Baley's outgoing calls: [ADR 0028](../adr/0028-one-http-stack.md), its MCP server part superseded by ADR 0034
 - A host may offer more than Claude Code as a declared addition (SYS-P12): [ADR 0029](../adr/0029-a-host-may-offer-more.md), superseded in part by ADR 0033
 - One term per concept across every document, kept in the glossary [CONTEXT.md](../../CONTEXT.md), with phase for the working increment and story for the owner's declared work: [ADR 0031](../adr/0031-one-term-per-concept.md), superseding ADR 0017 in part
 - Support only hosts whose sandboxing and execution controls meet Baley's requirements (SYS-P12): [ADR 0033](../adr/0033-host-security-bar.md), superseding ADR 0008, 0018, 0020, 0027 and 0029 in part
@@ -352,5 +352,4 @@ Decision records this design produces.
 
 | Question | Where it is decided |
 |---|---|
-| How the launcher passes the host's identity | [0012: Host interface](0012-host-interface.md) (HST-R3, HST-R4) |
 | Reading git facts inside the write transaction (issue #40) | Build 4 |
