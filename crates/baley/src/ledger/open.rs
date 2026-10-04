@@ -1,4 +1,5 @@
-//! The schema understood by this CLI.
+//! The schema understood by this CLI. Only the per-session server's open
+//! runs the startup `quick_check`; every command-line open leaves it off.
 use std::num::NonZeroU32;
 
 use baley_core::catalog::{ModelCatalogProjector, register_model_events};
@@ -11,6 +12,8 @@ use baley_store_sqlite::Options;
 /// `models.*` types, `policy.effective` and `checkout.seen` understood by the
 /// CLI, and declares view set version 5,
 /// `checkout claim_scope model_catalog policy request`.
+/// The startup `quick_check` is off, so every command-line caller opens as
+/// before.
 pub(crate) fn options() -> Options {
     let mut registry = Registry::new();
     register_anchor_events(&mut registry).expect("unique anchor types");
@@ -27,6 +30,23 @@ pub(crate) fn options() -> Options {
         ],
         view_set_version: NonZeroU32::new(5).expect("nonzero"),
         ..Options::default()
+    }
+}
+
+/// The registry of `options()` with the startup `quick_check` on, for the
+/// per-session server's open. It is built from `options()` so the two never
+/// disagree on events, views or the view set version.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the per-session server opens the ledger with it once it is wired in"
+    )
+)]
+pub(crate) fn server_options() -> Options {
+    Options {
+        startup_check: true,
+        ..options()
     }
 }
 
@@ -79,6 +99,34 @@ mod tests {
             view_set_version: NonZeroU32::new(4).unwrap(),
             ..Options::default()
         }
+    }
+
+    // Catches a server open that declares other views or another view set
+    // version than the command line, which would fence one or the other.
+    #[test]
+    fn the_server_variant_declares_a_different_view_set_from_options() {
+        let names = |options: &Options| -> Vec<String> {
+            options
+                .projectors
+                .iter()
+                .map(|projector| projector.spec().name.clone())
+                .collect()
+        };
+        let (cli, server) = (options(), server_options());
+        assert_eq!(server.view_set_version, cli.view_set_version);
+        assert_eq!(names(&server), names(&cli));
+    }
+
+    // Catches the command line running the startup check.
+    #[test]
+    fn options_selects_the_startup_check() {
+        assert!(!options().startup_check);
+    }
+
+    // Catches a server open that does not run the startup check.
+    #[test]
+    fn the_server_variant_does_not_select_the_startup_check() {
+        assert!(server_options().startup_check);
     }
 
     #[test]
