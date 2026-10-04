@@ -1,6 +1,10 @@
 #[path = "config/binary.rs"]
 pub mod config;
 mod guard;
+/// The inherited engine, unreached by production since the per-session server and
+/// kept so its tests run. Build 9 removes it.
+#[allow(dead_code)]
+mod inherited;
 #[cfg(test)]
 mod instruction_lint;
 mod instruction_surfaces;
