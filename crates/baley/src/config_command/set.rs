@@ -164,7 +164,7 @@ fn attempt(
                     &at,
                     None,
                 )
-                .map_err(|error| init::admission_render(error, &project.id))?;
+                .map_err(|error| crate::ledger::display::entry_error(&error, &project.id))?;
                 record_policy(store, project, &recorded, new_request_id(), &at)
             };
             step().map_err(|mut render| {

@@ -10,7 +10,7 @@ use super::{
     ticker::ThreadTicker,
     trace::StoreTrace,
 };
-use crate::checkout::{AdmitError, EntryError, Site, gather_and_admit};
+use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::{init, policy_step, settings};
 use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
@@ -393,16 +393,6 @@ fn checkout_policy(
     Ok((root, policy, recorded))
 }
 
-/// Renders why checkout admission stopped: a gather or fork refusal as a
-/// refusal, a store error through `display::store_error`.
-fn admission_render(error: EntryError, project: &ProjectId) -> Render {
-    match error {
-        EntryError::Gather(text) => Render::refusal(text),
-        EntryError::Admit(AdmitError::Fork(conflict)) => Render::refusal(conflict.to_string()),
-        EntryError::Admit(AdmitError::Store(e)) => display::store_error(&e, Some(&project.0)),
-    }
-}
-
 /// Gathers the checkout's facts and admits it, before the policy step. It
 /// prints nothing.
 fn admit_checkout(store: &SqliteStore, project: &ProjectId, site: &Site<'_>) -> Result<(), Render> {
@@ -415,7 +405,7 @@ fn admit_checkout(store: &SqliteStore, project: &ProjectId, site: &Site<'_>) -> 
         &SystemClock::now(),
         None,
     )
-    .map_err(|e| admission_render(e, project))
+    .map_err(|e| display::entry_error(&e, &project.0))
 }
 
 /// Runs the policy step for the checkout and returns the version in force.

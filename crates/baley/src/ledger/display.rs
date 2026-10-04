@@ -2,6 +2,7 @@
 use super::anchor_plan::LocalReason;
 use super::answer::{AnswerUnread, answer_value};
 use super::command_plan::DoctorSettings;
+use crate::checkout::{EntryError, EntryRefusal};
 use baley_core::{AcknowledgeRestoreError, AnchorOutcome, AnchorReport, Verification};
 use baley_store::*;
 use serde_json::Value;
@@ -85,6 +86,16 @@ pub(super) fn exit_class(error: &StoreError) -> u8 {
         | StoreError::Refused(Refusal::ExportUnverified { .. }) => 1,
         StoreError::Refused(_) | StoreError::Blocked(_) => 2,
         _ => 3,
+    }
+}
+/// Renders why checkout admission stopped for the command line: git's text
+/// and a fork's own text as refusals, a store error through [`store_error`]
+/// with the project id. The server reads the same [`EntryError::refusal`].
+pub(crate) fn entry_error(error: &EntryError, project: &str) -> Render {
+    match error.refusal() {
+        EntryRefusal::Git(text) => Render::refusal(text),
+        EntryRefusal::Fork(conflict) => Render::refusal(conflict.to_string()),
+        EntryRefusal::Store(error) => store_error(error, Some(project)),
     }
 }
 /// Renders a store failure with the owner's recovery text.
