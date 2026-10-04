@@ -10,6 +10,6 @@ mod settings;
 #[cfg(test)]
 mod tests;
 
-pub use answer::{Answer, BranchObservation, commit_push_answer};
+pub use answer::{Answer, BranchObservation, commit_push_answer, powershell_answer};
 pub use scan::{GitVerb, git_verb};
 pub use settings::{GuardSettings, SettingsInput};

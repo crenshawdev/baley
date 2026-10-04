@@ -129,3 +129,16 @@ fn torn_commit(
     }
     Answer::Ask(reason::torn_ask(torn, branch.name()))
 }
+
+/// Judges a PowerShell call. Baley reads POSIX shell grammar only, so in a
+/// project every PowerShell call asks, whether or not it mentions git, and
+/// outside a project it passes (design 0010, GRD-R3).
+///
+/// It takes no command text, so nothing in the command can change the answer.
+pub fn powershell_answer(project_bound: bool) -> Answer {
+    if project_bound {
+        Answer::Ask(reason::powershell_ask())
+    } else {
+        Answer::Pass
+    }
+}

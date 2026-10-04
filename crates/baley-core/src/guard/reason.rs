@@ -73,3 +73,10 @@ pub fn failure_pass(unreadable: &str) -> String {
         "Baley guard: {unreadable}, so this commit proceeds without Baley's protected-branch check. This is not policy approval."
     )
 }
+
+/// Why every PowerShell call in a project asks. The commit and push check
+/// reads POSIX shell grammar only, so it says nothing about this command.
+pub fn powershell_ask() -> String {
+    "Baley guard: this is a PowerShell call, and Baley's commit and push check reads POSIX shell grammar only, so it cannot judge this command. Approve only if it runs no git commit or push you did not intend."
+        .to_owned()
+}

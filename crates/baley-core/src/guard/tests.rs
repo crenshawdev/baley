@@ -494,3 +494,25 @@ fn a_call_outside_a_project_not_passing_is_caught() {
         }
     }
 }
+
+// PowerShell.
+
+#[test]
+fn a_powershell_call_in_a_project_passing_without_its_ask_is_caught() {
+    let Answer::Ask(text) = powershell_answer(true) else {
+        panic!("a PowerShell call in a project must ask");
+    };
+    assert!(text.contains("PowerShell"), "{text}");
+    assert!(text.contains("POSIX shell grammar"), "{text}");
+}
+
+#[test]
+fn a_powershell_call_outside_a_project_asking_is_caught() {
+    assert_eq!(powershell_answer(false), Answer::Pass);
+}
+
+#[test]
+fn task_branch_guidance_on_the_powershell_ask_is_caught() {
+    assert!(!reason::powershell_ask().contains("Create a task branch first"));
+    assert!(reason::powershell_ask().starts_with("Baley guard"));
+}
