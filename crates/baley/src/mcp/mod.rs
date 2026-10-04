@@ -22,3 +22,6 @@ pub mod frame;
 
 /// The session queue: one running decision, four waiting, a 16 MiB cap, no caller identity.
 pub mod queue;
+
+/// Admits a call in the order faults are answered: the gate first, then the queue.
+pub mod admission;
