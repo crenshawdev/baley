@@ -3,7 +3,7 @@ use baley::process::Process;
 use baley::rail::branch::{self, Permission};
 use baley::store::model::digest;
 use baley::store::writer::audit::{self, Audit, Outcome, PolicyEvidence, Verb};
-use baley_core::guard::{GitVerb, git_verb};
+use baley_core::guard::{GitVerb, git_verb, reason};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -42,6 +42,15 @@ fn project(cwd: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The failures as one line of text for a reason.
+fn describe(failures: &[audit::Unavailable]) -> String {
+    failures
+        .iter()
+        .map(|failure| format!("{}: {}", failure.input, failure.reason))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn unavailable(input: impl Into<String>, reason: impl Into<String>) -> audit::Unavailable {
@@ -268,6 +277,7 @@ fn commit_decision(
     process: &mut dyn Process,
 ) -> bool {
     let torn = !failures.is_empty();
+    let torn_text = describe(&failures);
     let (branch, observation_failures) = branch_observation(&audit.cwd, process);
     let observed = observation_failures.is_empty();
     failures.extend(observation_failures);
@@ -299,22 +309,21 @@ fn commit_decision(
     } else {
         Outcome::Pass
     };
-    audit.reason = match audit.outcome {
-        Outcome::Deny if failure_denies => format!("Baley rail: git.guard_hard_fail=true denies a commit on provably protected branch {:?} while guard inputs are unavailable.", branch),
-        Outcome::Deny => format!("Baley rail: git.on_protected=refuse denies a commit on protected branch {:?}.", branch),
-        Outcome::Ask => format!("Baley rail: permission is required before this commit on branch {:?}.", branch),
-        Outcome::FailurePass => "Baley guard failure: command proceeds without a Baley permission veto; this is not policy approval.".into(),
-        Outcome::Pass => "Baley protected-branch policy supplies no permission veto.".into(),
+    let unread = format!("Baley could not read an input ({})", describe(&failures));
+    audit.reason = match (&audit.outcome, branch.as_deref()) {
+        (Outcome::Deny, Some(name)) if failure_denies => {
+            if policy.hard_fail && policy.protected.iter().any(|p| p == name) {
+                reason::hard_fail_deny(name, &unread)
+            } else {
+                reason::remembered_hard_fail_deny(&torn_text, &unread, name)
+            }
+        }
+        (Outcome::Deny, Some(name)) => reason::refuse_deny(name),
+        (Outcome::Ask, _) if torn => reason::torn_ask(&torn_text, branch.as_deref()),
+        (Outcome::Ask, Some(name)) => reason::protected_ask(name),
+        (Outcome::FailurePass, _) => reason::failure_pass(&unread),
+        _ => "Baley protected-branch policy supplies no permission veto.".into(),
     };
-    if torn {
-        audit.reason.push_str(" The protected-branch list or controlling settings are unavailable: the branch rails are deciding with defaults rather than the user's settings. Fix the named layer or approve deliberately.");
-    }
-    for failure in &failures {
-        audit.reason.push_str(&format!(
-            " Unavailable {}: {}.",
-            failure.input, failure.reason
-        ));
-    }
     if !failures.is_empty() {
         eprintln!("{}", audit.reason);
     }
@@ -377,9 +386,15 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
         crate::session::SessionFactory::new(global.clone(), std::sync::Arc::new(|_, _| Ok(())));
     let mut audit = Audit {
         event_id: audit::event_identity(event.session_id.as_deref(), event.tool_use_id.as_deref()),
-        command_digest: digest(event.tool_input.command.as_bytes()), cwd: event.cwd,
-        project: project.clone(), verb, branch: None, policy: None, outcome: Outcome::Ask,
-        unavailable: vec![], reason: "Baley rail: every Bash git push requires permission. Approve only if you are deliberately publishing.".into(),
+        command_digest: digest(event.tool_input.command.as_bytes()),
+        cwd: event.cwd,
+        project: project.clone(),
+        verb,
+        branch: None,
+        policy: None,
+        outcome: Outcome::Ask,
+        unavailable: vec![],
+        reason: reason::push_ask(),
     };
     let runtime = match tokio::runtime::Builder::new_current_thread().build() {
         Ok(runtime) => runtime,

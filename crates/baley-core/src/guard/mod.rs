@@ -2,6 +2,7 @@
 //! reads a file, the environment, git, the store or a clock: the hook
 //! supplies every observation it judges.
 
+pub mod reason;
 mod scan;
 
 #[cfg(test)]
