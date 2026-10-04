@@ -80,3 +80,9 @@ pub fn powershell_ask() -> String {
     "Baley guard: this is a PowerShell call, and Baley's commit and push check reads POSIX shell grammar only, so it cannot judge this command. Approve only if it runs no git commit or push you did not intend."
         .to_owned()
 }
+
+/// An ask that became a deny because the decision could not be recorded. The
+/// original reason follows, so any guidance in it stays.
+pub fn could_not_record(original: &str) -> String {
+    format!("Baley guard: Baley could not record its decision, so this call is denied. {original}")
+}

@@ -4,6 +4,7 @@
 
 mod answer;
 pub mod reason;
+mod recording;
 mod scan;
 mod settings;
 
@@ -11,5 +12,6 @@ mod settings;
 mod tests;
 
 pub use answer::{Answer, BranchObservation, commit_push_answer, powershell_answer};
+pub use recording::{AuditPrecondition, record_answer};
 pub use scan::{GitVerb, git_verb};
 pub use settings::{GuardSettings, SettingsInput};

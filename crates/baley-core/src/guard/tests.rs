@@ -516,3 +516,46 @@ fn task_branch_guidance_on_the_powershell_ask_is_caught() {
     assert!(!reason::powershell_ask().contains("Create a task branch first"));
     assert!(reason::powershell_ask().starts_with("Baley guard"));
 }
+
+// The audit precondition.
+
+#[test]
+fn a_recorded_ask_turned_into_a_deny_is_caught() {
+    let torn = Answer::Ask(reason::torn_ask("baley.toml is torn", Some("main")));
+    for ask in [Answer::Ask(reason::protected_ask("main")), torn] {
+        assert_eq!(record_answer(ask.clone(), AuditPrecondition::Recorded), ask);
+    }
+}
+
+#[test]
+fn an_unrecordable_ask_passing_instead_of_denying_is_caught() {
+    let original = reason::protected_ask("main");
+    let Answer::Deny(text) = record_answer(
+        Answer::Ask(original.clone()),
+        AuditPrecondition::Unrecordable,
+    ) else {
+        panic!("an unrecordable ask must become a deny");
+    };
+    assert!(text.contains("could not record"), "{text}");
+    assert!(text.contains(&original), "{text}");
+    assert!(text.contains("Create a task branch first"), "{text}");
+}
+
+#[test]
+fn an_unrecordable_pass_on_failure_turned_into_a_deny_is_caught() {
+    let failed = Answer::PassOnFailure(reason::failure_pass("git could not read the branch"));
+    assert_eq!(
+        record_answer(failed.clone(), AuditPrecondition::Unrecordable),
+        failed
+    );
+}
+
+#[test]
+fn an_unrecordable_deny_or_pass_being_changed_is_caught() {
+    for answer in [Answer::Deny(reason::refuse_deny("main")), Answer::Pass] {
+        assert_eq!(
+            record_answer(answer.clone(), AuditPrecondition::Unrecordable),
+            answer
+        );
+    }
+}
