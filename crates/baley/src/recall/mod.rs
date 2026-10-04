@@ -217,10 +217,10 @@ pub(crate) mod resident {
     };
     use tokio::sync::{mpsc, oneshot};
 
-    use crate::server::derivation_service::{self, Driver};
+    use crate::inherited::derivation_service::{self, Driver};
     use baley::derivation::{DerivationError, Lifecycle};
 
-    use crate::server::{
+    use crate::inherited::{
         evidence_service::{self, Command, Recovery},
         execution_service,
     };
@@ -229,32 +229,32 @@ pub(crate) mod resident {
         Shutdown,
         Debug {
             root: PathBuf,
-            command: crate::server::debug_service::Command,
+            command: crate::inherited::debug_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Spike {
             root: PathBuf,
-            command: crate::server::spike_service::Command,
+            command: crate::inherited::spike_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Task {
             root: PathBuf,
-            command: crate::server::task_service::Command,
+            command: crate::inherited::task_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Undo {
             root: PathBuf,
-            command: crate::server::undo_service::Command,
+            command: crate::inherited::undo_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Milestone {
             root: PathBuf,
-            command: crate::server::milestone_service::Command,
+            command: crate::inherited::milestone_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Landing {
             root: PathBuf,
-            command: crate::server::landing_service::Command,
+            command: crate::inherited::landing_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Suggest {
@@ -264,7 +264,7 @@ pub(crate) mod resident {
         },
         Why {
             root: PathBuf,
-            request: crate::server::why_service::Request,
+            request: crate::inherited::why_service::Request,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Progress {
@@ -273,47 +273,47 @@ pub(crate) mod resident {
         },
         Capture {
             root: PathBuf,
-            apply: crate::server::capture_service::Apply,
+            apply: crate::inherited::capture_service::Apply,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Verification {
             root: PathBuf,
-            command: crate::server::verification_service::Command,
+            command: crate::inherited::verification_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Plan {
             root: PathBuf,
-            command: crate::server::plan_service::Command,
+            command: crate::inherited::plan_service::Command,
             reply: oneshot::Sender<Result<baley::plan::model::Answer>>,
         },
         Context {
             root: PathBuf,
-            command: crate::server::context_service::Command,
+            command: crate::inherited::context_service::Command,
             reply: oneshot::Sender<Result<baley::context::model::Answer>>,
         },
         Review {
             root: PathBuf,
-            command: Box<crate::server::review_service::Command>,
-            reply: oneshot::Sender<crate::server::review_service::Answer>,
+            command: Box<crate::inherited::review_service::Command>,
+            reply: oneshot::Sender<crate::inherited::review_service::Answer>,
         },
         Config {
             root: PathBuf,
-            command: crate::server::config_service::Command,
-            reply: oneshot::Sender<crate::server::config_service::Answer>,
+            command: crate::inherited::config_service::Command,
+            reply: oneshot::Sender<crate::inherited::config_service::Answer>,
         },
         RailReceipt {
             root: PathBuf,
-            command: Box<crate::server::rail_service::ReceiptCommand>,
-            reply: oneshot::Sender<crate::server::rail_service::ReceiptAnswer>,
+            command: Box<crate::inherited::rail_service::ReceiptCommand>,
+            reply: oneshot::Sender<crate::inherited::rail_service::ReceiptAnswer>,
         },
         RailApply {
             root: PathBuf,
             request: Box<baley::rail::risk::Apply>,
-            reply: oneshot::Sender<crate::server::rail_service::Answer>,
+            reply: oneshot::Sender<crate::inherited::rail_service::Answer>,
         },
         Pause {
             input: baley::pause::Input,
-            reply: oneshot::Sender<Result<crate::server::pause_service::Response>>,
+            reply: oneshot::Sender<Result<crate::inherited::pause_service::Response>>,
         },
         NextAction {
             root: PathBuf,
@@ -545,7 +545,7 @@ pub(crate) mod resident {
                 let mut caches = BTreeMap::<PathBuf, Option<Cached>>::new();
                 let mut read_domains = BTreeMap::<PathBuf, baley::read::ReadDomain>::new();
                 // Treeless task episodes live here for the run and nowhere else (D-209).
-                let mut task_episodes = crate::server::task_service::Episodes::default();
+                let mut task_episodes = crate::inherited::task_service::Episodes::default();
                 while let Some(request) = receiver.recv().await {
                     match request {
                         Request::Shutdown => receiver.close(),
@@ -555,7 +555,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let _ = reply.send(
-                                crate::server::milestone_service::execute(
+                                crate::inherited::milestone_service::execute(
                                     &factory,
                                     &root,
                                     command,
@@ -570,7 +570,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let _ = reply.send(
-                                crate::server::landing_service::execute(
+                                crate::inherited::landing_service::execute(
                                     &factory,
                                     &root,
                                     command,
@@ -585,7 +585,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let _ = reply.send(
-                                crate::server::undo_service::execute(
+                                crate::inherited::undo_service::execute(
                                     &factory,
                                     &root,
                                     command,
@@ -600,7 +600,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let _ = reply.send(
-                                crate::server::debug_service::execute(
+                                crate::inherited::debug_service::execute(
                                     &factory,
                                     &root,
                                     command,
@@ -615,7 +615,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let _ = reply.send(
-                                crate::server::spike_service::execute(&factory, &root, command)
+                                crate::inherited::spike_service::execute(&factory, &root, command)
                                     .await,
                             );
                         }
@@ -625,7 +625,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let _ = reply.send(
-                                crate::server::task_service::execute(
+                                crate::inherited::task_service::execute(
                                     &factory,
                                     &root,
                                     command,
@@ -636,7 +636,8 @@ pub(crate) mod resident {
                         }
                         Request::Suggest { root, phase, reply } => {
                             let result =
-                                crate::server::suggest_service::query(&factory, &root, phase).await;
+                                crate::inherited::suggest_service::query(&factory, &root, phase)
+                                    .await;
                             let _ = reply.send(result);
                         }
                         Request::Why {
@@ -657,7 +658,7 @@ pub(crate) mod resident {
                                     match factory.first_touch(&root).await {
                                         Ok(session) => {
                                             session.derivation_view().await.map(|view| {
-                                                crate::server::why_service::refusals(
+                                                crate::inherited::why_service::refusals(
                                                     &view,
                                                     request.phase.unwrap(),
                                                 )
@@ -672,7 +673,7 @@ pub(crate) mod resident {
                             // git and the record are read on a blocking thread
                             // so a long chain never holds the resident's loop.
                             let result = tokio::task::spawn_blocking(move || {
-                                crate::server::why_service::query(
+                                crate::inherited::why_service::query(
                                     &root,
                                     &request,
                                     &mut baley::process::System,
@@ -684,18 +685,18 @@ pub(crate) mod resident {
                         }
                         Request::Progress { root, reply } => {
                             let result =
-                                crate::server::progress_service::query(&factory, &root, &driver)
+                                crate::inherited::progress_service::query(&factory, &root, &driver)
                                     .await;
                             let _ = reply.send(result);
                         }
                         Request::Capture { root, apply, reply } => {
                             let result =
-                                crate::server::capture_service::execute(&factory, &root, apply)
+                                crate::inherited::capture_service::execute(&factory, &root, apply)
                                     .await;
                             let _ = reply.send(result);
                         }
                         Request::Read { root, query, reply } => {
-                            let result = crate::server::read_service::execute(
+                            let result = crate::inherited::read_service::execute(
                                 &mut read_domains,
                                 &root,
                                 query,
@@ -708,7 +709,7 @@ pub(crate) mod resident {
                             command,
                             reply,
                         } => {
-                            let result = crate::server::verification_service::execute(
+                            let result = crate::inherited::verification_service::execute(
                                 &factory,
                                 &root,
                                 command,
@@ -723,7 +724,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let result =
-                                crate::server::plan_service::execute(&factory, &root, command)
+                                crate::inherited::plan_service::execute(&factory, &root, command)
                                     .await;
                             let _ = reply.send(result);
                         }
@@ -732,9 +733,10 @@ pub(crate) mod resident {
                             command,
                             reply,
                         } => {
-                            let result =
-                                crate::server::context_service::execute(&factory, &root, command)
-                                    .await;
+                            let result = crate::inherited::context_service::execute(
+                                &factory, &root, command,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
                         Request::Review {
@@ -742,8 +744,8 @@ pub(crate) mod resident {
                             mut command,
                             reply,
                         } => {
-                            if let crate::server::review_service::Command::Apply(
-                                crate::server::review_service::Apply::MaterialAppend {
+                            if let crate::inherited::review_service::Command::Apply(
+                                crate::inherited::review_service::Apply::MaterialAppend {
                                     path,
                                     bytes,
                                     ..
@@ -763,15 +765,16 @@ pub(crate) mod resident {
                                     }
                                     Err(reason) => {
                                         let _ = reply.send(Ok(
-                                            crate::server::review_service::refused(reason),
+                                            crate::inherited::review_service::refused(reason),
                                         ));
                                         continue;
                                     }
                                 }
                             }
-                            let result =
-                                crate::server::review_service::execute(&factory, &root, *command)
-                                    .await;
+                            let result = crate::inherited::review_service::execute(
+                                &factory, &root, *command,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
                         Request::Config {
@@ -780,7 +783,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let result =
-                                crate::server::config_service::execute(&factory, &root, command)
+                                crate::inherited::config_service::execute(&factory, &root, command)
                                     .await;
                             let _ = reply.send(result);
                         }
@@ -789,7 +792,7 @@ pub(crate) mod resident {
                             command,
                             reply,
                         } => {
-                            let result = crate::server::rail_service::receipt(
+                            let result = crate::inherited::rail_service::receipt(
                                 &factory,
                                 &root,
                                 *command,
@@ -804,11 +807,12 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let result =
-                                crate::server::rail_service::apply(&factory, &root, *request).await;
+                                crate::inherited::rail_service::apply(&factory, &root, *request)
+                                    .await;
                             let _ = reply.send(result);
                         }
                         Request::Pause { input, reply } => {
-                            let result = crate::server::pause_service::execute(
+                            let result = crate::inherited::pause_service::execute(
                                 &factory,
                                 input,
                                 &driver,
@@ -818,9 +822,10 @@ pub(crate) mod resident {
                             let _ = reply.send(result);
                         }
                         Request::NextAction { root, reply } => {
-                            let result =
-                                crate::server::next_action_service::query(&factory, &root, &driver)
-                                    .await;
+                            let result = crate::inherited::next_action_service::query(
+                                &factory, &root, &driver,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
                         Request::Evidence {
@@ -895,13 +900,13 @@ pub(crate) mod resident {
                         } => {
                             let _ = reply.send(match run {
                                 Some(run) => {
-                                    crate::server::execution_runner_service::read_run(
+                                    crate::inherited::execution_runner_service::read_run(
                                         &factory, &root, phase, &run,
                                     )
                                     .await
                                 }
                                 None => {
-                                    crate::server::execution_runner_service::read(
+                                    crate::inherited::execution_runner_service::read(
                                         &factory,
                                         &root,
                                         phase,
@@ -982,7 +987,7 @@ pub(crate) mod resident {
         pub async fn plan(
             &self,
             root: &Path,
-            command: crate::server::plan_service::Command,
+            command: crate::inherited::plan_service::Command,
         ) -> Result<baley::plan::model::Answer> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1005,7 +1010,7 @@ pub(crate) mod resident {
             self.requests
                 .send(Request::Verification {
                     root: root.into(),
-                    command: crate::server::verification_service::Command::Query(query),
+                    command: crate::inherited::verification_service::Command::Query(query),
                     reply,
                 })
                 .await
@@ -1022,7 +1027,7 @@ pub(crate) mod resident {
             self.requests
                 .send(Request::Verification {
                     root: root.into(),
-                    command: crate::server::verification_service::Command::Apply(input),
+                    command: crate::inherited::verification_service::Command::Apply(input),
                     reply,
                 })
                 .await
@@ -1033,7 +1038,7 @@ pub(crate) mod resident {
         pub async fn context(
             &self,
             root: &Path,
-            command: crate::server::context_service::Command,
+            command: crate::inherited::context_service::Command,
         ) -> Result<baley::context::model::Answer> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1050,8 +1055,8 @@ pub(crate) mod resident {
         pub async fn review(
             &self,
             root: &Path,
-            command: crate::server::review_service::Command,
-        ) -> crate::server::review_service::Answer {
+            command: crate::inherited::review_service::Command,
+        ) -> crate::inherited::review_service::Answer {
             let (reply, receive) = oneshot::channel();
             self.requests
                 .send(Request::Review {
@@ -1068,10 +1073,10 @@ pub(crate) mod resident {
             &self,
             root: &Path,
             mode: crate::config::interview::Mode,
-        ) -> crate::server::config_service::Answer {
+        ) -> crate::inherited::config_service::Answer {
             self.config(
                 root,
-                crate::server::config_service::Command::Interview(mode),
+                crate::inherited::config_service::Command::Interview(mode),
             )
             .await
         }
@@ -1079,8 +1084,8 @@ pub(crate) mod resident {
         pub async fn config(
             &self,
             root: &Path,
-            command: crate::server::config_service::Command,
-        ) -> crate::server::config_service::Answer {
+            command: crate::inherited::config_service::Command,
+        ) -> crate::inherited::config_service::Answer {
             let (reply, completion) = oneshot::channel();
             self.requests
                 .send(Request::Config {
@@ -1096,8 +1101,8 @@ pub(crate) mod resident {
         pub async fn rail_receipt(
             &self,
             root: &Path,
-            command: crate::server::rail_service::ReceiptCommand,
-        ) -> crate::server::rail_service::ReceiptAnswer {
+            command: crate::inherited::rail_service::ReceiptCommand,
+        ) -> crate::inherited::rail_service::ReceiptAnswer {
             let (reply, completion) = oneshot::channel();
             self.requests
                 .send(Request::RailReceipt {
@@ -1114,7 +1119,7 @@ pub(crate) mod resident {
             &self,
             root: &Path,
             request: baley::rail::risk::Apply,
-        ) -> crate::server::rail_service::Answer {
+        ) -> crate::inherited::rail_service::Answer {
             let (reply, completion) = oneshot::channel();
             self.requests
                 .send(Request::RailApply {
@@ -1143,7 +1148,7 @@ pub(crate) mod resident {
         pub async fn pause(
             &self,
             input: baley::pause::Input,
-        ) -> Result<crate::server::pause_service::Response> {
+        ) -> Result<crate::inherited::pause_service::Response> {
             let (reply, completion) = oneshot::channel();
             self.requests
                 .send(Request::Pause { input, reply })
@@ -1185,7 +1190,7 @@ pub(crate) mod resident {
         pub async fn milestone(
             &self,
             root: &Path,
-            command: crate::server::milestone_service::Command,
+            command: crate::inherited::milestone_service::Command,
         ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1202,7 +1207,7 @@ pub(crate) mod resident {
         pub async fn landing(
             &self,
             root: &Path,
-            command: crate::server::landing_service::Command,
+            command: crate::inherited::landing_service::Command,
         ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1219,7 +1224,7 @@ pub(crate) mod resident {
         pub async fn undo(
             &self,
             root: &Path,
-            command: crate::server::undo_service::Command,
+            command: crate::inherited::undo_service::Command,
         ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1236,7 +1241,7 @@ pub(crate) mod resident {
         pub async fn debug(
             &self,
             root: &Path,
-            command: crate::server::debug_service::Command,
+            command: crate::inherited::debug_service::Command,
         ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1253,7 +1258,7 @@ pub(crate) mod resident {
         pub async fn spike(
             &self,
             root: &Path,
-            command: crate::server::spike_service::Command,
+            command: crate::inherited::spike_service::Command,
         ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1269,7 +1274,7 @@ pub(crate) mod resident {
         pub async fn task(
             &self,
             root: &Path,
-            command: crate::server::task_service::Command,
+            command: crate::inherited::task_service::Command,
         ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests
@@ -1286,7 +1291,7 @@ pub(crate) mod resident {
         pub async fn why(
             &self,
             root: &Path,
-            request: crate::server::why_service::Request,
+            request: crate::inherited::why_service::Request,
         ) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
             self.requests
@@ -1303,7 +1308,7 @@ pub(crate) mod resident {
         pub async fn capture(
             &self,
             root: &Path,
-            apply: crate::server::capture_service::Apply,
+            apply: crate::inherited::capture_service::Apply,
         ) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
             self.requests
@@ -1399,11 +1404,11 @@ pub(crate) mod resident {
                 .await
                 .is_err()
             {
-                return crate::server::read_service::unavailable("resident closed");
+                return crate::inherited::read_service::unavailable("resident closed");
             }
             completion
                 .await
-                .unwrap_or_else(|_| crate::server::read_service::unavailable("resident closed"))
+                .unwrap_or_else(|_| crate::inherited::read_service::unavailable("resident closed"))
         }
 
         pub async fn refuse_execution_arguments(

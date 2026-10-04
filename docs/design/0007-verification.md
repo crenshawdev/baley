@@ -260,25 +260,25 @@ sequenceDiagram
 
 ## 11. Build status
 
-The binary crate holds the inherited engine; its verification path is close to this design.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `verify-next`, `verification-read` and `verification-audit` (`crates/baley/src/mcp/operations.rs:100-102`), and `verification-run`, `verification-submit`, `truth-waive`, `verification-human-result` and `verification-complete` (`crates/baley/src/mcp/operations.rs:129-133`), as unavailable, and the operation baseline names Build 5 for them. Production reaches the verifier contract, its front door and the audit front door through `baley verifier-instructions` and `baley audit-instructions` (`crates/baley/src/instruction_surfaces.rs:23-26, 33-38`). The parked engine's verification path is close to this design, and the rows below list the differences.
 
 | Requirement | Status | Where |
 |---|---|---|
-| VER-R1 | Built | `crates/baley/src/verification/inputs.rs:67-141, 193-370` |
-| VER-R2 | Built | `crates/baley/src/verification/model.rs:32-47`, `crates/baley/src/verification_service.rs:308-386` |
-| VER-R3 | Partly built | Identities and route answered, no prompt (`crates/baley/src/verification_service.rs:456-490`); output by digest (D-177) |
-| VER-R4 | Built | `crates/baley/src/verification/verdicts.rs:191-370` |
-| VER-R5 | Partly built | Independent run required (`crates/baley/src/verification/verdicts.rs:307-346`, `crates/baley/src/verification/runner.rs:284-426`); only cargo, nextest and "Ran N" summaries count (`runner.rs:86-119`), no exit-code rule |
-| VER-R6 | Built as instruction | `crates/baley/src/verification/instructions.rs` |
-| VER-R7 | Partly built | Status reduction (`crates/baley/src/verification/status.rs:72-98`); no overrule or observation record in the reduction |
-| VER-R8 | Built | `crates/baley/src/verification/status.rs:199-227` |
-| VER-R9 | Partly built | Human results as owner-approved passed/failed/skipped bound to a rendered `UAT.md` (`crates/baley/src/verification/human.rs:137-291, 419-439`); a passed result resolves the item but does not make the truth met |
+| VER-R1 | Not built | Only the parked engine starts a verification: it observes the plans, the dispatch and the working tree (`crates/baley/src/verification/inputs.rs:65-141, 193-436`). The session server answers `verify-next` as unavailable (`crates/baley/src/mcp/operations.rs:100`) until Build 5 |
+| VER-R2 | Not built | Only the parked engine records an attempt with its basis (`crates/baley/src/verification/model.rs:32-47`, `crates/baley/src/verification_service.rs:308-386`). The session server answers `verify-next` as unavailable (`crates/baley/src/mcp/operations.rs:100`) until Build 5 |
+| VER-R3 | Not built | Only the parked engine answers the verifier's identities and route and no prompt (`crates/baley/src/verification_service.rs:456-490`), and it answers each run's output by digest and size, to be read by id (`crates/baley/src/verification/dispatch.rs:204-217`). The session server answers `verify-next` and `verification-read` as unavailable (`crates/baley/src/mcp/operations.rs:100-101`) until Build 5 |
+| VER-R4 | Not built | Only the parked engine judges a verdict patch (`crates/baley/src/verification/verdicts.rs:163-374`). The session server answers `verification-submit` as unavailable (`crates/baley/src/mcp/operations.rs:130`) until Build 5 |
+| VER-R5 | Not built | Only the parked engine requires the independent run: the verdict check (`crates/baley/src/verification/verdicts.rs:307-346`) and the launch (`crates/baley/src/verification/runner.rs:284-426`). It counts only cargo, nextest and "Ran N" summaries, with no exit-code rule (`crates/baley/src/verification/runner.rs:84-119`). The session server answers `verification-run` and `verification-submit` as unavailable (`crates/baley/src/mcp/operations.rs:129-130`) until Build 5 |
+| VER-R6 | Built as instruction | The verifier contract rejects an item whose check could not have failed (`crates/baley/src/verification/instructions.rs:2`, `crates/baley/src/verification/instructions.rs:45`), and `baley verifier-instructions` renders it (`crates/baley/src/instruction_surfaces.rs:23`) |
+| VER-R7 | Not built | Only the parked engine reduces item rows to a truth status, with no overrule or observation record in the reduction (`crates/baley/src/verification/status.rs:72-98`). The session server answers `verification-read` as unavailable (`crates/baley/src/mcp/operations.rs:101`) until Build 5 |
+| VER-R8 | Not built | Only the parked engine picks the current judgment (`crates/baley/src/verification/status.rs:199-227`). The session server answers `verification-read` as unavailable (`crates/baley/src/mcp/operations.rs:101`) until Build 5 |
+| VER-R9 | Not built | Only the parked engine records human results as owner-approved passed, failed or skipped bound to a rendered `UAT.md` (`crates/baley/src/verification/human.rs:112-311, 405-431`), and a passed result resolves the item without making the truth met. The session server answers `verification-human-result` as unavailable (`crates/baley/src/mcp/operations.rs:132`) until Build 5 |
 | VER-R10 | Not built | |
-| VER-R11 | Built | `crates/baley/src/verification/waivers.rs:163-511`, `crates/baley/src/verification/status.rs:229-331` |
-| VER-R12 | Partly built | Completion gate (`crates/baley/src/verification/completion.rs:356-591`); carries no owner or time; ticks `ROADMAP.md` and edits `REQUIREMENTS.md` (`completion.rs:532-591`) |
-| VER-R13 | Built | `crates/baley/src/verification/completion.rs:98-207` |
-| VER-R14 | Built over Markdown | `crates/baley/src/verification/audit.rs:119-384`; parses `REQUIREMENTS.md` bold spans (#93) |
-| VER-R15 | Partly built | Route resolved with attempt `None` (`crates/baley/src/verification_service.rs:351-361`) |
+| VER-R11 | Not built | Only the parked engine records a waiver (`crates/baley/src/verification/waivers.rs:163-358, 440-511`) and shows it beside the met truths (`crates/baley/src/verification/status.rs:229-248`). The session server answers `truth-waive` as unavailable (`crates/baley/src/mcp/operations.rs:131`) until Build 5 |
+| VER-R12 | Not built | Only the parked engine completes a phase: the completion gate carries no owner or time (`crates/baley/src/verification/completion.rs:356-592`), and it ticks `ROADMAP.md` and edits `REQUIREMENTS.md` (`crates/baley/src/verification/completion.rs:264-354`). The session server answers `verification-complete` as unavailable (`crates/baley/src/mcp/operations.rs:133`) until Build 5 |
+| VER-R13 | Not built | Only the parked engine binds a completion to its inputs and projects its invalidation (`crates/baley/src/verification/completion.rs:98-207`). The session server answers `verification-complete` and `verification-read` as unavailable (`crates/baley/src/mcp/operations.rs:101, 133`) until Build 5 |
+| VER-R14 | Not built | Only the parked engine audits the trace (`crates/baley/src/verification/audit.rs:117-529`), parsing the bold spans of `REQUIREMENTS.md` (#93). The session server answers `verification-audit` as unavailable (`crates/baley/src/mcp/operations.rs:102`) until Build 5 |
+| VER-R15 | Not built | Only the parked engine resolves the verifier's route, with the attempt `None` (`crates/baley/src/verification_service.rs:351-361`). The session server answers `verify-next` as unavailable (`crates/baley/src/mcp/operations.rs:100`) until Build 5 |
 
 ## 12. Open questions
 

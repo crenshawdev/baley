@@ -11,12 +11,14 @@
 //! and keeps its own tests for SQLite mechanisms.
 
 mod admin;
+mod checkpoint;
 mod checks;
 mod claim;
 #[cfg(test)]
 mod conformance_tests;
 mod doctor;
 mod export;
+mod health;
 mod ledger;
 #[cfg(test)]
 mod ledger_tests;
@@ -29,6 +31,8 @@ mod store;
 mod transact;
 mod view;
 
+pub use checkpoint::{ExitCheckpoint, SkipReason};
+pub use health::StartupHealth;
 pub use queue::{Monotonic, Timing};
 pub use schema::EPOCH;
 pub use store::{Options, SqliteStore, TraceEntry};

@@ -147,7 +147,7 @@ flowchart TB
   host["Host agent<br/><small>Claude Code, sandboxed</small>"]
   subgraph baley [Baley]
     direction TB
-    server["MCP server<br/><small>shared server in Build 3; Hardin decides the next step</small>"]
+    server["MCP server<br/><small>one per Claude Code session, over stdio; Hardin decides the next step</small>"]
     guard["Guard hook<br/><small>one per tool call; refuses unsafe actions</small>"]
     cli["CLI<br/><small>verify, doctor, export, purge, anchor,<br/>acknowledge-restore, rebuild, scrub<br/>show in Build 9</small>"]
     db[("Ledger database<br/><small>SQLite, one per user</small>")]
@@ -169,7 +169,7 @@ flowchart TB
   class host,checkout external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Each Claude Code session starts its own MCP server, so several can run beside the guard hook and the command line. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database.*
 
 ### Terms
 
@@ -443,7 +443,7 @@ A command is one request from a caller, carrying a request id and a scope: a lis
 
 The command declares exact-string tokens. Build 1 has `anchor` for anchor pushes; later builds declare their verification, provider, revert, landing and release tokens. For every command with tokens, the store reads only those keys in `claim_scope`, validates each holder against its `request` document and fails the command without writing if the views disagree. It excludes the claim a record or reconciliation step is closing. A valid holder returns `Blocked` with the claim and its active, interrupted or awaiting-owner state. A claim stays open in the `request` view while claimed or awaiting owner; `open_claims` pages those states by index and joins matching lease rows.
 
-**Reconciliation.** The caller checks interrupted claims on its first use of a project after starting, and when a scoped command receives `Blocked { Interrupted }`. The shared server performs the first-use check per project. The anchor command is the first scoped caller: it fetches the tag through the forge, judges the observation and retries its original request after resolution. An interrupted test run is recorded as interrupted; an interrupted provider call is recorded as undelivered and may be retried under a new request. A finding is recorded as `command.reconciled`, followed by the claim's completion when resolved and the reconciling command's own completion. An unreachable remote finds nothing, records nothing in the chain, writes a trace row and leaves the claim interrupted. Ambiguous real state, such as a half-applied revert, makes the `request` document `awaiting_owner`. It keeps blocking its scope, refuses automatic reconciliation and is resolved only through the owner's `reconcile`.
+**Reconciliation.** The caller checks interrupted claims on its first use of a project after starting, and when a scoped command receives `Blocked { Interrupted }`. A session's server does the first-use check at its first scoped operation for a project. Per-request preparation (Build 3 T5) builds that step and Build 5 is its first user, and a capture needs none. The command line's anchor reconciliation is unchanged, and the anchor command is the first scoped caller: it fetches the tag through the forge, judges the observation and retries its original request after resolution. An interrupted test run is recorded as interrupted; an interrupted provider call is recorded as undelivered and may be retried under a new request. A finding is recorded as `command.reconciled`, followed by the claim's completion when resolved and the reconciling command's own completion. An unreachable remote finds nothing, records nothing in the chain, writes a trace row and leaves the claim interrupted. Ambiguous real state, such as a half-applied revert, makes the `request` document `awaiting_owner`. It keeps blocking its scope, refuses automatic reconciliation and is resolved only through the owner's `reconcile`.
 
 A claim reconciled as not pushed can land late because leases measure liveness, not evidence. This is harmless for anchors because verification reads the remote. The finding carries `checked_at`, the time of the remote check, not a promise that the tag stayed absent. A late owner record step receives the reconciliation's outcome as a replay and changes nothing; the anchor command reports it together with whether its own push said it landed.
 
@@ -614,7 +614,7 @@ The existing source checks are kept and run at these points:
 
 | Check | Today | Runs |
 |---|---|---|
-| Verification claim recomputed at commit | `store/writer.rs:1514` | Inside `decide` for `verdict.claimed` |
+| Verification claim recomputed at commit | `store/writer.rs:1436` | Inside `decide` for `verdict.claimed` |
 | Source reachability, commit signatures, staged-path leases | `execution/receipts.rs:1137-1210` | Before `transact`, facts recorded; HEAD re-checked inside |
 | Changed source or index refused on re-observation | `verification/inputs.rs:458-461` | Inside `decide` |
 | HEAD unchanged during an execution request | `execution_service.rs:2825` | Inside `decide` |
@@ -1024,7 +1024,7 @@ TOML is a format people already read, diff and edit by hand; when Baley writes t
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent.
 
-**Checkout admission.** Every command that records in a project's chain from a checkout of that project admits the checkout first, by judging it against the project's other checkouts and recording `checkout.seen` (path, root commit, remote URL). Those commands are `baley init`, `purge` from a checkout of the project it names, `baley config set` after a write in a project in this machine's ledger, `anchor` and `acknowledge-restore`. These admit nothing: `verify`, `doctor`, `export`, `rebuild`, `scrub`, a `config set` that changes nothing or runs outside a ledgered project, a `purge` run anywhere else, and the records in the per-user project `user`. The shared server and the guard admit the checkout per request in Build 3.
+**Checkout admission.** Every command that records in a project's chain from a checkout of that project admits the checkout first, by judging it against the project's other checkouts and recording `checkout.seen` (path, root commit, remote URL). Those commands are `baley init`, `purge` from a checkout of the project it names, `baley config set` after a write in a project in this machine's ledger, `anchor` and `acknowledge-restore`. These admit nothing: `verify`, `doctor`, `export`, `rebuild`, `scrub`, a `config set` that changes nothing or runs outside a ledgered project, a `purge` run anywhere else, and the records in the per-user project `user`. A session's server and the guard admit the checkout per request in Build 3.
 
 The order is the same for each. The project is discovered and its settings are read and validated, and for `anchor` and `acknowledge-restore` `git.remote` is checked against `git remote` by exact name. The checkout's root commit and remote URL are gathered. The judgement and `checkout.seen` are made in one transaction. The policy step then runs in a transaction of its own, and the command last. A refusal at or before checkout admission records nothing in the project's chain.
 
@@ -1089,7 +1089,7 @@ Baley's records never live in the working tree (EVD-R18). The only writes Baley 
 
 Each process opens its own connection. SQLite's write-ahead log lets any number of readers run alongside one writer, and readers see a consistent snapshot.
 
-- **MCP server.** The shared server arrives in Build 3, with one process per user (0002, SYS-R1). The inherited server still serves one host session. The ledger adapter holds one write connection and one read connection per store.
+- **MCP server.** One per Claude Code session, over stdio, serving the session and its subagents (0002, SYS-R1). Each server opens its own write connection and read connection to the per-user store, beside the guard hook's and the command line's, and the ledger adapter holds one of each per store.
 - **Guard hook.** Starts per tool call, opens a connection without an integrity scan, reads the views it needs and, for a decision worth recording, appends one `guard` event. It holds no write transaction while it evaluates.
 - **CLI.** Opens one store per command. Chain verification uses its own read-only connection. An anchor renews its lease on a second thread, stopped and joined before the record step.
 
@@ -1099,11 +1099,11 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 
 **Batch timing.** A store has one timing dependency, a monotonic clock and a pause, and every rebuild, cleanup and view verification batch uses it, whether started by the owner or by a project's first use. A batch's hold runs from acquiring the writer queue, not the wait for it, through commit and release; the 15 ms bound is read from the same clock, and the pause after the batch is as long as the hold. Tests supply their own instants and record the pauses asked for, so no test reads a live clock or sleeps.
 
-**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. No migration exists yet, so an older epoch is refused at open. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable. `schema_meta` records the digest of the schema text at creation; a build with a different epoch-1 schema refuses to open the file as a schema change and tells the owner to delete it. That covers a file written before `event.caller` existed, and an export home, which opens through the same check.
+**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. A session's server keeps the binary it started with, so after an upgrade it answers read-only until a new session starts the new binary, and nothing hands its session over. The exit checkpoint reads the stored epoch and skips a store that is not at its own. No migration exists yet, so an older epoch is refused at open. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable. `schema_meta` records the digest of the schema text at creation; a build with a different epoch-1 schema refuses to open the file as a schema change and tells the owner to delete it. That covers a file written before `event.caller` existed, and an export home, which opens through the same check.
 
 **Verification.** `verify` opens a read-only connection of its own, which cannot create a missing database file and sets only the busy timeout, and holds one read transaction for the project's events, its latest anchor row, its references, bodies and excerpts, as a payload stream and a view comparison do. The store's read connection stays free, and commands keep committing beside it, unseen by the snapshot. It holds one stored event, or one 64 KiB chunk of one body, at a time, plus the report.
 
-**Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison, and a chain verification's snapshot, which lasts one project's walk; the shared server's idle checkpoint arrives with the server. `baley doctor` reports the log size and warns above 8,192,000 bytes, 1,000 pages of this store's 8 KiB page size.
+**Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages, and in steady state nothing else does: a server checkpoints at no idle moment and runs no timer while its connection is open. A reader that never finishes would stop the automatic fold and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison, and a chain verification's snapshot, which lasts one project's walk. When a session's server exits, it stops taking calls, gives accepted work at most ten seconds and then makes one `PASSIVE` attempt. The attempt takes a free connection without waiting and sets its busy timeout to zero, and it takes neither the writer queue nor the maintenance lock, so it cannot hold up another session or the guard. It never loops or retries, and it may be incomplete: the server says on stderr whether it was complete, incomplete, unavailable or an error, and never claims the log was shortened. It is skipped on a fenced store. A server that is killed rather than stopped makes no attempt, and the automatic fold covers the log later. `baley doctor` reports the log size and warns above 8,192,000 bytes, 1,000 pages of this store's 8 KiB page size.
 
 #### Opening the store
 
@@ -1119,9 +1119,9 @@ stateDiagram-v2
   Opening --> ReadOnly : epoch newer than this binary
   Opening --> Refused : epoch older than this binary, no migration exists
   Opening --> Refused : epoch current, but not in write-ahead-log mode with 8 KiB pages
-  Opening --> Checking : epoch current, server start only
-  Checking --> Declaring
-  Checking --> ReadOnly : quick_check failed
+  Opening --> Checking : epoch current and a schema already there, server start only
+  Checking --> Declaring : quick_check ok
+  Checking --> Fenced : quick_check failed or could not run
   Opening --> Declaring : epoch current, guard or CLI
   Declaring --> Refused : a view version stored with another spec, or the view set version stored with other views
   Declaring --> Ready : missing view tables, indexes and catalog rows created under the writer queue
@@ -1129,11 +1129,11 @@ stateDiagram-v2
   Unavailable --> [*]
 ```
 
-*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project. The command line resolves the home and creates it with mode 0700 when missing. Locating checks the real home and each store file present before anything is opened or created.*
+*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project. The command line resolves the home and creates it with mode 0700 when missing. Locating checks the real home and each store file present before anything is opened or created. A store whose `quick_check` failed stays open but fenced: every write is refused, reads continue and no view is declared.*
 
 Open checks each declared view version's spec against `view_catalog` and the declared view set version's names against `view_set_catalog`, reading first on the read connection so that an open that finds everything in place takes no write. It records a spec or set version seen for the first time, creates missing view tables and indexes under the writer queue, and refuses a version already recorded with another spec or other names. It looks at no project's views: each project is brought to this binary's views on its first use, as in Figure 8, so one project that needs a rebuild never keeps the store from opening.
 
-The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI do not, so a guard call never scans the database. The full `integrity_check`, chain and view verification run in `baley doctor`.
+A session's MCP server runs SQLite's `quick_check` when it opens a store whose schema already exists, after the epoch, schema-digest and file-setting checks and before any view is declared. A schema that open creates skips it. A check that fails, or cannot run, fences the store: every write is refused as unavailable and carries the check's report, reads continue, nothing is declared and the exit checkpoint is skipped. The refusal is not a read-only one, because a damaged file needs no newer binary. The fence belongs to that open and is not recorded in the file. The guard and the CLI never run the check, so a guard call never scans the database and they open the same file as before. The full `integrity_check`, chain and view verification run in `baley doctor`.
 
 ### Workflows
 
@@ -1237,7 +1237,7 @@ See [Threat model](#threat-model) for who is defended against.
 | Power loss after acknowledgement | None needed | Nothing is lost (`synchronous=FULL`) | None |
 | Store busy longer than 5 s | `SQLITE_BUSY` after the timeout | "store busy"; the CLI says the ledger is busy and to run the command again | Retry; `doctor` reports claim states and log size |
 | Disk full | `SQLITE_FULL` | The current transaction fails; an earlier claim or external effect may remain | Free space and retry; for an anchor, follow the printed reconciliation step |
-| Database corruption | `quick_check` at server start, `integrity_check` in doctor | Read-only, with the check's report | Restore an earlier copy of the store and run `verify`; the restore returns to the copy's moment, so the copy lacks the purges recorded after it and the owner re-runs the purges they know of |
+| Database corruption | `quick_check` when a session's server opens the store, `integrity_check` in doctor | The server refuses every write as unavailable with the check's report, and reads continue | Restore an earlier copy of the store and run `verify`; the restore returns to the copy's moment, so the copy lacks the purges recorded after it and the owner re-runs the purges they know of |
 | Chain differs from its anchor | `baley verify` | The first bad sequence, truncation or rollback, and the unanchored range | Restore an earlier copy; the difference is itself evidence, and the copy lacks the purges recorded after it, so the owner re-runs the purges they know of |
 | A view differs from its rebuild | `baley verify <project> --views` | The documents that differ, and the head compared at | Run `baley rebuild <project>`; authority was never granted from it |
 | Process killed during a rebuild or view verification | Its generation's marker remains in `project_gen.building_gen` | Nothing live changes; `verify --views` refuses with `UnfinishedGeneration` until a rebuild | Run `baley rebuild <project>` to remove the unfinished generation before replay |
@@ -1245,7 +1245,7 @@ See [Threat model](#threat-model) for who is defended against.
 | A building marker names the live generation | Every removal turn checks `live_gen` before deleting a row, and verification compares the marker with `live_gen` before it starts | `rebuild`, `verify --views`, or a read or command that must first rebuild the project, returns `LiveGenerationProtected`; nothing is removed and the live views stand | Restore an earlier copy of the store and run `verify`; the restore returns to the copy's moment, so the copy lacks the purges recorded after it and the owner re-runs the purges they know of |
 | Deleting the old generation fails after a flip | The rebuild's cleanup error | `rebuild` returns `CleanupFailed` with the generation now live and the cause, and the old one is left; a rebuild started by a project's first use goes on with the current views | The next rebuild removes the old generation |
 | Older binary after a newer one rebuilt a project's views | The live view stamps, checked in each view read and new command | That project's view reads and new commands are refused as read-only; history, payloads and other projects still work | Use the newer binary |
-| Older process after an upgrade | Epoch check in its next write | Read-only, naming the needed binary | Restart with the new binary |
+| Older process after an upgrade | Epoch check in its next write | Read-only, naming the needed binary | Start a new session, which starts the new binary |
 | Migration fails | Transaction error | Refused; database unchanged | Report the bug; the old binary still works |
 | Unsafe home | The ownership, kind, mode and link checks at every open | Refused with `unsafe-home`, naming each path, what is wrong and the fix; nothing is opened or created | Run the fix named: `chmod 700`, `chmod 600`, `chown`, replace the link with the real folder or file, or remove or rename a wrong-kind path |
 | No usable home location | `BALEY_HOME` empty, relative or without a final folder name, or `HOME` missing, empty or relative when needed | Refused before anything is created, naming the variable | Set `BALEY_HOME` to an absolute path ending in the home folder's name, or set `HOME` |
@@ -1253,7 +1253,7 @@ See [Threat model](#threat-model) for who is defended against.
 | Anchor push fails cleanly (remote unreachable, refused or missing at the push or at the latest-anchor fetch) | `anchor.failed` and `command.completed` refused, the claim completed | Nothing blocks; `doctor` warns once the unanchored range, not counting the anchor command's own events, is over a day old | Retried at the next anchor point |
 | Local chain behind or different from the latest remote anchor at an anchor push, as after a restore of an older copy | The latest-anchor fetch and the chain comparison, after the claim and before the push | `anchor.failed` and a refused outcome naming the mismatch (truncation, rewrite or break); nothing is pushed | The owner runs `acknowledge-restore` on an intact restored chain. Its event names the restored head and remote anchor; anchoring resumes, while `verify` reports the accepted gap. The success output and every later report that lists the gap print the purge warning, and the owner re-runs the purges they know of for each project from records kept outside the store and rotates affected secrets |
 | Remote unreachable or latest tag malformed at `verify` | The core's latest-anchor fetch | The report says the remote could not be checked or its tag is not an anchor; the chain and bodies are checked locally and nothing is taken as the outside witness | Verify again once the remote is reachable; a malformed tag is itself evidence to report |
-| Write-ahead log grows | Log size above 8,192,000 bytes in doctor, 1,000 pages of the store's 8 KiB page size | Warning in doctor | Idle checkpoint; find the long reader |
+| Write-ahead log grows | Log size above 8,192,000 bytes in doctor, 1,000 pages of the store's 8 KiB page size | Warning in doctor | Find the long reader. The log folds at the next commit past the threshold, or at the session server's one `PASSIVE` attempt as it exits, not when the reader ends |
 | Purge scrub held back by an open reader, or interrupted | The truncating checkpoint's row reports busy; `scrub_pending` remains | Scrub incomplete; `doctor` shows it pending | Close the reader and run `baley scrub` |
 | Git cannot run or cannot write a tag object at a push | Forge observes unreachable | `anchor.failed`, and the CLI prints git's message | Fix git or the repository and retry the anchor |
 | `git.remote` names no remote of the repository | Exact-name check of `git remote` before recording or fetching | Refused, nothing recorded, and `doctor` refuses its whole report | Add the remote to the checkout, or set `git.remote` to a configured remote and commit it |
@@ -1280,7 +1280,7 @@ The real adapter is measured by `crates/baley-bench`. Latency figures are each r
 | Purge, including scrub | No budget | 42 ms (74) | 62 ms (66) |
 | Standalone scrub | No budget | 30 ms (50) | 38 ms (43) |
 | Verify reference project | No budget | 49 ms (57) | 48 ms (49) |
-| Server start with `quick_check` (server in Build 3, measured in Build 9) | 2 s | Measured in Build 9 | Measured in Build 9 |
+| Server start with `quick_check` (the per-session server is built, measured in Build 9) | 2 s | Measured in Build 9 | Measured in Build 9 |
 | Search | Defined in Build 8 | Measured in Build 8 | Measured in Build 8 |
 | Server resident memory | Does not grow with store size | Measured in Build 9 | Measured in Build 9 |
 
@@ -1334,7 +1334,7 @@ Claude Code is the only supported host. A host is added when the matrix shows th
 
 | Concern | Claude Code | Evidence |
 |---|---|---|
-| Project discovery from the working directory | Hook and MCP server start in the session's directory, which may be a subdirectory | Shown on 2026-09-25: Claude Code starts the MCP server with the session's directory as its working directory, and today's server binds that directory as the project. The hook already walks up. The server walks up too (Build 3). |
+| Project discovery from the working directory | Hook and MCP server start in the session's directory, which may be a subdirectory, and Claude Code gives both `CLAUDE_PROJECT_DIR` | Shown on 2026-09-25, and again on 2026-10-02 for a stdio server: Claude Code starts the MCP server in the session's directory. Its documentation does not promise that directory, so the server takes its project from `CLAUDE_PROJECT_DIR` and records its working directory beside it, rather than binding the directory it starts in. The hook already walks up, and the server walks up from the project too (Build 3). |
 | Hook contract (tool names, event names, answer format) | `PreToolUse` with the matcher `Bash\|Monitor\|PowerShell\|Read\|Grep\|Glob\|Write\|Edit\|NotebookEdit`, answering `allow`, `deny` and `ask` | Shown for Bash on 2026-09-25: the hook's input needs no adapter. The other tools are measured by the extended probe. |
 | Re-delivered tool calls | Retries after timeout | Shown for the hook: the same session and `tool_use_id` get the confirmed answer. Proven for MCP calls in Build 1, where the `request` view lands. |
 | Access to Baley's home and config folder | Server and hook write. Agents are denied reads and writes of both | The home was shown through Bash on 2026-09-25: a denied read looks like a missing file, a denied write exits 0 and nothing lands. The config folder and the built-in file tools are measured before release by Build 3 T12, and again before each release. |
@@ -1365,7 +1365,7 @@ Builds:
 
 1. **Foundation.** The workspace split, the port, the SQLite adapter, the conformance suite, payloads and references, the hash chain, anchors and the command line: `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`. The inherited command surface stays beside these. Nothing in the lifecycle uses the ledger yet.
 2. **Identity, settings and keys.** Folders and open checks, keys and `baley exec`, settings and `policy.effective`, `baley init`, discovery, checkouts, the model catalog and detection.
-3. **Hosts.** The shared server, its start routes, install, the guard's answer in Claude Code's hook form, Claude Code's sandbox and file-tool deny rules over the home and the config folder, stubs and captures.
+3. **Hosts.** The per-session stdio server, install, the guard's answer in Claude Code's hook form, Claude Code's sandbox and file-tool deny rules over the home and the config folder, stubs and captures.
 4. **Planning.** Project start, stories, phases, plans, plan review and risk scan, the first dispatches, and routing finished.
 5. **Doing the work.** Execution, runs, verification, diff review and the completion risk scan.
 6. **Milestones, landing, undo and pause.** The anchor triggers and the forge check.
@@ -1496,6 +1496,7 @@ classDiagram
 - [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md), superseding ADR 0007 in part
 - [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part, superseded in part by ADR 0032 and ADR 0033
 - [ADR 0033: Support only hosts whose sandboxing and execution controls meet Baley's requirements](../adr/0033-host-security-bar.md), superseding ADR 0008, ADR 0018, ADR 0020, ADR 0027 and ADR 0029 in part
+- [ADR 0034: Run one Baley server per session over stdio](../adr/0034-one-server-per-session.md)
 - [ADR 0035: Report purge uncertainty after restoring a store](../adr/0035-restore-purge-uncertainty.md), superseding ADR 0022 in part
 
 ## Future work
@@ -1544,7 +1545,7 @@ Found unused in the current code and not carried forward: the store operations `
 
 ## Appendix B: Reads mapped to views
 
-Every read the MCP server serves today, and the view and key that serve it. All queries page with a cursor and are bounded; lists are ordered as stated.
+The reads the inherited server served, with the view and key that will serve each. Every one but `help` and `schema`, which read no store, now answers operation-unavailable until the build that replaces it. All queries page with a cursor and are bounded; lists are ordered as stated.
 
 | Query operation | View and key | Order |
 |---|---|---|

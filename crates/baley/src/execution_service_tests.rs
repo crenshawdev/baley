@@ -1,18 +1,6 @@
 use super::execution_service;
 
 #[test]
-fn execute_next_decodes_an_optional_owner_selected_plan() {
-    let decoded = serde_json::from_value::<super::QueryArguments>(serde_json::json!({
-        "operation":"execute-next","phase":6,"plan":2
-    }));
-    let Ok(super::QueryArguments::ExecuteNext { phase, plan }) = decoded else {
-        panic!("execute-next must accept an owner-selected admitted plan");
-    };
-    assert_eq!(phase.get(), 6);
-    assert_eq!(plan.map(std::num::NonZeroU32::get), Some(2));
-}
-
-#[test]
 fn select_ready_plan_picks_the_named_plan_else_the_lowest_ready_one() {
     let selected = std::num::NonZeroU32::new(2);
     assert_eq!(

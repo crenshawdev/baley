@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| Status | Accepted |
+| Status | Accepted, superseded in part by 0034 |
 | Date | 2026-09-28 |
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0012: Host interface](../design/0012-host-interface.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0034](0034-one-server-per-session.md), in part: the MCP server over HTTP on axum |
 
 ## Context and problem
 

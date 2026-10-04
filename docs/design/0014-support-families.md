@@ -362,26 +362,26 @@ sequenceDiagram
 
 ## 11. Build status
 
-The binary crate holds the inherited engine; capture, debug and spike write JSON snapshots and Markdown, recall and why parse Markdown and git history.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `capture` (`crates/baley/src/mcp/operations.rs:165`) and `document` (`crates/baley/src/mcp/operations.rs:98`) as unavailable, and the operation baseline names Build 3 for them. It answers `recall`, the debug reads, `why` and `document-search` (`crates/baley/src/mcp/operations.rs:88-91, 97, 99`) and the debug, spike and task apply spellings (`crates/baley/src/mcp/operations.rs:183-194`) as unavailable naming Build 8. It serves `help` from the compiled table (`crates/baley/src/mcp/operations.rs:305-312`). Production reaches the capture, debug, spike, task, why and help front doors through their `*-instructions` renderers (`crates/baley/src/instruction_surfaces.rs:5-7, 12, 14, 18`). The JSON snapshots, Markdown and git-history parsing are the parked engine's.
 
 | Requirement | Status | Where |
 |---|---|---|
-| SUP-R1 | Built, three kinds | `crates/baley/src/capture_service.rs:19-131`, `crates/baley/src/capture/mod.rs:18-91` |
-| SUP-R2 | Not built | No promote or decline operation; the bound counts every capture ever made |
-| SUP-R3 | Built | `crates/baley/src/session/mod.rs:612-619`, `crates/baley/src/config/mod.rs:68-77` |
-| SUP-R4 | Built over `.planning` | `crates/baley/src/task_service.rs:111-437`; the episode is memory-only without a planning root (`task_service.rs:25-44`) |
-| SUP-R5 | Partly built | Open, recall snapshot, hypotheses, observations, attempts and versions at `crates/baley/src/debug_service.rs:117-448`, `crates/baley/src/debug/model.rs:10-107, 518-567`; a hypothesis, observation or attempt is accepted from open, with no red-run gate and no `not-reproduced` refusal (`crates/baley/src/debug/model.rs:520-567`) |
-| SUP-R6 | Partly built | Risk scan over staged material and review gating at `crates/baley/src/debug_service.rs:168-472`; resolve takes the caller's own reproduction outcome (test, result, passed) instead of a run by Baley, needs no earlier red run and binds no command (`crates/baley/src/debug/model.rs:44-50, 603-633`) |
-| SUP-R13 | Not built | No `debug reproduce` operation, symptom signature, red run or `debug.reproduced`; the write match in `crates/baley/src/debug/model.rs:518` is where it plugs in |
-| SUP-R14 | Not built | Debug runs no command; the process-port runner it would share is `crates/baley/src/execution/runner.rs` |
-| SUP-R15 | Not built | No reproduction files are named or digested; the digests belong in the red and green run claims of SUP-R14, and the resolve check beside the resolve at `crates/baley/src/debug/model.rs:603-633` |
-| SUP-R16 | Not built | An episode is only `Open` or `Resolved` (`crates/baley/src/debug/model.rs:61-64`) and nothing ends it unresolved; `debug list` already answers open episodes only (`crates/baley/src/debug_service.rs:76-79`) |
-| SUP-R7 | Built as consult, to be replaced | `crates/baley/src/debug_service.rs:474-563`, `crates/baley/src/review/provider/consult.rs:12-130` |
-| SUP-R8 | Built | `crates/baley/src/spike/model.rs:13-384`, `crates/baley/src/spike_service.rs:49-95` |
-| SUP-R9 | Built over Markdown and git | `crates/baley/src/recall/mod.rs:61-197, 399-523` |
-| SUP-R10 | Built | Code search removed (2026-09-24); `document` by identity (`crates/baley/src/read/document.rs`) |
-| SUP-R11 | Built over Markdown | `crates/baley/src/why/corpus.rs:742-1138`, `crates/baley/src/why_service.rs:23-160` |
-| SUP-R12 | Built | `crates/baley/src/help/table.rs:12-201` |
+| SUP-R1 | Not built | Only the parked capture service records a capture, of three kinds (`crates/baley/src/capture_service.rs:19-132`, `crates/baley/src/capture/mod.rs:18-91`). The session server answers `capture` as unavailable (`crates/baley/src/mcp/operations.rs:165`) until Build 3 |
+| SUP-R2 | Not built | The parked capture service has no promote or decline operation, and its bound counts every capture ever made |
+| SUP-R3 | Not built | The capture bound is the session layer's `capture_report`, which only the parked capture service calls (`crates/baley/src/session/mod.rs:612-619`, `crates/baley/src/config/mod.rs:68-77`). The session server answers `capture` as unavailable (`crates/baley/src/mcp/operations.rs:165`) until Build 3 |
+| SUP-R4 | Not built | Only the parked task service opens and closes a task episode (`crates/baley/src/task_service.rs:111-440`), and the episode is memory-only without a planning root (`crates/baley/src/task_service.rs:25-44`). The session server answers `task-open` and `task-close` as unavailable (`crates/baley/src/mcp/operations.rs:193-194`) until Build 8 |
+| SUP-R5 | Not built | Only the parked engine records an open, a recall snapshot, hypotheses, observations, attempts and versions (`crates/baley/src/debug_service.rs:41-472`, `crates/baley/src/debug/model.rs:10-107, 518-567`), and it accepts a hypothesis, observation or attempt from open, with no red-run gate and no `not-reproduced` refusal (`crates/baley/src/debug/model.rs:520-567`). The session server answers the debug spellings as unavailable (`crates/baley/src/mcp/operations.rs:89-91, 183-186`) until Build 8 |
+| SUP-R6 | Not built | Only the parked engine scans staged material for risk and gates the review (`crates/baley/src/debug_service.rs:168-472`), and its resolve takes the caller's own reproduction outcome (test, result, passed) instead of a run by Baley, needs no earlier red run and binds no command (`crates/baley/src/debug/model.rs:44-50, 603-633`). The session server answers `debug-resolve` as unavailable (`crates/baley/src/mcp/operations.rs:188`) until Build 8 |
+| SUP-R13 | Not built | No `debug reproduce` operation, symptom signature, red run or `debug.reproduced` exists. The parked write match in `crates/baley/src/debug/model.rs:518` is where it plugs in |
+| SUP-R14 | Not built | Debug runs no command. The process-port runner it would share is the parked `crates/baley/src/execution/runner.rs` |
+| SUP-R15 | Not built | No reproduction files are named or digested. The digests belong in the red and green run claims of SUP-R14, and the resolve check beside the parked resolve at `crates/baley/src/debug/model.rs:603-633` |
+| SUP-R16 | Not built | An episode is only `Open` or `Resolved` (`crates/baley/src/debug/model.rs:61-64`) and nothing ends it unresolved. The parked engine's `debug list` answers open episodes only (`crates/baley/src/debug_service.rs:76-79`) |
+| SUP-R7 | Not built | Only the parked engine offers a consult: its policy (`crates/baley/src/debug_service.rs:474-563`) and the consult schema (`crates/baley/src/review/provider/consult.rs:12-130`). The session server answers `debug-consult` as unavailable (`crates/baley/src/mcp/operations.rs:187`) until Build 8 |
+| SUP-R8 | Not built | Only the parked spike service holds a spike (`crates/baley/src/spike/model.rs:13-428`, `crates/baley/src/spike_service.rs:49-95`). The session server answers the spike spellings as unavailable (`crates/baley/src/mcp/operations.rs:189-192`) until Build 8 |
+| SUP-R9 | Not built | Only the parked recall searches Markdown and git history (`crates/baley/src/recall/mod.rs:61-198, 396-531`). The session server answers `recall` as unavailable (`crates/baley/src/mcp/operations.rs:88`) until Build 8 |
+| SUP-R10 | Partly built | The baseline serves no code search (`crates/baley/src/mcp/operations.rs:86-125`), and `document` answers as unavailable naming Build 3 (`crates/baley/src/mcp/operations.rs:98`) until the served reads are rebuilt. The identity read is the parked engine's (`crates/baley/src/read/document.rs:1257-1316`) |
+| SUP-R11 | Not built | Only the parked engine answers `why` over Markdown (`crates/baley/src/why/corpus.rs:742-1138`, `crates/baley/src/why_service.rs:22-160`). The session server answers `why` as unavailable (`crates/baley/src/mcp/operations.rs:97`) until Build 8 |
+| SUP-R12 | Built | `help` is served from the compiled table (`crates/baley/src/mcp/operations.rs:305-312`, `crates/baley/src/help/table.rs:12-201`) |
 
 ## 12. Open questions
 

@@ -150,13 +150,11 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// The shape of `main.rs`, global `--project-root` included.
+    /// The shape of `main.rs`.
     #[derive(Parser)]
     struct Cli {
         #[command(subcommand)]
         command: Top,
-        #[arg(long, global = true)]
-        project_root: Option<std::path::PathBuf>,
     }
 
     #[derive(Subcommand)]
@@ -218,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn interview_project_flag_selects_the_project_file_not_a_clash_with_project_root() {
+    fn interview_project_flag_selects_the_project_file_not_the_global_one() {
         let interview = parse_interview(&["--project"]).unwrap();
         assert_eq!(interview.file.layer(), Some(FileLayer::Project));
     }
@@ -268,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn project_flag_selects_the_project_layer_not_a_clash_with_project_root() {
+    fn project_flag_selects_the_project_layer_not_the_global_one() {
         let set = parse_set(&["--project", "a=b"]).unwrap();
         assert_eq!(set.layer.layer(), FileLayer::Project);
         assert_eq!(pairs(&set), [("a", "b")]);

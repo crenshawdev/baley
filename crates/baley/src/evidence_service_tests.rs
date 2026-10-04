@@ -1,4 +1,5 @@
-use super::{BaleyServer, evidence_service::Command};
+use super::evidence_service::Command;
+use super::recall::Resident;
 use crate::session::SessionFactory;
 use baley::store::Error;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ fn fixture() -> tempfile::TempDir {
 fn closed_resident_returns_closed() {
     let root = fixture();
     let rt = runtime();
-    let server = rt.block_on(async { BaleyServer::with_factory(factory()) });
+    let server = rt.block_on(async { Resident::spawn(factory()) });
     drop(rt);
     assert_eq!(
         runtime().block_on(server.evidence(root.path(), Command::Read)),

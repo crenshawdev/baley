@@ -569,22 +569,22 @@ The test derivation rules the planner receives, as served:
 
 ## 11. Build status
 
-The binary crate holds the inherited engine. Truths belong to a phase's context there, plans are rendered to `PLAN-N.md`, and nothing knows a story, the stories a phase commits, or a size.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `plan-read`, `context-intake`, `plan-submit` and `context-submit` (`crates/baley/src/mcp/operations.rs:105-106, 153-154`) as `operation-unavailable`, and the operation baseline names Build 4 for them. Production reaches the compiled context and plan instructions, as text, through `baley context-instructions` and `baley plan-instructions`. In the parked engine truths belong to a phase's context, plans are rendered to `PLAN-N.md`, and nothing knows a story, the stories a phase commits, or a size.
 
 | Requirement | Status | Where |
 |---|---|---|
-| PLN-R1, PLN-R7 to PLN-R10, PLN-R20 to PLN-R22 | Not built | Truths are per phase (`crates/baley/src/context/model.rs:36-46`); no backlog, committed stories, size or capacity |
-| PLN-R2, PLN-R3 | Built, per phase | `crates/baley/src/context/validation.rs:17-103` (form, one trigger, one observer, verbs, kinds, attestations) |
-| PLN-R4 | Partly built | Version always 1, no revision (`crates/baley/src/context/persistence.rs:33-49`, `crates/baley/src/context_service.rs:184-192`) |
-| PLN-R5 | Not built | More than seven truths refused `seven-truths` (`crates/baley/src/context/validation.rs:30-39`), to be removed |
-| PLN-R6 | Not built | `/bal-context` says "Do not dispatch an analyzer" (`crates/baley/src/context/instructions.rs:43-44`) and has the session hold the interview itself |
-| PLN-R11 | Built, minus stories and questions | Typed content and lease rules (`crates/baley/src/plan/model.rs:29-75`, `crates/baley/src/plan/validation.rs:110-186`); the plan has no `questions` field |
-| PLN-R12, PLN-R13 | Built, minus the refusals about committed stories (`story-not-in-phase`, `no-truths`) | `crates/baley/src/plan/associations.rs:317-487`, `crates/baley/src/plan/limits.rs:187-438`, `crates/baley/src/plan/evidence.rs:12-116` |
-| PLN-R14 | Built | `crates/baley/src/plan/inventory.rs:129-179`, `crates/baley/src/plan/validation.rs:23-105` |
-| PLN-R15 | Partly built | Draft, digest, `stale-draft` (`crates/baley/src/plan_service.rs:163-260`); drafts are memory-only and lost on restart (`crates/baley/src/context_service.rs:131-137`) |
-| PLN-R16 | Not built | `/bal-plan` forbids checker dispatch (`crates/baley/src/plan/instructions.rs:504-506`); the 3.x checker verdict record survives as a fact kind (`crates/baley/src/evidence/checker.rs:54-66`) |
-| PLN-R17, PLN-R18, PLN-R19 | Built as text | The derivation rules are compiled at `crates/baley/src/plan/instructions.rs:120-180`; the compiled text still tells the planner to flag ambiguity for the owner in prose (`crates/baley/src/plan/instructions.rs:124`) |
-| PLN-R23 to PLN-R27 | Not built | The phase context carries `assumptions` as strings the session writes (`crates/baley/src/context/model.rs:44`); there is no question, question set, round, answer or deferral record, no `questions` view, and no `question-open` or `answer-not-applied` refusal |
+| PLN-R1, PLN-R7 to PLN-R10, PLN-R20 to PLN-R22 | Not built | In the parked engine truths are per phase (`crates/baley/src/context/model.rs:36-46`), and nothing knows a backlog, committed stories, size or capacity |
+| PLN-R2, PLN-R3 | Not built | Only the parked engine validates a submission's form, one trigger, one observer, verbs, kinds and attestations (`crates/baley/src/context/validation.rs:5-106`). The session server answers `context-submit` as unavailable (`crates/baley/src/mcp/operations.rs:154`) until Build 4 |
+| PLN-R4 | Not built | Only the parked engine writes truth version 1 always, with no revision (`crates/baley/src/context/persistence.rs:33-49`, `crates/baley/src/context_service.rs:184-193`). The session server answers `context-submit` as unavailable (`crates/baley/src/mcp/operations.rs:154`) until Build 4 |
+| PLN-R5 | Not built | The parked engine refuses more than seven truths `seven-truths` (`crates/baley/src/context/validation.rs:30-39`), to be removed. The session server answers `context-submit` as unavailable (`crates/baley/src/mcp/operations.rs:154`) until Build 4 |
+| PLN-R6 | Not built | `/bal-context` says "Do not dispatch an analyzer" (`crates/baley/src/context/instructions.rs:43-44`), which `baley context-instructions` prints, and has the session hold the interview itself |
+| PLN-R11 | Not built | Only the parked engine holds typed content and lease rules (`crates/baley/src/plan/model.rs:29-75`, `crates/baley/src/plan/validation.rs:107-186`), and its plan has no `questions` field. The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153`) until Build 4 |
+| PLN-R12, PLN-R13 | Not built | Only the parked engine checks a plan's evidence map, associations and limits, and it has no refusals about committed stories (`story-not-in-phase`, `no-truths`) (`crates/baley/src/plan/associations.rs:287-497`, `crates/baley/src/plan/limits.rs:187-438`, `crates/baley/src/plan/evidence.rs:12-116`). The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153`) until Build 4 |
+| PLN-R14 | Not built | Only the parked engine numbers a phase's plans and refuses to replace an admitted plan (`crates/baley/src/plan/inventory.rs:129-179`, `crates/baley/src/plan/validation.rs:23-105`). The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153`) until Build 4 |
+| PLN-R15 | Not built | Only the parked engine holds a plan draft, approves it by digest and refuses `stale-draft` (`crates/baley/src/plan_service.rs:163-260`). Its drafts are memory-only and lost on restart (`crates/baley/src/session/mod.rs:427-437`). The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153`) until Build 4 |
+| PLN-R16 | Not built | `/bal-plan` forbids checker dispatch (`crates/baley/src/plan/instructions.rs:504-506`), and the parked engine still holds the 3.x checker verdict record as a fact kind (`crates/baley/src/evidence/mod.rs:48`, `crates/baley/src/evidence/checker.rs:43-52`) |
+| PLN-R17, PLN-R18, PLN-R19 | Built as text | The derivation rules are compiled at `crates/baley/src/plan/instructions.rs:119-180`, which `baley plan-instructions` prints. The compiled text still tells the planner to flag ambiguity for the owner in prose (`crates/baley/src/plan/instructions.rs:124`) |
+| PLN-R23 to PLN-R27 | Not built | The parked engine's phase context carries `assumptions` as strings the session writes (`crates/baley/src/context/model.rs:44`). There is no question, question set, round, answer or deferral record, no `questions` view, and no `question-open` or `answer-not-applied` refusal |
 
 ## 12. Open questions
 

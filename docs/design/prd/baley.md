@@ -111,9 +111,9 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 ### Hosts and running
 
 60. As an owner, I want Baley to support a host only when its sandboxing and execution controls meet Baley's requirements, so that every security promise holds where Baley runs.
-61. As an owner, I want one Baley to serve all my sessions and projects at once, so that several terminals and agents work against the same record without conflict.
+61. As an owner, I want every session and agent to work against the same per-user record without conflict, so that several terminals and agents can run at once with no single shared process.
 62. As an owner, I want Baley to work with no background service at all, so that I install nothing extra.
-63. As an owner, I want to choose at install time to run Baley in the background, with Baley managing that itself, so that my hosts can use the newer protocol without me configuring a service.
+63. As an owner, I want Baley to speak the newest MCP revision Claude Code speaks, over stdio, with nothing for me to configure, so that my host gets the newer protocol without a service or a setting.
 64. As an owner, I want Baley to adapt to Claude Code's capabilities (such as being notified when long work finishes), so that I get the best behavior it offers.
 65. As an owner, I want two sessions changing the same thing at once to be handled safely, with the second one refused rather than merged, so that the record never becomes inconsistent.
 
@@ -133,9 +133,9 @@ The architecture is in [0002: System design](../0002-system-design.md); the stor
 - **Evidence-gated lifecycle.** The state of the work is derived from the record, never stored beside it. A step is allowed only when the recorded evidence supports it.
 - **One record.** Every fact is an append-only, hash-chained event in one SQLite ledger per user, outside any checkout. Views are rebuilt from events. No Markdown file is a record.
 - **Instructions are part of the binary.** Every instruction a model sees is compiled into Baley and served in parts. Files a host must load are stubs Baley renders.
-- **One shared Baley per user.** A single server serves every session and worker. It speaks MCP over stdio and HTTP, and both the 2025-11-25 protocol and MCP 2 (2026-07-28). At install the owner chooses whether it runs in the background (Baley manages its own systemd or launchd entry); otherwise a small stdio launcher starts or joins it.
-- **Host adapters.** Baley identifies its host and version on every connection and chooses mechanisms per host, such as notifying the model when long work finishes where the host supports it, and waiting in steps elsewhere.
-- **Optimistic concurrency.** Writes go through one writer, one short transaction at a time. Each decision is made inside its write from inputs read there; a command whose inputs changed is refused, never merged. Long work runs outside the write and is recorded after it.
+- **One Baley per session.** Each Claude Code session starts its own Baley over stdio, and the session's subagents share it. Sessions share the ledger through the store, and Baley answers both the 2025-11-25 protocol and MCP 2 (2026-07-28). There is no service to run and no port to open.
+- **Host adapters.** Baley identifies its host and version on every call and chooses mechanisms per host, such as notifying the model when long work finishes where the host supports it, and waiting in steps elsewhere.
+- **Optimistic concurrency.** Writes take turns at the store's one writer lock, one short transaction at a time. Each decision is made inside its write from inputs read there; a command whose inputs changed is refused, never merged. Long work runs outside the write and is recorded after it.
 - **Baley runs tests and checks.** Results are judged by exit code, with an optional standard report for which tests failed, so every language works.
 - **Outside models are called by the host session, never by Baley.** Baley decides the review and builds its prompt and material. Each provider uses its own command-line login or an API key, as the owner chooses. A key reaches a call only through Baley, set for that one command and hidden in its output.
 - **Settings are TOML.** One global file and one project file that overrides it. Branch, forge and repository settings live only in the project file. Settings that differ per host sit in a section for each host. Baley writes the files; the model is never told about them.

@@ -1,17 +1,17 @@
 #[path = "config/binary.rs"]
 pub mod config;
 mod guard;
+/// The inherited engine, unreached by production since the per-session server and
+/// kept so its tests run. Build 9 removes it.
+#[allow(dead_code)]
+mod inherited;
 #[cfg(test)]
 mod instruction_lint;
 mod instruction_surfaces;
-mod review_ingress;
-mod server;
 #[path = "session/binary.rs"]
 pub mod session;
 
 use clap::{Parser, Subcommand};
-use rmcp::ServiceExt;
-use rmcp::service::ServerInitializeError;
 
 /// baley: the plan/execute/verify loop, served over MCP stdio.
 #[derive(Parser)]
@@ -19,9 +19,6 @@ use rmcp::service::ServerInitializeError;
 struct Cli {
     #[command(subcommand)]
     command: Command,
-    /// Bind public execution calls to this project directory.
-    #[arg(long, global = true)]
-    project_root: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -100,7 +97,7 @@ enum Command {
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve => run_serve(cli.project_root),
+        Command::Serve => run_serve(),
         other => run_command(other),
     }
 }
@@ -123,7 +120,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         | Command::Models(_) => {
             unreachable!("dispatched above")
         }
-        Command::Serve => return run_serve(None),
+        Command::Serve => return run_serve(),
         Command::Guard => return guard::run(),
         Command::SkillDescription { name } => {
             let mut markdown = String::new();
@@ -178,86 +175,54 @@ fn run_command(command: Command) -> std::process::ExitCode {
     }
 }
 
-/// Serve MCP until EOF or SIGTERM, then drain under one shared deadline.
-fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode {
-    let project = match project_root.map(Ok).unwrap_or_else(std::env::current_dir) {
-        Ok(project) => project,
-        Err(_) => return std::process::ExitCode::FAILURE,
-    };
-    let runtime = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
-    let outcome = runtime.block_on(async {
-        let handler = match server::BaleyServer::new().bind_project(&project) {
-            Ok(handler) => handler,
-            Err(_) => {
-                eprintln!("baley: project root is unavailable");
-                return std::process::ExitCode::FAILURE;
-            }
-        };
-        let admission = review_ingress::AdmissionQueue::new(handler.clone());
-        #[cfg(unix)]
-        let mut terminate =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(signal) => signal,
-                Err(error) => {
-                    eprintln!("baley: cannot listen for SIGTERM: {error}");
-                    return std::process::ExitCode::FAILURE;
-                }
-            };
-        #[cfg(unix)]
-        {
-            let admission = admission.clone();
-            tokio::spawn(async move {
-                terminate.recv().await;
-                admission.close();
-            });
-        }
-        let (transport, input_failed) = review_ingress::InputTransport::new(
-            tokio::io::stdin(),
-            tokio::io::stdout(),
-            admission.clone(),
-        );
-        let service_handler = handler.clone();
-        let mut service = tokio::spawn(async move {
-            match service_handler.serve(transport).await {
-                Ok(service) => service.waiting().await.map(|_| ()),
-                Err(
-                    ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled,
-                ) => Ok(()),
-                Err(error) => {
-                    eprintln!("baley: failed to start MCP server: {error}");
-                    return false;
-                }
-            }
-            .is_ok()
-        });
-        let service_ok = tokio::select! {
-            _ = admission.closed() => true,
-            result = &mut service => {
-                admission.close();
-                result.unwrap_or(false)
-            }
-        };
-        let drained = match admission.drain(&handler).await {
-            Ok(()) => true,
-            Err(review_ingress::ShutdownError::Limit(limit)) => {
-                eprintln!("{}", baley::store::writer::drain_limit_diagnostic(&limit));
-                false
-            }
-            Err(review_ingress::ShutdownError::Worker) => {
-                eprintln!("baley: shutdown worker failed");
-                false
-            }
-        };
-        if service_ok && drained && !input_failed.load(std::sync::atomic::Ordering::Acquire) {
-            std::process::ExitCode::SUCCESS
-        } else {
-            std::process::ExitCode::FAILURE
-        }
-    });
+/// Builds the runtime `serve` runs on. It must stay current-thread: rmcp starts
+/// one task per request, and only on one thread do those tasks first run in
+/// arrival order, which the session queue's first-in first-out order relies on.
+fn serve_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
+/// Serve one session on stdio until EOF or SIGTERM, then drain and make the
+/// one exit checkpoint attempt.
+fn run_serve() -> std::process::ExitCode {
+    let runtime = serve_runtime().expect("failed to start tokio runtime");
+    let clean = runtime.block_on(baley::mcp::serve::run());
     // stdin and storage can be in blocking syscalls. Never add an unbounded
-    // runtime destructor wait to the coordinator's ten-second deadline.
+    // runtime destructor wait to the drain's ten-second deadline.
     runtime.shutdown_timeout(std::time::Duration::ZERO);
-    outcome
+    if clean {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod serve_argument_tests {
+    use super::*;
+
+    #[test]
+    fn the_legacy_project_root_flag_is_a_usage_error_for_serve() {
+        for input in [
+            vec!["baley", "serve", "--project-root", "/x"],
+            vec!["baley", "--project-root", "/x", "serve"],
+        ] {
+            let error = Cli::try_parse_from(input).err().expect("usage refusal");
+            assert_eq!(error.exit_code(), 2);
+        }
+        assert!(Cli::try_parse_from(["baley", "serve"]).is_ok());
+    }
+
+    #[test]
+    fn serve_runs_on_a_current_thread_runtime_so_calls_reach_admission_in_order() {
+        let runtime = serve_runtime().unwrap();
+        assert_eq!(
+            runtime.handle().runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread
+        );
+    }
 }
 
 #[cfg(test)]
@@ -287,26 +252,12 @@ mod exec_argument_tests {
         };
         assert_eq!(args.key, "A");
         assert_eq!(args.command, ["cmd", "--key", "B", "--"]);
-        for input in [
-            vec!["baley", "exec", "--key=A", "--", "ls"],
-            vec![
-                "baley",
-                "exec",
-                "--project-root",
-                "/x",
-                "--key",
-                "A",
-                "--",
-                "ls",
-            ],
-        ] {
-            let cli = Cli::try_parse_from(input).unwrap();
-            let Command::Exec(args) = cli.command else {
-                panic!("exec command lost")
-            };
-            assert_eq!(args.key, "A");
-            assert_eq!(args.command, ["ls"]);
-        }
+        let cli = Cli::try_parse_from(["baley", "exec", "--key=A", "--", "ls"]).unwrap();
+        let Command::Exec(args) = cli.command else {
+            panic!("exec command lost")
+        };
+        assert_eq!(args.key, "A");
+        assert_eq!(args.command, ["ls"]);
     }
 
     #[test]

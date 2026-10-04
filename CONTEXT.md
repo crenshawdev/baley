@@ -14,12 +14,12 @@ Two notes on history:
 | Term | Meaning | Avoid |
 |---|---|---|
 | Owner | The person who decides and answers for the work: approves plans, rules on findings, grants waivers and landing steps, sets policy ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | user, customer, operator |
-| Baley | The one Rust binary, run as one server per user, that keeps the record and makes every process decision from it ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | the framework, the agent |
+| Baley | The one Rust binary, run as one server per Claude Code session, that keeps the record and makes every process decision from it ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | the framework, the agent |
 | Model | The AI model that does the engineering judgment; it never decides process state, order, routing or whether proof is enough ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | the AI, the assistant |
 | Host | Claude Code, the program the owner works in, whose session starts workers as subagents and connects to Baley over MCP. A host is supported only when it meets the security bar ([0012](docs/design/0012-host-interface.md#2-terms), [ADR 0033](docs/adr/0033-host-security-bar.md)). | client, IDE, harness |
 | Host session | The host's main conversation with the owner, in two jobs: relaying Baley's work orders, questions and answers, and adjudicating other models' output ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | orchestrator, main thread, main agent |
-| Session | One host conversation with its own MCP connection ([0012](docs/design/0012-host-interface.md#2-terms)). | chat, thread |
-| Worker | A subagent the host session starts for one work order, with its own connection ([0012](docs/design/0012-host-interface.md#2-terms)). | Daneel, Daneels, agent (as a Baley term) |
+| Session | One host conversation, with its own Baley server over stdio ([0012](docs/design/0012-host-interface.md#2-terms)). | chat, thread |
+| Worker | A subagent the host session starts for one work order. It shares its session's connection ([0012](docs/design/0012-host-interface.md#2-terms)). | Daneel, Daneels, agent (as a Baley term) |
 | Role | A kind of worker Baley dispatches: planner, analyzer, checker, executor, verifier, reviewer ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | persona, agent type |
 | Hardin | The part of Baley that reads views and names the one allowed next step ([0001](docs/design/0001-evidence-ledger.md#terms)). | scheduler, state machine |
 | Relay | The host session putting Baley's question to the owner and returning the answer unchanged ([0012](docs/design/0012-host-interface.md#2-terms)). | proxy, paraphrase |
@@ -232,9 +232,7 @@ Two notes on history:
 
 | Term | Meaning | Avoid |
 |---|---|---|
-| Server | The one Baley process per user that every session and worker connects to ([0012](docs/design/0012-host-interface.md#2-terms)). | daemon (unless it runs as the service), instance |
-| Launcher | The small stdio process a host starts when Baley is not run as a service; it starts or joins the server ([0012](docs/design/0012-host-interface.md#2-terms)). | shim, wrapper |
-| Service | Baley run in the background by the operating system, reached over HTTP ([0012](docs/design/0012-host-interface.md#2-terms)). | daemon, server (the server runs either way) |
+| Server | The Baley process a session starts: one per session, over stdio, serving the session and its subagents ([0012](docs/design/0012-host-interface.md#2-terms)). | daemon, instance |
 | Client info | What a host sends when it connects: its name and version ([0012](docs/design/0012-host-interface.md#2-terms)). | user agent |
 | Operation | One typed request under the `query` or `apply` tool, named by a string that is only ever added ([0012](docs/design/0012-host-interface.md#2-terms)). | endpoint, method |
 | Refusal | A typed answer that a request was not done, with a code and a place ([0012](docs/design/0012-host-interface.md#2-terms)). | error, failure, rejection |

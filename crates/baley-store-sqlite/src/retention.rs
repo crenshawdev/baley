@@ -584,7 +584,7 @@ fn retention_event(
     serde_json::from_str(&body).map_err(|_| malformed("retention event"))
 }
 
-fn checkpoint(conn: &Connection, mode: &str) -> Result<(i64, i64, i64), StoreError> {
+pub(crate) fn checkpoint(conn: &Connection, mode: &str) -> Result<(i64, i64, i64), StoreError> {
     conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     })
