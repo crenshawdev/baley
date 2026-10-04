@@ -68,7 +68,7 @@ pub fn encode(value: Value) -> CallToolResult {
     CallToolResult::structured(value)
 }
 
-/// The gate before the queue, in D-03's order.
+/// The gate before the queue, in the order faults are answered.
 pub fn before_queue(tool: &str, selection: &Selection, spelling: Option<&str>) -> Before {
     let which = match tool {
         "baley_version" => None,
