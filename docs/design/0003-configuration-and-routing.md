@@ -622,44 +622,59 @@ sequenceDiagram
   participant H as Host
   participant I as Host interface
   participant P as Policy
+  participant G as Git
   participant L as Ledger
-  H->>I: request
+  H->>I: a project call
   I->>P: project of the session's CLAUDE_PROJECT_DIR
   P->>P: walk up to the nearest baley.toml, stop at the git root
-  alt no project file
-    P-->>I: unmanaged
-    I-->>H: answer for an unmanaged directory (silent guard, refusal for a process command)
-  else found
-    P->>P: effective policy (project file at the checkout's HEAD, global file, host sections)
-    alt a settings file is invalid or unreadable, or a path is not UTF-8
-      P-->>I: config-unavailable naming the file and the fault
-      I-->>H: the refusal, with nothing recorded
-    else policy available
-      P->>P: the checkout's root commit and remote URL, from the remote git.remote names else origin, user information removed
-      alt git fails or git.remote names a remote the checkout lacks
-        P-->>I: the refusal naming the remote or the git command
-        I-->>H: the refusal, with nothing recorded
-      else facts gathered
-        P->>L: checkout admission judges the checkout against the project's other checkouts
-        alt another checkout of the project holds a different remote URL
-          L-->>P: refused
-          P-->>I: project-id-conflict naming both checkouts and baley init --new-id
-          I-->>H: the refusal, with nothing recorded in the project
-        else not a fork
-          opt the checkout is new or changed
-            P->>L: checkout.seen
-          end
-          opt merged result changed
-            P->>L: policy.effective
-          end
-          P-->>I: project and policy version
-        end
+  break no project file, or the directory cannot be walked
+    P-->>I: not-a-project or project-context-invalid
+    I-->>H: failed, with nothing recorded
+  end
+  P->>P: the project id in the working tree's baley.toml
+  P->>L: is the project in this machine's ledger
+  break the project is not listed, or the ledger cannot answer
+    P-->>I: project-not-in-ledger naming baley init as the owner's step, or ledger-busy or ledger-unavailable
+    I-->>H: failed, with nothing recorded
+  end
+  alt a read
+    P-->>I: the project
+    I-->>H: the operation's answer, with nothing recorded
+  else a write
+    P->>L: the replay lookup for the request
+    alt the ledger already holds the request
+      P-->>I: the command, with no settings read and no step run
+      I-->>H: the original receipt, with nothing new recorded
+    else a new request
+      P->>P: HEAD's copy of baley.toml and the global file, built with the host's sections for the step and with none for the remote
+      break a settings file is invalid or unreadable, or a path is not UTF-8
+        P-->>I: config-unavailable naming the file and the fault
+        I-->>H: failed, with nothing recorded
       end
+      P->>G: the checkout's root commit and remote URL, from the remote the no-host policy's git.remote names else origin, user information removed
+      break git fails or git.remote names a remote the checkout lacks
+        P-->>I: checkout-facts-unavailable naming the remote or the git command
+        I-->>H: failed, with nothing recorded
+      end
+      P->>L: checkout admission judges the checkout against the project's other checkouts
+      break another checkout of the project holds a different remote URL
+        L-->>P: refused
+        P-->>I: project-id-conflict naming both checkouts and baley init --new-id as the owner's step
+        I-->>H: failed, with nothing recorded in the project
+      end
+      opt the checkout is new or changed
+        P->>L: checkout.seen
+      end
+      opt the merged result changed
+        P->>L: policy.effective under the checkout and the host
+      end
+      L-->>P: the policy version in force
+      P-->>I: the command, carrying that version
     end
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), the merge with the global file and host sections, the gathering of the checkout's facts, checkout admission and the policy step. `baley init`, `purge`, `baley config set`, `baley config show`, `baley config interview`, `anchor`, `acknowledge-restore`, anchored `verify` and `doctor` call the walk. `baley init`, `purge` and `config set` read HEAD's copy through the policy step. `anchor` and `acknowledge-restore` read it through the policy step's reads and check the project's `git.remote` against `git remote` by exact name. `config show`, `config interview`, anchored `verify` and `doctor` read it through the step's gatherer and record nothing, and the interview's answers are written by its one `config set`. Checkout admission and the recording of `policy.effective` are built for the command line, in the order the figure shows, for `baley init`, `purge` from a checkout of the project it names, `config set` after its write in a project in this machine's ledger, `anchor` and `acknowledge-restore`: the settings are read and validated, the checkout's root commit and remote URL are gathered, the checkout is judged and `checkout.seen` is recorded when it is new or changed, then `policy.effective` is recorded when the merged result changed, and the command's own events follow. The remote a checkout records is the fetch URL of the remote `git.remote` names, else of `origin`, with user information removed, and a named remote the checkout lacks is refused. A checkout whose remote URL differs from another checkout's in the project is a fork. It is refused `project-id-conflict`, naming both checkouts and `baley init --new-id`, and nothing is recorded in the project. `config set` writes its file before it admits the checkout, so in a fork the refusal comes after the write and says the change stands. `baley init` has two orders: on an empty chain it records `project.initialized` before checkout admission, and on a chain that holds events it admits the checkout first and records a missing `project.initialized` after, so a fork's plain init is refused before it appends anything. The command line connects no host, so no host section applies to it unless `--host` names one for `config show` or `config interview`. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before checkout admission or the step records anything. `baley init` refuses before it writes a file or opens the ledger, except for the fork refusal, which needs the ledger. `doctor` is the exception to the settings refusal: it reports such a file as a finding and keeps checking. The host's request carries no directory: the host interface asks for the project of its session's `CLAUDE_PROJECT_DIR`, and discovery, checkout admission and the policy step are Build 3's seam for it.*
+*Figure 7. Finding the project and its policy on a request. The server starts from its session's `CLAUDE_PROJECT_DIR` and the command line from its working directory, and both make the same walk up to the nearest `baley.toml`, stopping at the git root (`discover`). The server walks afresh on every call. It then reads the project id from the working tree's `baley.toml` and checks that the ledger lists the project, and a read ends there with nothing recorded and no settings validated. A write looks its request up next: a request the ledger already holds is answered with its original receipt by the operation's own transaction, with no settings read and no step run, so a retry made after the owner broke `baley.toml` still gets its receipt. A new request goes on in the order the command line uses: the read of the project file at the checkout's HEAD (`committed::read`), the merge with the global file and host sections, the gathering of the checkout's facts, checkout admission and the policy step. `baley init`, `purge`, `baley config set`, `baley config show`, `baley config interview`, `anchor`, `acknowledge-restore`, anchored `verify` and `doctor` call the walk. `baley init`, `purge` and `config set` read HEAD's copy through the policy step. `anchor` and `acknowledge-restore` read it through the policy step's reads and check the project's `git.remote` against `git remote` by exact name. `config show`, `config interview`, anchored `verify` and `doctor` read it through the step's gatherer and record nothing, and the interview's answers are written by its one `config set`. Checkout admission and the recording of `policy.effective` are built, in the order the figure shows, for the server's writes and, on the command line, for `baley init`, `purge` from a checkout of the project it names, `config set` after its write in a project in this machine's ledger, `anchor` and `acknowledge-restore`: the settings are read and validated, the checkout's root commit and remote URL are gathered, the checkout is judged and `checkout.seen` is recorded when it is new or changed, then `policy.effective` is recorded when the merged result changed, and the command's own events follow. The remote a checkout records is the fetch URL of the remote `git.remote` names, else of `origin`, with user information removed, and a named remote the checkout lacks is refused. A checkout whose remote URL differs from another checkout's in the project is a fork. It is refused `project-id-conflict`, naming both checkouts and `baley init --new-id`, and nothing is recorded in the project. `config set` writes its file before it admits the checkout, so in a fork the refusal comes after the write and says the change stands. `baley init` has two orders: on an empty chain it records `project.initialized` before checkout admission, and on a chain that holds events it admits the checkout first and records a missing `project.initialized` after, so a fork's plain init is refused before it appends anything. The command line connects no host, so no host section applies to it unless `--host` names one for `config show` or `config interview`, and it records under the hostless key. The server applies its host's sections to the policy the step records only. The checkout's facts come from the no-host policy's remote, as the command line's do, so one checkout records one remote URL whichever process admitted it, and checkout admission carries the version stored for the checkout and no host. A refusal on the server answers `failed` with `recorded: false`, naming the owner's step where there is one, and the server runs no `baley init` or `baley config` itself. The policy step is a transaction of its own, as on the command line, so a ledger fault at the step can follow a `checkout.seen` that was already recorded ([0012](0012-host-interface.md) section 8). An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before checkout admission or the step records anything. `baley init` refuses before it writes a file or opens the ledger, except for the fork refusal, which needs the ledger. `doctor` is the exception to the settings refusal: it reports such a file as a finding and keeps checking. The host's request carries no directory that selects the project. The guard discovers the project from the same directory but takes none of this route: it gathers no checkout facts, admits no checkout and records no `policy.effective`, and its own use of the policy is T10's.*
 
 ## 9. Settings
 
