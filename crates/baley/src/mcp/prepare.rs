@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 
 use baley_core::policy::recorded::{RecordedPolicy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile, Unavailable};
-use baley_store::{Admin, ProjectId, ServerCaller, StoreError};
+use baley_store::{
+    Actor, Admin, Caller, Command, CommandKind, Hash, ProjectId, RequestId, ServerCaller,
+    StoreError,
+};
 use serde_json::Value;
 
 use crate::discovery::{self, Ancestor, Discovery, PROJECT_FILE};
@@ -73,6 +76,50 @@ pub fn judge_settings(reads: &Reads, host: Host, root: &Path) -> Result<WritePol
     let with_host = policy_step::build(reads, Some(host)).map_err(|e| e.to_string())?;
     let recorded = recorded_policy(root, &with_host).map_err(|e| e.to_string())?;
     Ok(WritePolicies { facts, recorded })
+}
+
+/// The identity a served write supplies, which preparation carries into the
+/// domain command unchanged.
+///
+/// The digest covers the operation and its meaningful input and leaves out
+/// the policy version, which travels only in the command's `policy_version`.
+/// So a retry after a policy edit is still a replay of the same request. The
+/// command line's digests keep the version, which is safe only because its
+/// request ids are always fresh. The request id is an operation argument,
+/// never derived from the JSON-RPC id, which repeats after a restart and
+/// across subagents sharing one session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteRequest {
+    /// The command kind, such as `capture.record`.
+    pub kind: CommandKind,
+    /// The request id the operation was given.
+    pub request_id: RequestId,
+    /// The operation's digest, with no policy version in it.
+    pub digest: Hash,
+}
+
+/// The domain command a prepared write runs: the supplied kind, request id
+/// and digest, an empty scope, the policy version the step returned, the
+/// server time, Baley as the actor and the server caller. It never computes
+/// or extends the digest.
+pub fn prepared_command(
+    project: &ProjectId,
+    request: &WriteRequest,
+    policy_version: u64,
+    at: &str,
+    caller: &ServerCaller,
+) -> Command {
+    Command {
+        project: project.clone(),
+        kind: request.kind.clone(),
+        request_id: request.request_id.clone(),
+        digest: request.digest,
+        scope: Vec::new(),
+        policy_version,
+        recorded_at: at.into(),
+        actor: Actor::Baley,
+        caller: Some(Caller::Server(caller.clone())),
+    }
 }
 
 /// Why a store step could not answer.
@@ -545,5 +592,68 @@ mod tests {
         let refusal = judge_settings(&reads(SECTIONED), Host::ClaudeCode, root).unwrap_err();
         assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
         assert!(refusal.contains("is not UTF-8"), "{refusal}");
+    }
+
+    const AT: &str = "2026-10-04T09:30:00Z";
+    const REQUEST: &str = "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f";
+
+    fn write_request(digest: u8) -> WriteRequest {
+        WriteRequest {
+            kind: CommandKind("capture.record".into()),
+            request_id: RequestId(REQUEST.into()),
+            digest: Hash::from_hex(&format!("{digest:02x}").repeat(32)).unwrap(),
+        }
+    }
+
+    fn command(request: &WriteRequest, version: u64) -> Command {
+        prepared_command(
+            &ProjectId(ID.into()),
+            request,
+            version,
+            AT,
+            &caller("/real/r/p", "/w"),
+        )
+    }
+
+    #[test]
+    fn a_prepared_command_attributed_to_the_owner_instead_of_baley() {
+        assert_eq!(command(&write_request(1), 3).actor, Actor::Baley);
+    }
+
+    #[test]
+    fn a_prepared_command_that_carries_another_version_or_digest_than_supplied() {
+        let request = write_request(1);
+        let first = command(&request, 3);
+        let second = command(&request, 9);
+        assert_eq!(first.policy_version, 3);
+        assert_eq!(second.policy_version, 9);
+        assert_eq!(first.digest, request.digest);
+        assert_eq!(
+            second.digest, first.digest,
+            "the version leaked into the digest"
+        );
+        assert_ne!(command(&write_request(2), 3).digest, first.digest);
+    }
+
+    #[test]
+    fn a_prepared_command_recorded_at_another_time_than_the_supplied_one() {
+        assert_eq!(command(&write_request(1), 3).recorded_at, AT);
+    }
+
+    #[test]
+    fn a_prepared_command_without_the_server_caller() {
+        let prepared = command(&write_request(1), 3);
+        assert_eq!(
+            prepared.caller,
+            Some(Caller::Server(caller("/real/r/p", "/w")))
+        );
+    }
+
+    #[test]
+    fn a_prepared_command_whose_request_id_is_the_calls_identity_instead_of_the_supplied_id() {
+        let prepared = command(&write_request(1), 3);
+        assert_eq!(prepared.request_id, RequestId(REQUEST.into()));
+        assert_eq!(prepared.kind, CommandKind("capture.record".into()));
+        assert!(prepared.scope.is_empty());
     }
 }
