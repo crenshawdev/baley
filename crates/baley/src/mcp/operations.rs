@@ -7,6 +7,8 @@
 //! `operation-unavailable` naming its replacing build, so a caller that knows
 //! the old spelling learns where it went.
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::envelope::Refusal;
@@ -272,6 +274,117 @@ pub fn operation_unavailable(tool: Tool, spelling: &str, build: u32) -> Value {
     .value()
 }
 
+/// The request shapes of the operations this server serves. They live here,
+/// not in the binary's service types, so the library owns their schema.
+#[derive(Deserialize, JsonSchema)]
+#[serde(tag = "operation", deny_unknown_fields)]
+enum RequestShape {
+    #[serde(rename = "help")]
+    Help { name: Option<String> },
+    #[serde(rename = "schema")]
+    Schema {
+        /// The tool whose operation is requested: apply or query.
+        tool: String,
+        #[serde(rename = "for")]
+        operation: String,
+        /// One-based part for schemas over 24,576 bytes; defaults to 1.
+        /// Concatenate the returned bodies in order, then parse the JSON.
+        part: Option<usize>,
+    },
+}
+
+/// The most bytes of one schema part, cut at a UTF-8 boundary.
+pub const SCHEMA_PART_BOUND: usize = 24_576;
+
+fn invalid_arguments(reason: impl Into<String>) -> Value {
+    Refusal::new("invalid-arguments", reason)
+        .slot("arguments")
+        .value()
+}
+
+/// Answers `help` for the optional `name`. An unknown field is refused.
+pub fn help_answer(arguments: &Value) -> Value {
+    match serde_json::from_value::<RequestShape>(arguments.clone()) {
+        Ok(RequestShape::Help { name }) => crate::help::table::answer(name.as_deref()),
+        Ok(_) => invalid_arguments("these are not help arguments"),
+        Err(error) => invalid_arguments(error.to_string()),
+    }
+}
+
+/// Answers `schema`: the request shape of one operation, in parts when large.
+pub fn schema_answer(arguments: &Value) -> Value {
+    let (tool, operation, part) = match serde_json::from_value::<RequestShape>(arguments.clone()) {
+        Ok(RequestShape::Schema {
+            tool,
+            operation,
+            part,
+        }) => (tool, operation, part),
+        Ok(_) => return invalid_arguments("these are not schema arguments"),
+        Err(error) => return invalid_arguments(error.to_string()),
+    };
+    let which = match tool.as_str() {
+        "apply" => Tool::Apply,
+        "query" => Tool::Query,
+        _ => {
+            return Refusal::new("unknown-tool", "schema tool must be apply or query")
+                .slot("tool")
+                .value();
+        }
+    };
+    match lookup(which, Some(&operation)) {
+        Lookup::Unavailable { build } => operation_unavailable(which, &operation, build),
+        Lookup::Unknown => Refusal::new(
+            "unknown-operation",
+            format!("no baley_{tool} operation is named `{operation}`"),
+        )
+        .slot("for")
+        .value(),
+        Lookup::Available { .. } => match served_schema(&operation) {
+            Some(schema) => schema_part(&tool, &operation, &schema, part),
+            None => unknown_operation(which, Some(&operation)),
+        },
+    }
+}
+
+/// The schema of one served operation, from the library's request shapes.
+fn served_schema(operation: &str) -> Option<Value> {
+    let root = serde_json::to_value(schemars::schema_for!(RequestShape)).ok()?;
+    root["oneOf"]
+        .as_array()?
+        .iter()
+        .find(|variant| variant["properties"]["operation"]["const"] == operation)
+        .cloned()
+}
+
+fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>) -> Value {
+    let serialized = serde_json::to_string(schema).expect("operation schema JSON");
+    let mut remaining = serialized.as_str();
+    let mut parts = Vec::new();
+    while !remaining.is_empty() {
+        let mut end = remaining.len().min(SCHEMA_PART_BOUND);
+        while !remaining.is_char_boundary(end) {
+            end -= 1;
+        }
+        parts.push(&remaining[..end]);
+        remaining = &remaining[end..];
+    }
+    let part = part.unwrap_or(1);
+    let Some(body) = part.checked_sub(1).and_then(|index| parts.get(index)) else {
+        return Refusal::new(
+            "schema-part-not-found",
+            "the requested schema part is absent",
+        )
+        .slot("part")
+        .value();
+    };
+    if serialized.len() <= SCHEMA_PART_BOUND {
+        return serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema});
+    }
+    let next = (part < parts.len()).then_some(part + 1);
+    serde_json::json!({"status":"ok","tool":tool,"operation":operation,
+        "bound":SCHEMA_PART_BOUND,"part":part,"body":body,"next":next})
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -506,5 +619,122 @@ mod tests {
         assert_eq!(refusal["slot"], "operation");
         assert_eq!(refusal["details"], json!({"build": 3}));
         assert!(refusal["reason"].as_str().unwrap().contains("Build 3"));
+    }
+    #[test]
+    fn help_answers_what_the_help_table_answers_for_the_same_name() {
+        assert_eq!(
+            help_answer(&json!({"operation": "help"})),
+            crate::help::table::answer(None)
+        );
+        assert_eq!(
+            help_answer(&json!({"operation": "help", "name": "baley_query"})),
+            crate::help::table::answer(Some("baley_query"))
+        );
+    }
+
+    #[test]
+    fn help_with_an_unknown_field_is_refused_in_slot_arguments() {
+        let answer = help_answer(&json!({"operation": "help", "bogus": 1}));
+        assert_eq!(answer["status"], "refused");
+        assert_eq!(answer["code"], "invalid-arguments");
+        assert_eq!(answer["slot"], "arguments");
+    }
+
+    #[test]
+    fn schema_for_the_two_served_operations_is_an_ok_answer() {
+        for operation in ["help", "schema"] {
+            let answer =
+                schema_answer(&json!({"operation": "schema", "tool": "query", "for": operation}));
+            assert_eq!(answer["status"], "ok", "{operation}: {answer}");
+            assert_eq!(answer["tool"], "query");
+            assert_eq!(answer["operation"], operation);
+            assert_eq!(
+                answer["schema"]["properties"]["operation"]["const"],
+                operation
+            );
+        }
+    }
+
+    #[test]
+    fn schema_for_a_retired_operation_names_its_build() {
+        let answer =
+            schema_answer(&json!({"operation": "schema", "tool": "apply", "for": "execution-run"}));
+        assert_eq!(answer["code"], "operation-unavailable");
+        assert_eq!(answer["details"], json!({"build": 5}));
+    }
+
+    #[test]
+    fn schema_for_an_unrecognized_operation_is_unknown_operation_in_slot_for() {
+        let answer = schema_answer(&json!({"operation": "schema", "tool": "query", "for": "nope"}));
+        assert_eq!(answer["code"], "unknown-operation");
+        assert_eq!(answer["slot"], "for");
+    }
+
+    #[test]
+    fn schema_for_another_tool_is_unknown_tool_in_slot_tool() {
+        let answer = schema_answer(&json!({"operation": "schema", "tool": "other", "for": "help"}));
+        assert_eq!(answer["code"], "unknown-tool");
+        assert_eq!(answer["slot"], "tool");
+    }
+
+    #[test]
+    fn schema_parts_round_trip_utf8_and_escaped_json() {
+        let schema = json!({"description":"é🦀\"\\".repeat(SCHEMA_PART_BOUND)});
+        let mut combined = String::new();
+        let mut part = None;
+        let mut number = 1;
+        loop {
+            let answer = schema_part("apply", "synthetic", &schema, part);
+            assert_eq!(answer["status"], "ok");
+            assert_eq!(answer["tool"], "apply");
+            assert_eq!(answer["operation"], "synthetic");
+            assert_eq!(answer["part"], number);
+            assert_eq!(answer["bound"], SCHEMA_PART_BOUND);
+            assert!(answer.get("schema").is_none());
+            let body = answer["body"].as_str().unwrap();
+            assert!(!body.is_empty() && body.len() <= SCHEMA_PART_BOUND);
+            combined.push_str(body);
+            if answer["next"].is_null() {
+                break;
+            }
+            number += 1;
+            assert_eq!(answer["next"], number);
+            part = Some(number);
+        }
+        assert!(number > 1);
+        assert_eq!(combined, serde_json::to_string(&schema).unwrap());
+        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), schema);
+    }
+
+    #[test]
+    fn a_schema_at_the_bound_is_served_whole_and_one_byte_over_is_paged() {
+        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
+        assert_eq!(
+            serde_json::to_vec(&schema).unwrap().len(),
+            SCHEMA_PART_BOUND
+        );
+        assert_eq!(
+            schema_part("query", "synthetic", &schema, None),
+            json!({"status":"ok","tool":"query","operation":"synthetic","schema":schema})
+        );
+        let oversized = json!("x".repeat(SCHEMA_PART_BOUND - 1));
+        let first = schema_part("query", "synthetic", &oversized, None);
+        assert_eq!(first["part"], 1);
+        assert_eq!(first["next"], 2);
+        assert_eq!(first["body"].as_str().unwrap().len(), SCHEMA_PART_BOUND);
+        let last = schema_part("query", "synthetic", &oversized, Some(2));
+        assert_eq!(last["body"].as_str().unwrap().len(), 1);
+        assert!(last["next"].is_null());
+    }
+
+    #[test]
+    fn a_schema_part_of_0_past_the_end_or_usize_max_is_refused_as_not_found() {
+        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
+        for part in [0, 2, usize::MAX] {
+            let refused = schema_part("query", "synthetic", &schema, Some(part));
+            assert_eq!(refused["status"], "refused");
+            assert_eq!(refused["slot"], "part");
+            assert_eq!(refused["code"], "schema-part-not-found");
+        }
     }
 }

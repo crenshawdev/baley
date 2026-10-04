@@ -100,23 +100,7 @@ pub mod read_service;
 #[path = "verification_service.rs"]
 pub mod verification_service;
 
-/// What `baley_version` reports on success.
-///
-/// A struct rather than a bare string because an `ok` envelope's payload sits
-/// beside the `status` tag at the top level, so it has to have named fields
-/// (see `envelope::Envelope`). Three of them, and each answers a different
-/// question a user actually asks when a session behaves unexpectedly: which
-/// release, and which of the four release archives.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct VersionReport {
-    /// The crate version of the running binary, matching the release tag it
-    /// was cut from.
-    pub version: String,
-    /// The operating system this binary was built for: `linux` or `macos`.
-    pub os: String,
-    /// The CPU architecture this binary was built for: `x86_64` or `aarch64`.
-    pub arch: String,
-}
+pub use baley::mcp::tools::VersionReport;
 
 /// One resident and one startup-bound planning root per public session.
 #[derive(Clone)]
