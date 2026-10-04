@@ -1675,3 +1675,67 @@ fn an_on_protected_name_rendered_as_anything_but_a_toml_string_is_caught() {
         "[git]\non_protected = \"refuse\"\n"
     );
 }
+
+#[test]
+fn a_report_of_the_guard_settings_missing_their_kind_default_or_project_scope_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = render_show(&ShowRequest {
+        schema: Schema::standard(),
+        host: None,
+        names: &[
+            "git.protected_branches",
+            "git.on_protected",
+            "git.guard_hard_fail",
+        ],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(
+        lines,
+        vec![
+            "git.protected_branches: kind list of branch names, default [\"main\", \"master\"], scope project",
+            "  global: not set",
+            "  project: not set",
+            "  effective: [\"main\", \"master\"] from default",
+            "git.on_protected: kind one of ask, refuse or allow, default \"ask\", scope project",
+            "  global: not set",
+            "  project: not set",
+            "  effective: \"ask\" from default",
+            "git.guard_hard_fail: kind boolean, default false, scope project",
+            "  global: not set",
+            "  project: not set",
+            "  effective: false from default",
+            "global file: /c/config.toml",
+        ]
+    );
+}
+
+#[test]
+fn a_branch_list_shown_without_quotes_or_in_file_order_is_caught() {
+    let file = settings_file(
+        "/r/baley.toml",
+        "git.protected_branches = [\"release/1\", \"ma\\\"in\"]\n",
+    );
+    let parsed = parse_layer(&file, FileLayer::Project, Schema::standard()).unwrap();
+    let layers = ShowLayers {
+        global: None,
+        working: Some(parsed.clone()),
+        head: Some(parsed),
+    };
+    let lines = render_show(&ShowRequest {
+        schema: Schema::standard(),
+        host: None,
+        names: &["git.protected_branches"],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(lines[2], "  project: [\"release/1\", \"ma\\\"in\"]");
+}

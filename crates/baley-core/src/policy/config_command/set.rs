@@ -112,6 +112,7 @@ impl fmt::Display for SetRefusal {
                             .collect();
                         format!("one of {}", names.join(", "))
                     }
+                    Kind::BranchList => "a list of branch names".to_owned(),
                 };
                 write!(
                     f,
@@ -171,6 +172,8 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::ModelName => (!text.is_empty()).then(|| Value::ModelName(text.to_owned())),
         Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
         Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
+        // A list is edited in `baley.toml`, so no command-line text is one.
+        Kind::BranchList => None,
     }
 }
 

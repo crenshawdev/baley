@@ -48,6 +48,8 @@ pub enum Value {
     RemoteName(String),
     /// What to do with a commit on a protected branch.
     OnProtected(OnProtected),
+    /// Branch names as written, in file order. May be empty.
+    BranchList(Vec<String>),
 }
 
 /// One setting a file writes, typed and within its scope.
@@ -212,6 +214,8 @@ pub enum Expected {
     RemoteName,
     /// One of the `git.on_protected` names.
     OnProtected,
+    /// A list of branch names.
+    BranchList,
 }
 impl From<Kind> for Expected {
     fn from(kind: Kind) -> Expected {
@@ -221,6 +225,7 @@ impl From<Kind> for Expected {
             Kind::ModelName => Expected::ModelName,
             Kind::RemoteName => Expected::RemoteName,
             Kind::OnProtected => Expected::OnProtected,
+            Kind::BranchList => Expected::BranchList,
         }
     }
 }
@@ -285,6 +290,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::ModelName => "a model name".to_owned(),
                 Expected::RemoteName => "a remote name".to_owned(),
                 Expected::OnProtected => format!("one of {}", on_protected_names()),
+                Expected::BranchList => "a list of branch names".to_owned(),
             };
             write!(
                 f,
@@ -298,19 +304,22 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
             line,
             column,
         } => {
-            write!(f, "{path}:{line}:{column}: {name} is ")?;
+            write!(f, "{path}:{line}:{column}: {name} ")?;
             // Escaped so a value holding a line break stays on one line.
             let written = written.escape_debug();
             match kind {
-                Kind::Rung => write!(f, "\"{written}\", which is not a rung ({})", rungs()),
-                Kind::ModelName => f.write_str("empty; write a model name or remove the line"),
-                Kind::RemoteName => f.write_str("empty; write a remote name or remove the line"),
-                Kind::Bool => write!(f, "\"{written}\", which is not a boolean"),
+                Kind::Rung => write!(f, "is \"{written}\", which is not a rung ({})", rungs()),
+                Kind::ModelName => f.write_str("is empty; write a model name or remove the line"),
+                Kind::RemoteName => f.write_str("is empty; write a remote name or remove the line"),
+                Kind::Bool => write!(f, "is \"{written}\", which is not a boolean"),
                 Kind::OnProtected => write!(
                     f,
-                    "\"{written}\", which is not one of {}",
+                    "is \"{written}\", which is not one of {}",
                     on_protected_names()
                 ),
+                Kind::BranchList => {
+                    f.write_str("holds an empty branch name; remove it or write a name")
+                }
             }
         }
         Fault::Project {
@@ -517,34 +526,53 @@ fn display(segments: &[&str]) -> String {
     quoted.join(".")
 }
 
+/// What `typed` found wrong, with the byte offset of the part at fault when it
+/// is not the whole value (an element of a list).
 enum Mismatch {
-    Type(&'static str),
-    Grammar(String),
+    Type(&'static str, Option<usize>),
+    Grammar(String, Option<usize>),
 }
 
 fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
-    let wrong = || Mismatch::Type(value.type_str());
+    let wrong = || Mismatch::Type(value.type_str(), None);
     match kind {
         Kind::Bool => value.as_bool().map(Value::Bool).ok_or_else(wrong),
         Kind::Rung => {
             let written = value.as_str().ok_or_else(wrong)?;
             Rung::parse(written)
                 .map(Value::Rung)
-                .ok_or_else(|| Mismatch::Grammar(written.to_owned()))
+                .ok_or_else(|| Mismatch::Grammar(written.to_owned(), None))
         }
         Kind::ModelName => match value.as_str().ok_or_else(wrong)? {
-            "" => Err(Mismatch::Grammar(String::new())),
+            "" => Err(Mismatch::Grammar(String::new(), None)),
             name => Ok(Value::ModelName(name.to_owned())),
         },
         Kind::RemoteName => match value.as_str().ok_or_else(wrong)? {
-            "" => Err(Mismatch::Grammar(String::new())),
+            "" => Err(Mismatch::Grammar(String::new(), None)),
             name => Ok(Value::RemoteName(name.to_owned())),
         },
         Kind::OnProtected => {
             let written = value.as_str().ok_or_else(wrong)?;
             OnProtected::parse(written)
                 .map(Value::OnProtected)
-                .ok_or_else(|| Mismatch::Grammar(written.to_owned()))
+                .ok_or_else(|| Mismatch::Grammar(written.to_owned(), None))
+        }
+        Kind::BranchList => {
+            let DeValue::Array(items) = value else {
+                return Err(wrong());
+            };
+            let mut names = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                let at = Some(item.span().start);
+                let Some(name) = item.get_ref().as_str() else {
+                    return Err(Mismatch::Type(item.get_ref().type_str(), at));
+                };
+                if name.trim().is_empty() {
+                    return Err(Mismatch::Grammar(name.to_owned(), at));
+                }
+                names.push(name.to_owned());
+            }
+            Ok(Value::BranchList(names))
         }
     }
 }
@@ -646,16 +674,17 @@ impl<'a> Walk<'a> {
             Ok(value) => value,
             Err(mismatch) => {
                 let name = Self::name(path, host);
-                let (line, column) = self.at(item.span().start);
+                let (Mismatch::Type(_, inside) | Mismatch::Grammar(_, inside)) = &mismatch;
+                let (line, column) = self.at(inside.unwrap_or(item.span().start));
                 self.faults.push(match mismatch {
-                    Mismatch::Type(found) => Fault::WrongType {
+                    Mismatch::Type(found, _) => Fault::WrongType {
                         name,
                         expected: entry.kind.into(),
                         found,
                         line,
                         column,
                     },
-                    Mismatch::Grammar(written) => Fault::OutsideGrammar {
+                    Mismatch::Grammar(written, _) => Fault::OutsideGrammar {
                         name,
                         kind: entry.kind,
                         written,

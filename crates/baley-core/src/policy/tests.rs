@@ -131,7 +131,7 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 16);
+    assert_eq!(schema.entries().len(), 17);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -146,6 +146,23 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
     assert_eq!(
         (remote.kind, remote.default, remote.scope, remote.owner),
         (Kind::RemoteName, Absent, Scope::Project, "0001")
+    );
+    let branches = schema
+        .get("git.protected_branches")
+        .expect("git.protected_branches is missing");
+    assert_eq!(
+        (
+            branches.kind,
+            branches.default,
+            branches.scope,
+            branches.owner
+        ),
+        (
+            Kind::BranchList,
+            Builtin::BranchList(&["main", "master"]),
+            Scope::Project,
+            "0010"
+        )
     );
     for (name, kind, default) in [
         (
@@ -340,7 +357,7 @@ fn an_unknown_name_gives_a_diagnostic_and_changes_nothing() {
                 roles.planner.foo = 1\n\
                 roles.nobody.effort = \"low\"\n\
                 [git]\n\
-                protected_branches = [\"main\"]\n\
+                branches_to_guard = [\"main\"]\n\
                 [project]\n\
                 id = \"x\"\n";
     let policy = standard(None, Some(text), None).unwrap();
@@ -368,13 +385,13 @@ fn an_unknown_name_gives_a_diagnostic_and_changes_nothing() {
         [
             ("roles.planner.foo", 2, unknown),
             ("roles.nobody.effort", 3, unknown),
-            ("git.protected_branches", 5, unknown),
+            ("git.branches_to_guard", 5, unknown),
             ("project.id", 7, unknown),
         ]
     );
     assert_eq!(
         policy.diagnostics[2].to_string(),
-        "/c/config.toml:5:1: git.protected_branches is not a setting Baley reads and was ignored"
+        "/c/config.toml:5:1: git.branches_to_guard is not a setting Baley reads and was ignored"
     );
 }
 
@@ -680,7 +697,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 16);
+        assert_eq!(policy.settings.len(), 17);
         assert!(
             policy
                 .settings
@@ -1331,5 +1348,98 @@ fn guard_settings_in_the_global_file_applying_instead_of_being_ignored_is_caught
     assert_eq!(
         value_of(&policy, "git.guard_hard_fail").value,
         Some(Value::Bool(false))
+    );
+}
+
+fn branches(policy: &EffectivePolicy) -> &Option<Value> {
+    &value_of(policy, "git.protected_branches").value
+}
+
+fn names(list: &[&str]) -> Option<Value> {
+    Some(Value::BranchList(
+        list.iter().map(|n| n.to_string()).collect(),
+    ))
+}
+
+#[test]
+fn a_bare_string_taken_as_a_one_name_branch_list_is_caught() {
+    let refusal = guard_fault("[git]\nprotected_branches = \"main\"\n");
+    assert_eq!(
+        refusal.fault,
+        Fault::WrongType {
+            name: "git.protected_branches".into(),
+            expected: Expected::BranchList,
+            found: "string",
+            line: 2,
+            column: 22,
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml:2:22: git.protected_branches is a string, not a list of branch names"
+    );
+}
+
+#[test]
+fn a_blank_branch_name_dropped_so_the_defaults_return_is_caught() {
+    for (text, line, column) in [
+        ("git.protected_branches = [\"main\", \"\"]\n", 1, 35),
+        ("git.protected_branches = [\"  \"]\n", 1, 27),
+    ] {
+        let refusal = guard_fault(text);
+        assert!(
+            matches!(
+                refusal.fault,
+                Fault::OutsideGrammar { kind: Kind::BranchList, line: l, column: c, .. }
+                    if (l, c) == (line, column)
+            ),
+            "{text}: {refusal:?}"
+        );
+        assert!(
+            refusal.to_string().ends_with(
+                "git.protected_branches holds an empty branch name; remove it or write a name"
+            ),
+            "{refusal}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_branch_list_mapped_to_the_defaults_is_caught() {
+    let policy = standard(None, None, Some("git.protected_branches = []\n")).unwrap();
+    assert_eq!(branches(&policy), &names(&[]));
+    assert_eq!(
+        value_of(&policy, "git.protected_branches").source.layer,
+        Layer::Project
+    );
+}
+
+#[test]
+fn a_non_string_branch_list_element_that_is_not_a_type_fault_at_the_element_is_caught() {
+    let refusal = guard_fault("git.protected_branches = [\"main\", 1]\n");
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml:1:35: git.protected_branches is an integer, not a list of branch names"
+    );
+}
+
+#[test]
+fn a_branch_list_that_loses_its_order_or_case_is_caught() {
+    let policy = standard(
+        None,
+        None,
+        Some("git.protected_branches = [\"release/1\", \"Main\", \"main\"]\n"),
+    )
+    .unwrap();
+    assert_eq!(branches(&policy), &names(&["release/1", "Main", "main"]));
+}
+
+#[test]
+fn the_branch_list_missing_main_and_master_with_no_file_is_caught() {
+    let policy = standard(None, None, None).unwrap();
+    assert_eq!(branches(&policy), &names(&["main", "master"]));
+    assert_eq!(
+        value_of(&policy, "git.protected_branches").source,
+        default_source()
     );
 }

@@ -83,6 +83,9 @@ fn toml_value(value: &Value) -> TomlValue {
         Value::ModelName(name) => TomlValue::String(name.clone()),
         Value::RemoteName(name) => TomlValue::String(name.clone()),
         Value::OnProtected(on) => TomlValue::String(on.name().to_owned()),
+        Value::BranchList(names) => {
+            TomlValue::Array(names.iter().cloned().map(TomlValue::String).collect())
+        }
     }
 }
 
@@ -116,6 +119,10 @@ pub(super) fn value_text(value: &Value) -> String {
         Value::Bool(value) => value.to_string(),
         Value::Rung(rung) => format!("\"{}\"", rung.name()),
         Value::OnProtected(on) => format!("\"{}\"", on.name()),
+        Value::BranchList(names) => {
+            let items: Vec<String> = names.iter().map(|name| quoted(name)).collect();
+            format!("[{}]", items.join(", "))
+        }
         Value::ModelName(name) | Value::RemoteName(name) => quoted(name),
     }
 }

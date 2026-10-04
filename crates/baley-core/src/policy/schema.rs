@@ -177,6 +177,8 @@ pub enum Kind {
     RemoteName,
     /// One of `ask`, `refuse` or `allow`.
     OnProtected,
+    /// A list of branch names, possibly empty. Each is a non-blank string.
+    BranchList,
 }
 
 /// A setting's built-in value.
@@ -190,6 +192,8 @@ pub enum Default {
     Rung(Rung),
     /// An `on_protected` value.
     OnProtected(OnProtected),
+    /// A static list of branch names.
+    BranchList(&'static [&'static str]),
 }
 impl Default {
     fn fits(self, kind: Kind) -> bool {
@@ -199,6 +203,7 @@ impl Default {
                 | (Default::Bool(_), Kind::Bool)
                 | (Default::Rung(_), Kind::Rung)
                 | (Default::OnProtected(_), Kind::OnProtected)
+                | (Default::BranchList(_), Kind::BranchList)
         )
     }
 }
@@ -287,6 +292,13 @@ impl Schema {
                 default: Default::Absent,
                 scope: Scope::Project,
                 owner: "0001",
+            });
+            entries.push(Entry {
+                name: "git.protected_branches".into(),
+                kind: Kind::BranchList,
+                default: Default::BranchList(&["main", "master"]),
+                scope: Scope::Project,
+                owner: "0010",
             });
             entries.push(Entry {
                 name: "git.on_protected".into(),

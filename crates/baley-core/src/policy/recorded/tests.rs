@@ -612,3 +612,19 @@ fn the_guard_settings_dropped_from_or_garbled_in_the_recorded_policy_are_caught(
     assert_eq!(set["git.on_protected"], json!("refuse"));
     assert_eq!(set["git.guard_hard_fail"], json!(true));
 }
+
+#[test]
+fn the_branch_list_recorded_as_a_string_or_dropped_is_caught() {
+    assert_eq!(
+        standard_values(None)["git.protected_branches"],
+        json!(["main", "master"])
+    );
+    assert_eq!(
+        standard_values(Some("git.protected_branches = [\"trunk\"]\n"))["git.protected_branches"],
+        json!(["trunk"])
+    );
+    assert_eq!(
+        standard_values(Some("git.protected_branches = []\n"))["git.protected_branches"],
+        json!([])
+    );
+}
