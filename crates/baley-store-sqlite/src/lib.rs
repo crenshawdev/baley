@@ -17,6 +17,7 @@ mod claim;
 mod conformance_tests;
 mod doctor;
 mod export;
+mod health;
 mod ledger;
 #[cfg(test)]
 mod ledger_tests;
@@ -29,6 +30,7 @@ mod store;
 mod transact;
 mod view;
 
+pub use health::StartupHealth;
 pub use queue::{Monotonic, Timing};
 pub use schema::EPOCH;
 pub use store::{Options, SqliteStore, TraceEntry};
