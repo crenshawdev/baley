@@ -57,6 +57,8 @@ pub mod discovery;
 pub mod exec;
 /// Platform configuration and ledger folders.
 pub mod folders;
+/// Classifies one hook call's input for the guard: which tool it is and what it carries.
+pub mod hook_input;
 /// `baley init`: ties a repository to a ledger project.
 pub mod init;
 /// The owner's provider keys, read from `keys.env`.
