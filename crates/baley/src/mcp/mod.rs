@@ -4,3 +4,6 @@
 
 /// The session's project, working directory and ids, gathered once and judged.
 pub mod context;
+
+/// Decodes the calling client in both protocol eras and selects a supported host.
+pub mod client;
