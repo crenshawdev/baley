@@ -18,7 +18,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Accepted, superseded in part by 0020 and 0033 |
 | [0009](0009-served-instructions.md) | Serve instructions from the binary; files on disk are stubs | Accepted |
 | [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted, superseded in part by 0021 |
-| [0011](0011-one-shared-server.md) | Run one shared Baley server per user over stdio and HTTP | Accepted |
+| [0011](0011-one-shared-server.md) | Run one shared Baley server per user over stdio and HTTP | Superseded by 0034 |
 | [0012](0012-optimistic-concurrency.md) | Use optimistic concurrency in the shared server | Accepted |
 | [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted, superseded in part by 0027 |
 | [0014](0014-baley-runs-tests.md) | Have Baley run tests and checks itself and judge by exit code | Accepted |
@@ -35,7 +35,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0025](0025-anchor-tag-objects.md) | Point anchor tags at the empty tree | Accepted |
 | [0026](0026-anchors-read-by-baley.md) | Anchors are read by Baley, and a missing tag ruleset is reported | Accepted, supersedes 0007 in part |
 | [0027](0027-vendor-folders-and-plain-keys.md) | Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env | Accepted, supersedes 0016, and 0002, 0003, 0013, 0015 and 0020 in part, superseded in part by 0032 and 0033 |
-| [0028](0028-one-http-stack.md) | Use one HTTP stack on tokio and hyper: reqwest for outgoing calls, axum for the MCP server | Accepted |
+| [0028](0028-one-http-stack.md) | Use one HTTP stack on tokio and hyper: reqwest for outgoing calls, axum for the MCP server | Accepted, superseded in part by 0034 |
 | [0029](0029-a-host-may-offer-more.md) | Let a host offer more than the floor | Accepted, superseded in part by 0033 |
 | [0030](0030-question-rounds.md) | Put refinement and planning decisions to the owner in dependency-ordered question rounds | Accepted |
 | [0031](0031-one-term-per-concept.md) | Use one term per concept, kept in a glossary: phase, not sprint, and story, not requirement | Accepted, supersedes 0017 in part |

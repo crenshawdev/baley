@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| Status | Accepted |
+| Status | Superseded by 0034 |
 | Date | 2026-09-26 |
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0012: Host interface](../design/0012-host-interface.md) |
 | Supersedes |  |
-| Superseded by | |
+| Superseded by | [0034](0034-one-server-per-session.md) |
 
 ## Context and problem
 
