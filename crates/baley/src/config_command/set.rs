@@ -257,7 +257,7 @@ fn build_policy(
     project: &Project,
     reads: &Reads,
 ) -> Result<(EffectivePolicy, RecordedPolicy), Render> {
-    let policy = policy_step::build(reads).map_err(refusal)?;
+    let policy = policy_step::build(reads, None).map_err(refusal)?;
     let recorded = recorded_policy(&project.root, &policy).map_err(refusal)?;
     Ok((policy, recorded))
 }
@@ -356,7 +356,7 @@ fn prepare(
         }
         None => None,
     };
-    policy_step::build(reads)?;
+    policy_step::build(reads, None)?;
     let (target, base) = match (layer, &seen) {
         (FileLayer::Project, Some((seen, _))) => {
             (seen.folder.join(PROJECT_FILE), seen.working.clone()?)

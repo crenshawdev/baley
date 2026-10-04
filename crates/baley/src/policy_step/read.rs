@@ -1,10 +1,10 @@
 //! The policy's reads: gathering the global file and HEAD's copy of the
-//! project file, and building the command line's policy from them.
+//! project file, and building the effective policy from them.
 
 use std::path::Path;
 
 use baley_core::policy::{
-    EffectivePolicy, FileLayer, Schema, SettingsFile, Unavailable, merge, parse_layer,
+    EffectivePolicy, FileLayer, Host, Schema, SettingsFile, Unavailable, merge, parse_layer,
 };
 
 use crate::committed::{self, Committed};
@@ -36,12 +36,16 @@ pub fn gather(
     Reads { global, head }
 }
 
-/// The command line's policy from `reads`, or the first refusal: the global
+/// The effective policy from `reads`, or the first refusal: the global
 /// read's, then HEAD's, then the global file's parse, then the project
 /// file's. The project layer is HEAD's copy alone, so the pending note and
 /// any uncommitted edit never reach the policy. A fault in HEAD's copy is
 /// labelled as HEAD's, since it carries the working-tree file's path.
-pub fn build(reads: &Reads) -> Result<EffectivePolicy, Unavailable> {
+///
+/// The host is the caller's: none for the command line, which then applies
+/// no `[host.*]` section and names no host, and the session's host for the
+/// server.
+pub fn build(reads: &Reads, host: Option<Host>) -> Result<EffectivePolicy, Unavailable> {
     let global = reads.global.as_ref().map_err(Clone::clone)?;
     let project = match &reads.head {
         None => None,
@@ -55,7 +59,7 @@ pub fn build(reads: &Reads) -> Result<EffectivePolicy, Unavailable> {
     let project = project
         .map(|file| parse_layer(file, FileLayer::Project, schema).map_err(Unavailable::at_head))
         .transpose()?;
-    Ok(merge(schema, None, global.as_ref(), project.as_ref()))
+    Ok(merge(schema, host, global.as_ref(), project.as_ref()))
 }
 
 #[cfg(test)]
@@ -93,7 +97,7 @@ mod tests {
             global: Ok(Some(file(GLOBAL, "escalate_on_failure = [\n"))),
             head: None,
         };
-        let refusal = build(&reads).unwrap_err();
+        let refusal = build(&reads, None).unwrap_err();
         assert_eq!(refusal.path, Path::new(GLOBAL));
         assert!(
             refusal
@@ -107,7 +111,7 @@ mod tests {
             global: Err(failed.clone()),
             head: None,
         };
-        let refusal = build(&reads).unwrap_err();
+        let refusal = build(&reads, None).unwrap_err();
         assert_eq!(refusal, failed);
         assert_eq!(
             refusal.to_string(),
@@ -121,7 +125,7 @@ mod tests {
             global: Ok(None),
             head: head("escalate_on_failure = \"yes\"\n", None),
         };
-        let refusal = build(&reads).unwrap_err();
+        let refusal = build(&reads, None).unwrap_err();
         assert_eq!(refusal.path, Path::new(PROJECT));
         assert!(
             matches!(
@@ -146,7 +150,7 @@ mod tests {
             global: Ok(None),
             head: Some(Err(failed.clone())),
         };
-        let refusal = build(&reads).unwrap_err();
+        let refusal = build(&reads, None).unwrap_err();
         assert_eq!(refusal, failed);
         assert!(
             refusal
@@ -163,13 +167,13 @@ mod tests {
             global: Err(global.clone()),
             head: Some(Err(unreadable(PROJECT, "HEAD's copy: git failed"))),
         };
-        assert_eq!(build(&reads).unwrap_err(), global);
+        assert_eq!(build(&reads, None).unwrap_err(), global);
 
         let reads = Reads {
             global: Ok(Some(file(GLOBAL, "escalate_on_failure = [\n"))),
             head: head("escalate_on_failure = \"yes\"\n", None),
         };
-        assert_eq!(build(&reads).unwrap_err().path, Path::new(GLOBAL));
+        assert_eq!(build(&reads, None).unwrap_err().path, Path::new(GLOBAL));
     }
 
     #[test]
@@ -180,15 +184,21 @@ mod tests {
         let differs = Pending::Differs {
             path: PROJECT.into(),
         };
-        let noted = build(&Reads {
-            global: Ok(None),
-            head: head(committed, Some(differs)),
-        })
+        let noted = build(
+            &Reads {
+                global: Ok(None),
+                head: head(committed, Some(differs)),
+            },
+            None,
+        )
         .unwrap();
-        let clean = build(&Reads {
-            global: Ok(None),
-            head: head(committed, None),
-        })
+        let clean = build(
+            &Reads {
+                global: Ok(None),
+                head: head(committed, None),
+            },
+            None,
+        )
         .unwrap();
 
         let setting = &noted.settings["escalate_on_failure"];
@@ -203,15 +213,48 @@ mod tests {
 
     #[test]
     fn no_working_tree_file_gives_a_policy_with_no_project_layer() {
-        let policy = build(&Reads {
-            global: Ok(Some(file(GLOBAL, "escalate_on_failure = true\n"))),
-            head: None,
-        })
+        let policy = build(
+            &Reads {
+                global: Ok(Some(file(GLOBAL, "escalate_on_failure = true\n"))),
+                head: None,
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(policy.project, None);
         assert_eq!(policy.host, None);
         let setting = &policy.settings["escalate_on_failure"];
         assert_eq!(setting.value, Some(Value::Bool(true)));
         assert_eq!(setting.source.layer, Layer::Global);
+    }
+
+    // The file sets the value at the top level and again in its host section,
+    // so each build below shows which of the two it applied.
+    const SECTIONED: &str =
+        "escalate_on_failure = false\n[host.claude-code]\nescalate_on_failure = true\n";
+
+    fn sectioned() -> Reads {
+        Reads {
+            global: Ok(None),
+            head: head(SECTIONED, None),
+        }
+    }
+
+    #[test]
+    fn a_claude_code_build_applies_the_host_section_and_names_the_host() {
+        let policy = build(&sectioned(), Some(Host::ClaudeCode)).unwrap();
+        assert_eq!(policy.host, Some(Host::ClaudeCode));
+        let setting = &policy.settings["escalate_on_failure"];
+        assert_eq!(setting.value, Some(Value::Bool(true)));
+        assert_eq!(setting.source.layer, Layer::ProjectHost);
+    }
+
+    #[test]
+    fn a_build_with_no_host_keeps_the_top_level_value_and_names_no_host() {
+        let policy = build(&sectioned(), None).unwrap();
+        assert_eq!(policy.host, None);
+        let setting = &policy.settings["escalate_on_failure"];
+        assert_eq!(setting.value, Some(Value::Bool(false)));
+        assert_eq!(setting.source.layer, Layer::Project);
     }
 }

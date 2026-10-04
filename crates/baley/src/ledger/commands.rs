@@ -199,7 +199,7 @@ fn purge_policy_version(
         return Ok(0);
     };
     let reads = policy_step::gather(config, &root, working.as_ref(), &mut crate::process::System);
-    let policy = policy_step::build(&reads).map_err(|e| Render::refusal(e.to_string()))?;
+    let policy = policy_step::build(&reads, None).map_err(|e| Render::refusal(e.to_string()))?;
     let recorded = recorded_policy(&root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
     let site = Site {
         root: &root,
@@ -317,7 +317,7 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
             Gathered {
                 settings: Settings {
                     project_file: Some(ProjectFile { path, id }),
-                    policy: policy_step::build(&reads),
+                    policy: policy_step::build(&reads, None),
                     pending: command_plan::pending_note(&reads),
                 },
                 root: Some(root),
@@ -331,7 +331,7 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
             Gathered {
                 settings: Settings {
                     project_file: None,
-                    policy: policy_step::build(&reads),
+                    policy: policy_step::build(&reads, None),
                     pending: command_plan::pending_note(&reads),
                 },
                 root: None,

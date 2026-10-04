@@ -498,7 +498,7 @@ pub fn prepare(
 ) -> Result<Prepared, String> {
     let existing = observe_file(file).map_err(|e| e.to_string())?;
     let naming = name(root, given, existing.as_ref()).map_err(|e| e.to_string())?;
-    let policy = policy_step::build(reads).map_err(|e| e.to_string())?;
+    let policy = policy_step::build(reads, None).map_err(|e| e.to_string())?;
     let recorded = recorded_policy(root, &policy).map_err(|e| e.to_string())?;
     Ok(Prepared {
         existing,
