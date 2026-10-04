@@ -3,7 +3,10 @@
 //! nothing: a link names the canonical path it leads to. Nothing here touches
 //! a disk, reads the environment or starts a program.
 
-use super::{Entry, Lookup, Part, ResolveFailure, resolve_existing_prefix, resolve_target};
+use super::{
+    Entry, Lookup, Part, ResolveFailure, contains, is_inside, resolve_existing_prefix,
+    resolve_target,
+};
 use std::collections::BTreeMap;
 use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
@@ -64,6 +67,21 @@ impl Tree {
             path.into(),
             Seen {
                 canonical: to.into(),
+                entry,
+            },
+        );
+        self
+    }
+
+    /// A second name for the listed path `of`: the same identity and its own
+    /// canonical path. It stands for a hard link, and for a case-variant
+    /// spelling on a case-insensitive volume.
+    fn hard(mut self, path: &str, of: &str) -> Self {
+        let entry = self.paths[Path::new(of)].entry;
+        self.paths.insert(
+            path.into(),
+            Seen {
+                canonical: path.into(),
                 entry,
             },
         );
@@ -280,4 +298,130 @@ fn no_failure_text_names_a_write_or_edit_since_reads_use_it_too() {
         let text = failure.to_string();
         assert!(!text.contains("Write") && !text.contains("Edit"), "{text}");
     }
+}
+
+fn inside(path: &str, folder: &str, fs: &Tree) -> bool {
+    is_inside(Path::new(path), Path::new(folder), fs).unwrap()
+}
+
+fn encloses(path: &str, folder: &str, fs: &Tree) -> bool {
+    contains(Path::new(path), Path::new(folder), fs).unwrap()
+}
+
+#[test]
+fn a_sibling_named_like_the_folder_plus_a_suffix_is_neither_inside_nor_containing_it() {
+    let fs = tree()
+        .dir("/h")
+        .dir("/h/baley")
+        .dir("/h/baley-old")
+        .file("/h/baley-old/x");
+    assert!(!inside("/h/baley-old", "/h/baley", &fs));
+    assert!(!inside("/h/baley-old/x", "/h/baley", &fs));
+    assert!(!encloses("/h/baley-old", "/h/baley", &fs));
+    assert!(inside("/h/baley/x", "/h/baley", &fs));
+}
+
+#[test]
+fn a_path_equal_to_the_folder_is_inside_it_and_contains_it() {
+    let fs = tree().dir("/h").dir("/h/baley");
+    assert!(inside("/h/baley", "/h/baley", &fs));
+    assert!(encloses("/h/baley", "/h/baley", &fs));
+}
+
+#[test]
+fn a_path_outside_the_folder_is_not_inside_it() {
+    let fs = tree().dir("/h").dir("/h/baley").dir("/elsewhere");
+    assert!(!inside("/elsewhere/x", "/h/baley", &fs));
+    assert!(!inside("/h", "/h/baley", &fs));
+}
+
+#[test]
+fn a_case_variant_alias_with_the_folders_identity_is_inside_it_so_identity_is_not_ignored() {
+    let fs = tree()
+        .dir("/h")
+        .dir("/h/baley")
+        .hard("/H/Baley", "/h/baley");
+    assert!(inside("/H/Baley", "/h/baley", &fs));
+    assert!(inside("/H/Baley/keys.env", "/h/baley", &fs));
+    assert!(!inside("/H/Other/keys.env", "/h/baley", &fs));
+}
+
+#[test]
+fn a_parent_given_by_a_case_variant_alias_contains_the_folder() {
+    let fs = tree().dir("/h").dir("/h/baley").hard("/H", "/h");
+    assert!(encloses("/H", "/h/baley", &fs));
+    assert!(!encloses("/H", "/elsewhere/baley", &fs));
+}
+
+#[test]
+fn a_missing_protected_folder_is_still_matched_by_components() {
+    let fs = tree();
+    assert!(inside(
+        "/h/.config/baley/config.toml",
+        "/h/.config/baley",
+        &fs
+    ));
+    assert!(!inside(
+        "/h/.config/other/config.toml",
+        "/h/.config/baley",
+        &fs
+    ));
+    assert!(encloses("/h/.config", "/h/.config/baley", &fs));
+}
+
+#[test]
+fn a_missing_protected_folder_is_matched_through_a_case_variant_of_an_existing_parent() {
+    let fs = tree().dir("/U/.config").hard("/u/.config", "/U/.config");
+    assert!(inside(
+        "/u/.config/baley/config.toml",
+        "/U/.config/baley",
+        &fs
+    ));
+    assert!(!inside(
+        "/u/.config/other/config.toml",
+        "/U/.config/baley",
+        &fs
+    ));
+    assert!(!inside("/u/.config", "/U/.config/baley", &fs));
+}
+
+#[test]
+fn a_case_variant_of_a_missing_protected_folders_own_components_is_inside_it() {
+    let fs = tree().dir("/h").dir("/h/.config");
+    assert!(inside(
+        "/h/.config/Baley/config.toml",
+        "/h/.config/baley",
+        &fs
+    ));
+    assert!(!inside(
+        "/h/.config/baley-old/config.toml",
+        "/h/.config/baley",
+        &fs
+    ));
+}
+
+#[test]
+fn a_metadata_lookup_that_fails_other_than_missing_is_a_failure() {
+    let broken = |path| {
+        tree()
+            .dir("/h")
+            .dir("/h/baley")
+            .failing(Ask::Metadata, path)
+    };
+    assert!(matches!(
+        is_inside(
+            Path::new("/h/x"),
+            Path::new("/h/baley"),
+            &broken("/h/baley")
+        ),
+        Err(ResolveFailure::Identity(_))
+    ));
+    assert!(matches!(
+        is_inside(Path::new("/h/x"), Path::new("/h/baley"), &broken("/h/x")),
+        Err(ResolveFailure::Identity(_))
+    ));
+    assert!(matches!(
+        contains(Path::new("/h/x"), Path::new("/h/baley"), &broken("/h/x")),
+        Err(ResolveFailure::Identity(_))
+    ));
 }
