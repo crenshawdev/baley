@@ -685,12 +685,14 @@ mod tests {
 
     #[test]
     fn an_id_over_the_echo_limit_is_repeated_in_the_answer() {
-        let long = "a".repeat(MAX_ID_BYTES);
+        // A call identity holds 256 bytes, quotes included, so 254 letters
+        // is the longest string id repeated.
+        let long = "a".repeat(255);
         let mut wire = format!(r#"{{"id":"{long}","pad":""#).into_bytes();
         wire.resize(MAX_FRAME_BYTES + 2, b'x');
         wire.push(b'\n');
         assert_eq!(steps(&wire), [fault(FaultKind::TooLarge, None)]);
-        let short = "a".repeat(MAX_ID_BYTES - 2);
+        let short = "a".repeat(254);
         let mut wire = format!(r#"{{"id":"{short}","pad":""#).into_bytes();
         wire.resize(MAX_FRAME_BYTES + 2, b'x');
         wire.push(b'\n');
