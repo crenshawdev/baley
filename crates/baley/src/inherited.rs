@@ -77,8 +77,3 @@ pub mod plan_service;
 pub mod read_service;
 #[path = "verification_service.rs"]
 pub mod verification_service;
-
-// The parked execution tests decode the old query arguments, which still
-// live in the server module until it is removed.
-#[cfg(test)]
-pub(crate) use crate::server::QueryArguments;
