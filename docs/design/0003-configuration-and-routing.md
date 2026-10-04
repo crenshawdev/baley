@@ -212,7 +212,7 @@ All operations of this area are command-line commands run by the owner, and none
   - optional `--host <name>`, refused when the arguments are parsed if the name is unknown, exit 2, with text naming `claude-code` as the supported host. With it, each value is written in that host's `[host.<name>]` section;
   - one or more `name=value` pairs, split at the first `=`.
 
-  A value is read by its setting's type and is never parsed as TOML: `true` or `false` for a boolean, a rung name written exactly as the scale spells it, or a non-empty model name. A file that should hold a default has the default written as its value.
+  A value is read by its setting's type and is never parsed as TOML: `true` or `false` for a boolean, a rung name written exactly as the scale spells it, a non-empty model name, a non-empty remote name, or exactly `ask`, `refuse` or `allow`. `git.protected_branches` is a list, and `config set` writes no list: the owner edits it in `baley.toml`. A file that should hold a default has the default written as its value.
 - **Outputs:**
   - **A project-file set:** the file written, each setting changed with its new value, that the change applies at the next commit, and the policy version in force. The step reads HEAD's copy of the file, so the version is usually the one already recorded until the change is committed.
   - **A global set:** each setting changed, the file written and the policy version. A global file applies as soon as it is written, so it never says next commit.
@@ -230,6 +230,7 @@ All operations of this area are command-line commands run by the owner, and none
   |---|---|---|
   | `not-a-project` | `--project` outside a project | CFG-R4 |
   | `unknown-setting` | The name is not in the schema | CFG-R7 |
+  | `list-not-settable` | The name is a list setting, `git.protected_branches`. The text says `config set` does not write lists and to edit the list in `baley.toml`. It is judged before the layer, so `--global` and `--project` get the same answer | CFG-R7 |
   | `wrong-layer` | The setting's scope excludes the requested layer | CFG-R5 |
   | `invalid-value` | The value is not of the setting's type, or fails its grammar | CFG-R9 |
   | `config-unavailable` | A file the set checks cannot be read or is invalid: the working-tree project file and its project id, then the global file and, in a project, HEAD's copy, then the file the set writes. A fault in HEAD's copy is named as HEAD's copy of the file | CFG-R9 |
@@ -495,7 +496,7 @@ sequenceDiagram
   O->>C: baley config set --project roles.planner.effort=high
   C->>P: judge each pair against the schema, the layer and the value's type
   alt a pair is refused
-    P-->>C: not-a-project, unknown-setting, wrong-layer or invalid-value
+    P-->>C: not-a-project, unknown-setting, list-not-settable, wrong-layer or invalid-value
     C-->>O: refusal naming the setting and the fault
   end
   C->>F: read the file to write and the other file
@@ -535,7 +536,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 4. Writing a setting with `baley config set`. Every pair is judged before anything is read or written, in the order `not-a-project`, `unknown-setting`, `wrong-layer`, `invalid-value`. Then the file to write, the other file and, in a project, HEAD's copy are read, and any that cannot be read or is invalid refuses with `config-unavailable`. A file to write that is a symbolic link is refused as `config-conflict`. A model name is checked against each host's accepted names after the catalog is seeded, and a name no catalog accepts refuses with `unknown-model`. A set whose every value is already in the file writes nothing and runs no policy step. Otherwise a project-file set rewrites the working-tree `baley.toml` from its own bytes, and a global set rewrites `config.toml` and creates the config folder when it is missing. Either ends in `config-conflict` when the file changed after it was read. In a project in this machine's ledger the policy step then runs. It reads both files again, the project file from HEAD's copy, so a project-file change is recorded once it is committed and a later command that writes the chain runs, and a global change is recorded at once. Elsewhere the version is 0.*
+*Figure 4. Writing a setting with `baley config set`. Every pair is judged before anything is read or written, in the order `not-a-project`, `unknown-setting`, `list-not-settable`, `wrong-layer`, `invalid-value`. Then the file to write, the other file and, in a project, HEAD's copy are read, and any that cannot be read or is invalid refuses with `config-unavailable`. A file to write that is a symbolic link is refused as `config-conflict`. A model name is checked against each host's accepted names after the catalog is seeded, and a name no catalog accepts refuses with `unknown-model`. A set whose every value is already in the file writes nothing and runs no policy step. Otherwise a project-file set rewrites the working-tree `baley.toml` from its own bytes, and a global set rewrites `config.toml` and creates the config folder when it is missing. Either ends in `config-conflict` when the file changed after it was read. In a project in this machine's ledger the policy step then runs. It reads both files again, the project file from HEAD's copy, so a project-file change is recorded once it is committed and a later command that writes the chain runs, and a global change is recorded at once. Elsewhere the version is 0.*
 
 ```mermaid
 sequenceDiagram
