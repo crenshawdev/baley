@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T5 merged, as of origin/main `da53839a`, on 2026-10-04, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T5 merged and T6 in progress, as of origin/main `dde1a08c`, on 2026-10-04, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -214,10 +214,12 @@ flowchart LR
     T16 --> T17
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
+    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
     classDef held fill:#ffffff,stroke:#6e7781,stroke-dasharray:4 3,color:#57606a
     class T1,T2,T3,T4,T5 done
-    class T6,T7,T8,T9,T10,T11,T12,T13 planned
+    class T6 progress
+    class T7,T8,T9,T10,T11,T12,T13 planned
     class Delivery,T14,T15,T16,T17 held
 ```
 
@@ -230,7 +232,7 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotte
 | T3 | Caller provenance in the ledger | [#183](https://github.com/crenshawdev/baley/pull/183) | Merged |
 | T4 | Per-session stdio server and store maintenance | [#189](https://github.com/crenshawdev/baley/pull/189) | Merged |
 | T5 | Per-request discovery, admission and policy | [#191](https://github.com/crenshawdev/baley/pull/191) | Merged |
-| T6 | Guard decisions and protected paths | | Planned |
+| T6 | Guard decisions and protected paths | | In progress |
 | T7 | Compiled instructions, help, schemas and parts | | Planned |
 | T8 | Ledger captures and project identity reads | | Planned |
 | T9 | Bounded guard process and storage access | | Planned |
@@ -258,7 +260,7 @@ The owner starts a project, shapes the story backlog, and commits stories to pha
 
 [#26](https://github.com/crenshawdev/baley/issues/26) · milestone Evidence · planned
 
-Baley runs a phase's tasks and runs every test and check itself, judging by exit code ([ADR 0014](adr/0014-baley-runs-tests.md)). A task close is refused for any path outside the lease until the owner rules on it ([ADR 0018](adr/0018-lease-enforced-at-close.md)). The verifier gets specs and run ids, never the executor's summary. Diff review and the completion risk scan gate each plan. A `fix` ruling opens a gap plan, and a finding is filed on GitHub only on the owner's command. A returning finding the owner dismissed before is brought back beside that dismissal, and the owner confirms or reverses it.
+Baley runs a phase's tasks and runs every test and check itself, judging by exit code ([ADR 0014](adr/0014-baley-runs-tests.md)). A task close is refused for any path outside the lease until the owner rules on it ([ADR 0018](adr/0018-lease-enforced-at-close.md)). Build 5 also supplies the active dispatch's lease to the guard's write decision, whose only lease input until then is "no active dispatch", and adds the out-of-lease deny (GRD-R11, EXE-R8). The verifier gets specs and run ids, never the executor's summary. Diff review and the completion risk scan gate each plan. A `fix` ruling opens a gap plan, and a finding is filed on GitHub only on the owner's command. A returning finding the owner dismissed before is brought back beside that dismissal, and the owner confirms or reverses it.
 
 - Designs: [0002 system design](design/0002-system-design.md), [0006 execution](design/0006-execution.md), [0007 verification](design/0007-verification.md), [0008 review](design/0008-review.md), [0009 risk](design/0009-risk.md), [0012 host interface](design/0012-host-interface.md)
 - ADRs: [0014 Baley runs tests](adr/0014-baley-runs-tests.md), [0018 lease enforced at close](adr/0018-lease-enforced-at-close.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md)
