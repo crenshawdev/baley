@@ -2,6 +2,7 @@
 //! 0010 and the guard's rules, never from running this code.
 
 use super::*;
+use crate::policy::{EffectivePolicy, Host, OnProtected, Schema, SettingsFile, effective_policy};
 
 #[test]
 fn a_command_holding_unsupported_posix_syntax_is_judged_instead_of_declined_is_caught() {
@@ -174,4 +175,48 @@ fn a_deny_not_naming_the_setting_that_caused_it_is_caught() {
     );
     assert!(reason::torn_ask("torn file", None).contains("torn file"));
     assert!(reason::failure_pass("git is unreadable").contains("not policy approval"));
+}
+
+// Settings.
+
+fn policy(project: Option<&str>) -> EffectivePolicy {
+    let project = project.map(|text| SettingsFile {
+        path: "/r/baley.toml".into(),
+        bytes: text.as_bytes().to_vec(),
+        digest: "digest".into(),
+    });
+    effective_policy(
+        Schema::standard(),
+        Some(Host::ClaudeCode),
+        None,
+        project.as_ref(),
+    )
+    .expect("the file is valid")
+}
+
+#[test]
+fn a_wrong_default_for_a_guard_setting_is_caught() {
+    assert_eq!(
+        GuardSettings::from_policy(&policy(None)),
+        GuardSettings {
+            protected_branches: vec!["main".into(), "master".into()],
+            on_protected: OnProtected::Ask,
+            hard_fail: false,
+        }
+    );
+}
+
+#[test]
+fn a_guard_setting_read_from_the_wrong_name_or_dropped_is_caught() {
+    let settings = GuardSettings::from_policy(&policy(Some(
+        "[git]\nprotected_branches = [\"release\"]\non_protected = \"refuse\"\nguard_hard_fail = true\n",
+    )));
+    assert_eq!(
+        settings,
+        GuardSettings {
+            protected_branches: vec!["release".into()],
+            on_protected: OnProtected::Refuse,
+            hard_fail: true,
+        }
+    );
 }

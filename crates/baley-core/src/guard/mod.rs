@@ -4,8 +4,10 @@
 
 pub mod reason;
 mod scan;
+mod settings;
 
 #[cfg(test)]
 mod tests;
 
 pub use scan::{GitVerb, git_verb};
+pub use settings::{GuardSettings, SettingsInput};
