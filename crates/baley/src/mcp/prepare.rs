@@ -11,12 +11,14 @@
 
 use std::path::{Path, PathBuf};
 
-use baley_core::policy::{CONFIG_UNAVAILABLE, SettingsFile, Unavailable};
+use baley_core::policy::recorded::{RecordedPolicy, recorded_policy};
+use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile, Unavailable};
 use baley_store::{Admin, ProjectId, ServerCaller, StoreError};
 use serde_json::Value;
 
 use crate::discovery::{self, Ancestor, Discovery, PROJECT_FILE};
 use crate::envelope::{Envelope, LEDGER_BUSY};
+use crate::policy_step::{self, Reads};
 use crate::{init, settings};
 
 /// The code for a project directory that cannot be walked, such as one
@@ -46,6 +48,31 @@ pub struct Prepared {
     /// The canonical repository root discovery found. The caller keeps the
     /// project directory text exactly as it was given.
     pub root: PathBuf,
+}
+
+/// The two policies a write is judged under.
+#[derive(Debug)]
+pub struct WritePolicies {
+    /// The policy built with no host. Its `git.remote` names the remote the
+    /// checkout's facts come from, the one the command line uses, so the
+    /// server and the command line record one remote for one checkout.
+    pub facts: EffectivePolicy,
+    /// The policy built for the call's host, recorded at the root. The policy
+    /// step records it as `policy.effective` under (checkout, host), so the
+    /// host's section values apply.
+    pub recorded: RecordedPolicy,
+}
+
+/// Judges the gathered settings of a write for the call's `host` and the
+/// discovered `root`. The recorded checkout is the root's text, the path
+/// checkout admission keys its hostless version by. A fault, which includes a
+/// root that is not UTF-8, is the `config-unavailable` text, in `build`'s
+/// order.
+pub fn judge_settings(reads: &Reads, host: Host, root: &Path) -> Result<WritePolicies, String> {
+    let facts = policy_step::build(reads, None).map_err(|e| e.to_string())?;
+    let with_host = policy_step::build(reads, Some(host)).map_err(|e| e.to_string())?;
+    let recorded = recorded_policy(root, &with_host).map_err(|e| e.to_string())?;
+    Ok(WritePolicies { facts, recorded })
 }
 
 /// Why a store step could not answer.
@@ -443,5 +470,80 @@ mod tests {
             "ledger",
             false,
         );
+    }
+
+    const HEAD_PATH: &str = "/real/r/baley.toml";
+
+    fn reads(head_text: &str) -> Reads {
+        Reads {
+            global: Ok(None),
+            head: Some(Ok(crate::committed::Committed {
+                layer: Some(settings::file(
+                    Path::new(HEAD_PATH),
+                    head_text.as_bytes().to_vec(),
+                )),
+                pending: None,
+            })),
+        }
+    }
+
+    /// The file sets a remote and a value at the top level, and the host
+    /// section sets another of each.
+    const SECTIONED: &str = "escalate_on_failure = false\n[git]\nremote = \"upstream\"\n[host.claude-code]\nescalate_on_failure = true\ngit.remote = \"other\"\n";
+
+    fn judged() -> WritePolicies {
+        judge_settings(&reads(SECTIONED), Host::ClaudeCode, Path::new("/real/r")).unwrap()
+    }
+
+    fn remote(policy: &EffectivePolicy) -> Option<&baley_core::policy::Value> {
+        policy.settings["git.remote"].value.as_ref()
+    }
+
+    #[test]
+    fn a_facts_policy_built_with_the_host_names_the_hosts_remote_instead_of_the_files() {
+        let judged = judged();
+        assert_eq!(
+            remote(&judged.facts),
+            Some(&baley_core::policy::Value::RemoteName("upstream".into()))
+        );
+        assert_eq!(judged.facts.host, None);
+    }
+
+    #[test]
+    fn a_recorded_policy_that_is_not_keyed_to_the_host_or_lacks_its_section_values() {
+        use baley_core::policy::recorded::effective_payload;
+        let payload = effective_payload(&judged().recorded, "p", 0);
+        assert_eq!(payload["host"], "claude-code");
+        assert_eq!(payload["values"]["escalate_on_failure"], true);
+        assert_eq!(payload["values"]["git.remote"], "other");
+    }
+
+    #[test]
+    fn a_recorded_checkout_that_differs_from_the_discovered_root() {
+        assert_eq!(judged().recorded.checkout, "/real/r");
+    }
+
+    #[test]
+    fn an_invalid_heads_copy_that_is_not_config_unavailable() {
+        let refusal = judge_settings(
+            &reads("escalate_on_failure = \"yes\"\n"),
+            Host::ClaudeCode,
+            Path::new("/real/r"),
+        )
+        .unwrap_err();
+        assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+        assert!(
+            refusal.contains("HEAD's copy of /real/r/baley.toml"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_root_that_is_not_utf8_that_is_not_config_unavailable() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = Path::new(std::ffi::OsStr::from_bytes(b"/real/\xff"));
+        let refusal = judge_settings(&reads(SECTIONED), Host::ClaudeCode, root).unwrap_err();
+        assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+        assert!(refusal.contains("is not UTF-8"), "{refusal}");
     }
 }
