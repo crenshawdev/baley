@@ -153,6 +153,7 @@ pub fn merge(
                 schema::Default::Absent => None,
                 schema::Default::Bool(value) => Some(Value::Bool(value)),
                 schema::Default::Rung(rung) => Some(Value::Rung(rung)),
+                schema::Default::OnProtected(on) => Some(Value::OnProtected(on)),
             };
             let source = Source {
                 layer: Layer::Default,

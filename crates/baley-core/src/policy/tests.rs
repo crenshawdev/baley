@@ -112,7 +112,7 @@ fn route(policy: &EffectivePolicy, role: Role, host: Host, n: u32) -> Result<Rou
 }
 
 #[test]
-fn standard_schema_holds_build_2s_fourteen_entries_with_their_defaults() {
+fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
     use Builtin::{Absent, Bool};
     let effort = Builtin::Rung;
     let expected = [
@@ -131,7 +131,7 @@ fn standard_schema_holds_build_2s_fourteen_entries_with_their_defaults() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 14);
+    assert_eq!(schema.entries().len(), 16);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -147,6 +147,23 @@ fn standard_schema_holds_build_2s_fourteen_entries_with_their_defaults() {
         (remote.kind, remote.default, remote.scope, remote.owner),
         (Kind::RemoteName, Absent, Scope::Project, "0001")
     );
+    for (name, kind, default) in [
+        (
+            "git.on_protected",
+            Kind::OnProtected,
+            Builtin::OnProtected(OnProtected::Ask),
+        ),
+        ("git.guard_hard_fail", Kind::Bool, Bool(false)),
+    ] {
+        let entry = schema
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} is missing"));
+        assert_eq!(
+            (entry.kind, entry.default, entry.scope, entry.owner),
+            (kind, default, Scope::Project, "0010"),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -663,7 +680,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 14);
+        assert_eq!(policy.settings.len(), 16);
         assert!(
             policy
                 .settings
@@ -1209,4 +1226,110 @@ fn a_host_section_git_remote_that_raises_a_diagnostic_or_applies_with_no_host_is
     let remote = value_of(&with, "git.remote");
     assert_eq!(remote.value, Some(Value::RemoteName("origin".into())));
     assert_eq!(remote.source.layer, Layer::ProjectHost);
+}
+
+fn guard_fault(text: &str) -> Unavailable {
+    standard(None, None, Some(text)).expect_err(text)
+}
+
+#[test]
+fn an_unknown_on_protected_name_read_as_ask_or_not_refused_with_its_position_is_caught() {
+    let refusal = guard_fault("[git]\non_protected = \"sometimes\"\n");
+    assert_eq!(
+        refusal.fault,
+        Fault::OutsideGrammar {
+            name: "git.on_protected".into(),
+            kind: Kind::OnProtected,
+            written: "sometimes".into(),
+            line: 2,
+            column: 16,
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml:2:16: git.on_protected is \"sometimes\", which is not one of ask, refuse, allow"
+    );
+}
+
+#[test]
+fn an_on_protected_name_matched_without_regard_to_case_is_caught() {
+    for written in ["Refuse", "ASK", "Allow"] {
+        let refusal = guard_fault(&format!("git.on_protected = \"{written}\"\n"));
+        assert!(
+            matches!(refusal.fault, Fault::OutsideGrammar { .. }),
+            "{written}: {refusal}"
+        );
+    }
+}
+
+#[test]
+fn an_on_protected_integer_that_is_not_a_type_fault_is_caught() {
+    let refusal = guard_fault("git.on_protected = 1\n");
+    assert_eq!(
+        refusal.fault,
+        Fault::WrongType {
+            name: "git.on_protected".into(),
+            expected: Expected::OnProtected,
+            found: "integer",
+            line: 1,
+            column: 20,
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml:1:20: git.on_protected is an integer, not one of ask, refuse, allow"
+    );
+}
+
+#[test]
+fn an_on_protected_name_that_parses_to_another_value_is_caught() {
+    for (written, expected) in [
+        ("ask", OnProtected::Ask),
+        ("refuse", OnProtected::Refuse),
+        ("allow", OnProtected::Allow),
+    ] {
+        let policy = standard(
+            None,
+            None,
+            Some(&format!("git.on_protected = \"{written}\"\n")),
+        )
+        .unwrap();
+        assert_eq!(
+            value_of(&policy, "git.on_protected").value,
+            Some(Value::OnProtected(expected)),
+            "{written}"
+        );
+    }
+}
+
+#[test]
+fn guard_settings_that_are_not_ask_and_off_with_no_file_are_caught() {
+    let policy = standard(None, None, None).unwrap();
+    assert_eq!(
+        value_of(&policy, "git.on_protected").value,
+        Some(Value::OnProtected(OnProtected::Ask))
+    );
+    assert_eq!(
+        value_of(&policy, "git.guard_hard_fail").value,
+        Some(Value::Bool(false))
+    );
+}
+
+#[test]
+fn guard_settings_in_the_global_file_applying_instead_of_being_ignored_is_caught() {
+    let policy = standard(
+        None,
+        Some("[git]\non_protected = \"allow\"\nguard_hard_fail = true\n"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(policy.diagnostics.len(), 2);
+    assert_eq!(
+        value_of(&policy, "git.on_protected").value,
+        Some(Value::OnProtected(OnProtected::Ask))
+    );
+    assert_eq!(
+        value_of(&policy, "git.guard_hard_fail").value,
+        Some(Value::Bool(false))
+    );
 }

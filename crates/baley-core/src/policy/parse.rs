@@ -10,7 +10,7 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::merge::FileRef;
 use super::project::ProjectProblem;
-use super::schema::{Entry, Host, Kind, Rung, Schema, Scope};
+use super::schema::{Entry, Host, Kind, OnProtected, Rung, Schema, Scope};
 
 /// The code of every refusal that leaves the policy unbuilt.
 pub const CONFIG_UNAVAILABLE: &str = "config-unavailable";
@@ -46,6 +46,8 @@ pub enum Value {
     ModelName(String),
     /// A non-empty git remote name.
     RemoteName(String),
+    /// What to do with a commit on a protected branch.
+    OnProtected(OnProtected),
 }
 
 /// One setting a file writes, typed and within its scope.
@@ -208,6 +210,8 @@ pub enum Expected {
     ModelName,
     /// A git remote name.
     RemoteName,
+    /// One of the `git.on_protected` names.
+    OnProtected,
 }
 impl From<Kind> for Expected {
     fn from(kind: Kind) -> Expected {
@@ -216,6 +220,7 @@ impl From<Kind> for Expected {
             Kind::Rung => Expected::Rung,
             Kind::ModelName => Expected::ModelName,
             Kind::RemoteName => Expected::RemoteName,
+            Kind::OnProtected => Expected::OnProtected,
         }
     }
 }
@@ -279,6 +284,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::Rung => format!("a rung ({})", rungs()),
                 Expected::ModelName => "a model name".to_owned(),
                 Expected::RemoteName => "a remote name".to_owned(),
+                Expected::OnProtected => format!("one of {}", on_protected_names()),
             };
             write!(
                 f,
@@ -300,6 +306,11 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Kind::ModelName => f.write_str("empty; write a model name or remove the line"),
                 Kind::RemoteName => f.write_str("empty; write a remote name or remove the line"),
                 Kind::Bool => write!(f, "\"{written}\", which is not a boolean"),
+                Kind::OnProtected => write!(
+                    f,
+                    "\"{written}\", which is not one of {}",
+                    on_protected_names()
+                ),
             }
         }
         Fault::Project {
@@ -384,6 +395,14 @@ impl fmt::Display for Diagnostic {
 
 fn rungs() -> String {
     let names: Vec<&str> = Rung::ALL.into_iter().map(Rung::name).collect();
+    names.join(", ")
+}
+
+fn on_protected_names() -> String {
+    let names: Vec<&str> = OnProtected::ALL
+        .into_iter()
+        .map(OnProtected::name)
+        .collect();
     names.join(", ")
 }
 
@@ -521,6 +540,12 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
             "" => Err(Mismatch::Grammar(String::new())),
             name => Ok(Value::RemoteName(name.to_owned())),
         },
+        Kind::OnProtected => {
+            let written = value.as_str().ok_or_else(wrong)?;
+            OnProtected::parse(written)
+                .map(Value::OnProtected)
+                .ok_or_else(|| Mismatch::Grammar(written.to_owned()))
+        }
     }
 }
 

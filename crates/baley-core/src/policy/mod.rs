@@ -29,4 +29,4 @@ pub use route::{
     AcceptedNames, Route, RouteRefusal, RouteRequest, RungMap, SettingSource, UNKNOWN_MODEL,
     resolve_route,
 };
-pub use schema::{Default, Entry, Host, Kind, Role, Rung, Schema, Scope};
+pub use schema::{Default, Entry, Host, Kind, OnProtected, Role, Rung, Schema, Scope};

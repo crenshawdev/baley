@@ -1621,3 +1621,57 @@ fn the_standard_schema_showing_git_remote_outside_a_project_is_caught() {
         }
     );
 }
+
+fn judge_standard(layer: FileLayer, pairs: &[(&str, &str)]) -> Result<Vec<TypedPair>, SetRefusal> {
+    judge_pairs(Schema::standard(), layer, true, None, pairs)
+}
+
+#[test]
+fn an_on_protected_name_that_is_not_taken_as_its_typed_value_is_caught() {
+    let typed = judge_standard(FileLayer::Project, &[("git.on_protected", "refuse")]).unwrap();
+    assert_eq!(
+        typed,
+        vec![pair(
+            "git.on_protected",
+            None,
+            Value::OnProtected(crate::policy::OnProtected::Refuse)
+        )]
+    );
+}
+
+#[test]
+fn an_on_protected_name_with_other_case_taken_as_a_value_is_caught() {
+    let refusal = judge_standard(FileLayer::Project, &[("git.on_protected", "Allow")])
+        .expect_err("Allow is not a name");
+    assert_eq!(refusal.code(), "invalid-value");
+    assert_eq!(
+        refusal.to_string(),
+        "invalid-value: git.on_protected is \"Allow\", which is not one of ask, refuse, allow"
+    );
+}
+
+#[test]
+fn the_guard_hard_fail_text_that_is_not_a_boolean_taken_as_one_is_caught() {
+    let typed = judge_standard(FileLayer::Project, &[("git.guard_hard_fail", "true")]).unwrap();
+    assert_eq!(
+        typed,
+        vec![pair("git.guard_hard_fail", None, Value::Bool(true))]
+    );
+    let refusal = judge_standard(FileLayer::Project, &[("git.guard_hard_fail", "yes")])
+        .expect_err("yes is not a boolean");
+    assert_eq!(refusal.code(), "invalid-value");
+}
+
+#[test]
+fn an_on_protected_name_rendered_as_anything_but_a_toml_string_is_caught() {
+    let pairs = [pair(
+        "git.on_protected",
+        None,
+        Value::OnProtected(crate::policy::OnProtected::Refuse),
+    )];
+    let bytes = render_file(Schema::standard(), FileLayer::Project, None, &pairs).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[git]\non_protected = \"refuse\"\n"
+    );
+}

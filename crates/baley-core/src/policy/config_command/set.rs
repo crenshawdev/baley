@@ -6,7 +6,7 @@ use std::fmt;
 
 use super::{INVALID_VALUE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
 use crate::policy::{
-    AcceptedNames, FileLayer, Host, Kind, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
+    AcceptedNames, FileLayer, Host, Kind, OnProtected, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
 };
 
 /// One pair of a set after its name and value are judged.
@@ -105,6 +105,13 @@ impl fmt::Display for SetRefusal {
                     }
                     Kind::ModelName => "a model name (any non-empty text)".to_owned(),
                     Kind::RemoteName => "a git remote name (any non-empty text)".to_owned(),
+                    Kind::OnProtected => {
+                        let names: Vec<&str> = OnProtected::ALL
+                            .into_iter()
+                            .map(OnProtected::name)
+                            .collect();
+                        format!("one of {}", names.join(", "))
+                    }
                 };
                 write!(
                     f,
@@ -163,6 +170,7 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::Rung => Rung::parse(text).map(Value::Rung),
         Kind::ModelName => (!text.is_empty()).then(|| Value::ModelName(text.to_owned())),
         Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
+        Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
     }
 }
 

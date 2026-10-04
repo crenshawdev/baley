@@ -75,13 +75,14 @@ fn child<'t>(table: &'t mut Table, key: &str) -> &'t mut Table {
 }
 
 /// The TOML type each kind reads back: a boolean, or a string for a rung
-/// name, a model name and a remote name.
+/// name, a model name, a remote name and an `on_protected` name.
 fn toml_value(value: &Value) -> TomlValue {
     match value {
         Value::Bool(value) => TomlValue::Boolean(*value),
         Value::Rung(rung) => TomlValue::String(rung.name().to_owned()),
         Value::ModelName(name) => TomlValue::String(name.clone()),
         Value::RemoteName(name) => TomlValue::String(name.clone()),
+        Value::OnProtected(on) => TomlValue::String(on.name().to_owned()),
     }
 }
 
@@ -114,6 +115,7 @@ pub(super) fn value_text(value: &Value) -> String {
     match value {
         Value::Bool(value) => value.to_string(),
         Value::Rung(rung) => format!("\"{}\"", rung.name()),
+        Value::OnProtected(on) => format!("\"{}\"", on.name()),
         Value::ModelName(name) | Value::RemoteName(name) => quoted(name),
     }
 }

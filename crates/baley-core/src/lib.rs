@@ -29,9 +29,9 @@ pub use forge::{
 };
 pub use policy::{
     AcceptedNames, CONFIG_UNAVAILABLE, Diagnostic, DiagnosticKind, Effective, EffectivePolicy,
-    Entry, Expected, Fault, FileLayer, FileRef, Host, Kind, Layer, ParsedLayer, Role, Route,
-    RouteRefusal, RouteRequest, Rung, RungMap, Schema, Scope, SettingSource, SettingsFile, Source,
-    UNKNOWN_MODEL, Unavailable, Value, Written, effective_policy, line_and_column, merge,
+    Entry, Expected, Fault, FileLayer, FileRef, Host, Kind, Layer, OnProtected, ParsedLayer, Role,
+    Route, RouteRefusal, RouteRequest, Rung, RungMap, Schema, Scope, SettingSource, SettingsFile,
+    Source, UNKNOWN_MODEL, Unavailable, Value, Written, effective_policy, line_and_column, merge,
     parse_layer, resolve_route,
 };
 pub use reconcile::{AnchorFinding, AnchorIntent, RemoteTag, anchor_reconciliation, judge_anchor};
