@@ -63,7 +63,7 @@ pub mod init;
 pub mod keys;
 /// Owner commands over the evidence ledger.
 pub mod ledger;
-/// The per-session server's pure decisions: the session context, client selection, the operation baseline, the tool list and the order faults are answered in.
+/// The per-session server: the session context, client selection, the operation baseline, the tool list and the order faults are answered in, then per-request preparation of a project read or write from the session's own project directory.
 pub mod mcp;
 /// `baley models`: the per-user model catalog and the seeding step before each use.
 pub mod models;

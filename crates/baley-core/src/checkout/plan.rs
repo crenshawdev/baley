@@ -46,9 +46,10 @@ pub struct CheckoutPlan {
 /// Checkout admission performs the `checkout.seen` request in one
 /// transaction with the judgement, so two checkouts admitted at once are
 /// judged in queue order. Each caller then runs the policy step and its own
-/// command in this order: the binary's ledger commands and `baley init` in
-/// Build 2, the server per request in Build 3. A refusal records nothing in
-/// the project, and is never a recorded refusal.
+/// command in this order: the binary's ledger commands and `baley init`, and
+/// the session server's write preparation for each project write. The guard
+/// never runs checkout admission. A refusal records nothing in the project, and
+/// is never a recorded refusal.
 ///
 /// The order is `checkout.seen` only when the checkout is new or changed,
 /// then the policy step, then the command. The version is the stored

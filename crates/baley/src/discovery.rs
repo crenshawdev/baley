@@ -1,6 +1,8 @@
-//! Finding the checkout's project from a working directory (design 0003,
+//! Finding the checkout's project from a starting directory (design 0003,
 //! CFG-R3 and CFG-R4): the nearest `baley.toml` at or below the repository
-//! root, never one above it.
+//! root, never one above it. The command line starts from its working
+//! directory. The session server starts from the session's
+//! `CLAUDE_PROJECT_DIR` on every project call.
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -59,10 +61,11 @@ pub fn discover(ancestors: &[Ancestor]) -> Discovery {
     Discovery::Outside
 }
 
-/// Observes every ancestor of the working directory, nearest first, for
+/// Observes every ancestor of the starting directory, nearest first, for
 /// `discover`. `baley init`, `purge`, `config set`, `config show`,
 /// `config interview`, `anchor`, `acknowledge-restore`, anchored `verify`
-/// and `doctor` are its callers.
+/// and `doctor` are its callers, and so is the session server's preparation
+/// of a project call.
 ///
 /// The directory is canonicalized first, so the root is the checkout's
 /// canonical path. `baley.toml` is followed through a link, as settings reads

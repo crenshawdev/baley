@@ -14,9 +14,11 @@
 //! precisely why the thing it asked for is not allowed.
 //!
 //! `failed` is the server saying it could not take the call at all, and that
-//! nothing was recorded. A refusal reads as a domain answer the ledger may
-//! hold, so a server fault such as an unsupported client or a full queue does
-//! not borrow that tag. A `failed` answer is a successful tool call too.
+//! the call recorded nothing itself. A refusal reads as a domain answer the
+//! ledger may hold, so a server fault such as an unsupported client or a full
+//! queue does not borrow that tag. A `failed` answer is a successful tool call
+//! too. Only a full queue and a busy ledger are retryable: the same call may
+//! succeed unchanged once the queue or the writer frees.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -86,9 +88,13 @@ pub enum Envelope<T> {
         reason: String,
         /// The input at fault, such as `client-info` or `CLAUDE_PROJECT_DIR`.
         place: String,
-        /// Always `false`: a failed call leaves no event behind.
+        /// Always `false`: the call recorded nothing itself. When it was
+        /// preparing a write, a checkout admission that ran first stays
+        /// recorded if a later step fails, as on the command line, because
+        /// checkout admission and the policy step are separate transactions.
         recorded: bool,
-        /// True only when the same call may succeed later unchanged.
+        /// True only when the same call may succeed later unchanged: the
+        /// codes in [`SERVER_OVERLOADED`] and [`LEDGER_BUSY`].
         retryable: bool,
         /// Structured detail a caller can act on, in the failure's own shape.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,13 +102,21 @@ pub enum Envelope<T> {
     },
 }
 
-/// The one failed code a caller may retry unchanged.
+/// A failed code a caller may retry unchanged: the session queue was full, and
+/// the same call may be taken once it drains.
 pub const SERVER_OVERLOADED: &str = "server-overloaded";
+
+/// A failed code a caller may retry unchanged: the ledger's writer was busy,
+/// and the same call may succeed once it frees.
+pub const LEDGER_BUSY: &str = "ledger-busy";
+
+/// Every failed code a caller may retry unchanged.
+const RETRYABLE_CODES: [&str; 2] = [SERVER_OVERLOADED, LEDGER_BUSY];
 
 impl<T> Envelope<T> {
     /// A `failed` answer with no structured detail. `recorded` is always false
-    /// and `retryable` is true only for [`SERVER_OVERLOADED`], so a caller has
-    /// one shape to branch on.
+    /// and `retryable` is true only for [`SERVER_OVERLOADED`] and
+    /// [`LEDGER_BUSY`], so a caller has one shape to branch on.
     pub fn failed(
         code: impl Into<String>,
         reason: impl Into<String>,
@@ -128,7 +142,7 @@ impl<T> Envelope<T> {
         details: Option<serde_json::Value>,
     ) -> Self {
         Self::Failed {
-            retryable: code == SERVER_OVERLOADED,
+            retryable: RETRYABLE_CODES.contains(&code.as_str()),
             code,
             reason,
             place,
@@ -345,13 +359,24 @@ mod tests {
     }
 
     #[test]
-    fn only_server_overloaded_is_retryable() {
+    fn only_server_overloaded_and_ledger_busy_are_retryable() {
         let retryable = |code: &str| {
             let value = serde_json::to_value(Envelope::<Payload>::failed(code, "r", "p")).unwrap();
             value["retryable"].clone()
         };
         assert_eq!(retryable("server-overloaded"), json!(true));
-        for code in ["unknown-host", "project-context-invalid", "caller-invalid"] {
+        assert_eq!(retryable("ledger-busy"), json!(true));
+        for code in [
+            "unknown-host",
+            "caller-invalid",
+            "project-context-invalid",
+            "not-a-project",
+            "config-unavailable",
+            "project-not-in-ledger",
+            "checkout-facts-unavailable",
+            "project-id-conflict",
+            "ledger-unavailable",
+        ] {
             assert_eq!(
                 retryable(code),
                 json!(false),

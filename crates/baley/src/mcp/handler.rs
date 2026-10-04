@@ -1,16 +1,24 @@
 //! The rmcp handler for one session.
 //!
-//! It holds the session context, the identity stored from `initialize` and the
-//! worker. It decides nothing itself: it reads what a call carries, runs the
-//! gate before the queue through the worker's admission, and hands an accepted
-//! call to the worker, which runs the gate after the queue and then the
-//! operation. rmcp has already validated the request's metadata by the time
-//! any of this runs, so a protocol-required metadata error stays a protocol
-//! error and runs nothing.
+//! It holds the session context, the identity stored from `initialize`, the
+//! worker and the ledger the server opened. It decides nothing itself: it reads
+//! what a call carries, runs the gate before the queue through the worker's
+//! admission, and hands an accepted call to the worker, which runs the gate
+//! after the queue and then the operation. A call that needs a project reaches
+//! the operation with a [`Preparation`]: the caller the gate formed, the
+//! call's host, the session's ledger and the server's time. The first
+//! operations that prepare from it are `document` (T7) and `capture` (T8),
+//! which set `needs_project` and add their arms to [`operate`]. rmcp has
+//! already validated the request's metadata by the time any of this runs, so a
+//! protocol-required metadata error stays a protocol error and runs nothing.
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use baley_core::policy::Host;
+use baley_store::ServerCaller;
+use baley_store_sqlite::SqliteStore;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, InitializeRequestParams, InitializeResult,
     ListToolsResult, PaginatedRequestParams, ProtocolVersion, RequestMetaObject, ServerConfig,
@@ -26,6 +34,7 @@ use super::operations::{help_answer, schema_answer, unknown_operation};
 use super::tools::{info, supported_protocol_versions, tool_list, version_answer};
 use super::transport::RawFrameBytes;
 use super::worker::{Submission, Worker};
+use crate::ledger::clock::SystemClock;
 
 /// What `initialize` told the session, if it was used.
 #[derive(Default)]
@@ -34,20 +43,51 @@ struct Initialized {
     identity: Option<ClientIdentity>,
 }
 
+/// The ledger the server opened at startup and the config folder found with
+/// it. The exit checkpoint runs on this same store.
+pub struct SessionLedger {
+    /// The open per-user store.
+    pub store: SqliteStore,
+    /// Baley's config folder, where the global settings file is.
+    pub config: PathBuf,
+}
+
+/// What a project call hands its operation to prepare a read or write. It is
+/// built from the gate's caller, the call's host and the session's own state,
+/// never from tool arguments. `ledger` is `None` when the server could not open
+/// one, so preparation answers `failed` `ledger-unavailable`.
+pub struct Preparation {
+    /// The store and config folder the server opened at startup.
+    pub ledger: Option<Arc<SessionLedger>>,
+    /// The host the call came from.
+    pub host: Host,
+    /// The caller the gate formed for this call.
+    pub caller: ServerCaller,
+    /// The server's time for this call, read once.
+    pub at: String,
+}
+
 /// The handler for one session's connection.
 pub struct SessionHandler {
     session: Arc<SessionContext>,
     initialized: Mutex<Initialized>,
     worker: Arc<Worker>,
+    ledger: Option<Arc<SessionLedger>>,
 }
 
 impl SessionHandler {
-    /// A handler for `session` that runs accepted calls on `worker`.
-    pub fn new(session: Arc<SessionContext>, worker: Arc<Worker>) -> Self {
+    /// A handler for `session` that runs accepted calls on `worker`. `ledger`
+    /// is the store the server opened, or `None` when it could not.
+    pub fn new(
+        session: Arc<SessionContext>,
+        worker: Arc<Worker>,
+        ledger: Option<Arc<SessionLedger>>,
+    ) -> Self {
         Self {
             session,
             initialized: Mutex::new(Initialized::default()),
             worker,
+            ledger,
         }
     }
 
@@ -80,9 +120,12 @@ impl SessionHandler {
 }
 
 /// Runs one admitted call on the worker: the gate after the queue, then the
-/// operation. T5 attaches the caller this gate forms to what a call records.
+/// operation. A call the gate runs with a caller gets a [`Preparation`] holding
+/// that caller, the call's host, the session's ledger and the server's time,
+/// read here once. A call that needs no project gets none and reads no clock.
 fn run_decision(
     session: &SessionContext,
+    ledger: Option<Arc<SessionLedger>>,
     request_id: Value,
     admitted: Admitted,
     arguments: Option<&Value>,
@@ -93,20 +136,33 @@ fn run_decision(
     }
     match after_queue(admitted.needs_project, &call) {
         After::Answer(result) => result,
-        After::Run(_caller) => encode(operate(&admitted.called, arguments)),
+        After::Run(caller) => {
+            let preparation = caller.map(|caller| Preparation {
+                ledger,
+                host: admitted.host,
+                caller,
+                at: SystemClock::now(),
+            });
+            encode(operate(&admitted.called, arguments, preparation.as_ref()))
+        }
     }
 }
 
-/// The answer of an admitted operation.
-fn operate(called: &Called, arguments: Option<&Value>) -> Value {
+/// The answer of an admitted operation. It matches the called operation and the
+/// project call's [`Preparation`] together, so an arm that needs a project
+/// names the input in its pattern and the arms that need none ignore it. The
+/// first arms that use it are T7's `document` and T8's `capture`.
+fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
-    match called {
-        Called::Version => version_answer(arguments),
-        Called::Operation(_, spelling) if spelling == "help" => help_answer(arguments_or_null),
-        Called::Operation(_, spelling) if spelling == "schema" => schema_answer(arguments_or_null),
+    match (called, project) {
+        (Called::Version, _) => version_answer(arguments),
+        (Called::Operation(_, spelling), _) if spelling == "help" => help_answer(arguments_or_null),
+        (Called::Operation(_, spelling), _) if spelling == "schema" => {
+            schema_answer(arguments_or_null)
+        }
         // The gate admits only the spellings above, so a baseline entry marked
         // served with nothing behind it answers as an unknown operation.
-        Called::Operation(tool, spelling) => unknown_operation(*tool, Some(spelling)),
+        (Called::Operation(tool, spelling), _) => unknown_operation(*tool, Some(spelling)),
     }
 }
 
@@ -159,13 +215,16 @@ impl ServerHandler for SessionHandler {
         let selection = self.selection(Some(&context.meta));
         let request_id = serde_json::to_value(&context.id).unwrap_or(Value::Null);
         let session = Arc::clone(&self.session);
+        let ledger = self.ledger.clone();
         let arguments = request.arguments.map(Value::Object);
         let submission = self.worker.submit(
             &request.name,
             &selection,
             spelling.as_deref(),
             raw_bytes,
-            move |admitted| run_decision(&session, request_id, admitted, arguments.as_ref()),
+            move |admitted| {
+                run_decision(&session, ledger, request_id, admitted, arguments.as_ref())
+            },
         );
         match submission {
             Submission::Answer(result) => Ok(result.into()),
@@ -202,7 +261,7 @@ mod tests {
     }
 
     fn handler() -> SessionHandler {
-        SessionHandler::new(session(), Arc::new(Worker::start().expect("worker")))
+        SessionHandler::new(session(), Arc::new(Worker::start().expect("worker")), None)
     }
 
     fn initialize_as(name: &str) -> InitializeRequestParams {
@@ -276,12 +335,13 @@ mod tests {
 
     #[test]
     fn version_help_and_schema_each_run_their_own_operation() {
-        let version = operate(&Called::Version, Some(&json!({})));
+        let version = operate(&Called::Version, Some(&json!({})), None);
         assert_eq!(version["status"], "ok");
         assert!(version["version"].is_string());
         let help = operate(
             &Called::Operation(Tool::Query, "help".into()),
             Some(&json!({"operation": "help"})),
+            None,
         );
         assert_eq!(help["status"], "ok");
         assert_ne!(help, version);
@@ -290,6 +350,7 @@ mod tests {
         let schema = operate(
             &Called::Operation(Tool::Query, "schema".into()),
             Some(&json!({"operation": "schema", "tool": "query", "for": "help"})),
+            None,
         );
         assert_eq!(schema["status"], "ok", "{schema}");
         assert_eq!(schema["schema"]["properties"]["operation"]["const"], "help");

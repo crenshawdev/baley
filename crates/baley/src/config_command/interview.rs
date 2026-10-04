@@ -48,7 +48,8 @@ fn attempt(
         Discovery::Managed { folder, root } => {
             let working = settings::read(&folder.join(PROJECT_FILE));
             let head = working.as_ref().ok().and_then(Option::as_ref);
-            let reads = policy_step::gather(&folders.config, &root, head);
+            let reads =
+                policy_step::gather(&folders.config, &root, head, &mut crate::process::System);
             Seen {
                 folder: Some(folder),
                 global_path,

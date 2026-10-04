@@ -20,7 +20,7 @@ use baley_store::{
 use clap::Args;
 use serde_json::json;
 
-use crate::checkout::{self, AdmitError, EntryError};
+use crate::checkout::{self, EntryError};
 use crate::detection::{Trigger, detect_blocking};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
@@ -498,7 +498,7 @@ pub fn prepare(
 ) -> Result<Prepared, String> {
     let existing = observe_file(file).map_err(|e| e.to_string())?;
     let naming = name(root, given, existing.as_ref()).map_err(|e| e.to_string())?;
-    let policy = policy_step::build(reads).map_err(|e| e.to_string())?;
+    let policy = policy_step::build(reads, None).map_err(|e| e.to_string())?;
     let recorded = recorded_policy(root, &policy).map_err(|e| e.to_string())?;
     Ok(Prepared {
         existing,
@@ -537,16 +537,6 @@ pub fn observe_ledger(
             });
         }
         after = page.next;
-    }
-}
-
-/// Renders why checkout admission stopped: a gather or fork refusal as a
-/// refusal, a store error through `display::store_error` with the project id.
-pub(crate) fn admission_render(error: EntryError, project: &str) -> Render {
-    match error {
-        EntryError::Gather(text) => Render::refusal(text),
-        EntryError::Admit(AdmitError::Fork(conflict)) => Render::refusal(conflict.to_string()),
-        EntryError::Admit(AdmitError::Store(error)) => display::store_error(&error, Some(project)),
     }
 }
 
@@ -590,7 +580,12 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
     let path = root.join(PROJECT_FILE);
     let file = settings::read(&path);
     let working = file.as_ref().ok().and_then(Option::as_ref).cloned();
-    let reads = policy_step::gather(&folders.config, &root, working.as_ref());
+    let reads = policy_step::gather(
+        &folders.config,
+        &root,
+        working.as_ref(),
+        &mut crate::process::System,
+    );
     let Prepared {
         existing,
         naming,
@@ -680,8 +675,15 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
             }
             Step::AdmitCheckout => {
                 let project = ProjectId(identity.id.clone());
-                checkout::admit(&store, &project, &checkout, new_request_id(), started_at)
-                    .map_err(|e| admission_render(EntryError::Admit(e), &identity.id))?;
+                checkout::admit(
+                    &store,
+                    &project,
+                    &checkout,
+                    new_request_id(),
+                    started_at,
+                    None,
+                )
+                .map_err(|e| display::entry_error(&EntryError::Admit(e), &identity.id))?;
             }
             Step::RecordInitialized => {
                 if record_initialized(&store, &identity, new_request_id(), started_at)
@@ -697,7 +699,15 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
     // `project.initialized` and the first `policy.effective`. It prints
     // nothing, and init's own events keep policy version 0.
     let project = ProjectId(identity.id.clone());
-    policy_step::step(&store, &project, &recorded, new_request_id(), started_at).map_err(failed)?;
+    policy_step::step(
+        &store,
+        &project,
+        &recorded,
+        new_request_id(),
+        started_at,
+        None,
+    )
+    .map_err(failed)?;
     if !acted {
         lines.push(format!(
             "already initialized: {} names project {}, and the ledger at {} holds it",
@@ -1233,6 +1243,7 @@ mod tests {
             &checkout,
             request(7),
             T1,
+            None,
         )
         .unwrap();
     }

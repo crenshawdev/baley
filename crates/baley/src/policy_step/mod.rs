@@ -8,7 +8,7 @@ mod record;
 
 use baley_core::catalog::{MODEL_CATALOG_VIEW, USER_PROJECT, read_state, state_key};
 use baley_core::policy::recorded::RecordedPolicy;
-use baley_store::{Admin, Ledger, ProjectId, RequestId, StoreError, Views};
+use baley_store::{Admin, Caller, Ledger, ProjectId, RequestId, StoreError, Views};
 
 pub use read::{Reads, build, gather};
 pub use record::{RECORD_COMMAND, record};
@@ -20,16 +20,27 @@ pub use record::{RECORD_COMMAND, record};
 ///
 /// `baley init`, `purge`, `config set`, `anchor` and `acknowledge-restore`
 /// call it, each right after checkout admission and in a transaction of its
-/// own. The server and guard follow per request in Build 3.
+/// own. So does the session server's write preparation (`mcp::prepare`), once
+/// per project write, with the host's recorded policy, the call's caller and
+/// the server's time. A project read never calls it, and the guard does not.
 pub fn step(
     store: &(impl Admin + Views + Ledger),
     project: &ProjectId,
     recorded: &RecordedPolicy,
     request_id: RequestId,
     at: &str,
+    caller: Option<Caller>,
 ) -> Result<u64, StoreError> {
     let catalog_version = observe_catalog_version(store)?;
-    record(store, project, recorded, catalog_version, request_id, at)
+    record(
+        store,
+        project,
+        recorded,
+        catalog_version,
+        request_id,
+        at,
+        caller,
+    )
 }
 
 /// The catalog version, read outside any transaction: 0 when the `user`
@@ -51,7 +62,10 @@ mod tests {
     use baley_core::catalog::{MODELS_SEEDED, MODELS_STREAM};
     use baley_core::policy::recorded::{POLICY_EFFECTIVE, recorded_policy};
     use baley_core::policy::{Schema, effective_policy};
-    use baley_store::{Event, PageRequest, StreamName};
+    use baley_store::{
+        Actor, COMMAND_CLAIMED, COMMAND_COMPLETED, COMMAND_RECONCILED, Event, HistoryFilter,
+        PageRequest, ServerCaller, StreamName,
+    };
     use baley_store_sqlite::SqliteStore;
     use serde_json::json;
 
@@ -77,8 +91,12 @@ mod tests {
     }
 
     fn recorded() -> RecordedPolicy {
+        recorded_at("/w/r")
+    }
+
+    fn recorded_at(path: &str) -> RecordedPolicy {
         let policy = effective_policy(Schema::standard(), None, None, None).unwrap();
-        recorded_policy(Path::new("/w/r"), &policy).unwrap()
+        recorded_policy(Path::new(path), &policy).unwrap()
     }
 
     fn events(store: &SqliteStore, project: &str, stream: &str) -> Vec<Event> {
@@ -106,7 +124,15 @@ mod tests {
     fn the_step_does_not_create_or_seed_user_and_records_catalog_version_0_without_it() {
         let (_dir, store) = store();
 
-        step(&store, &ProjectId(ID.into()), &recorded(), request(1), T1).unwrap();
+        step(
+            &store,
+            &ProjectId(ID.into()),
+            &recorded(),
+            request(1),
+            T1,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(recorded_catalog_version(&store), json!(0));
         let projects = store.projects().unwrap();
@@ -126,8 +152,115 @@ mod tests {
             .collect();
         assert_eq!(seeded.len(), 1);
 
-        step(&store, &ProjectId(ID.into()), &recorded(), request(2), T2).unwrap();
+        step(
+            &store,
+            &ProjectId(ID.into()),
+            &recorded(),
+            request(2),
+            T2,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(recorded_catalog_version(&store), json!(seeded[0].seq));
+    }
+
+    const SESSION: &str = "3f2b8c1e-4d5a-4e6f-8a7b-9c0d1e2f3a4b";
+
+    /// A server caller for JSON-RPC call 7.
+    fn server_caller() -> Caller {
+        Caller::Server(
+            ServerCaller::new("/p", "/p/sub", "claude-code", SESSION, &json!(7)).unwrap(),
+        )
+    }
+
+    /// The `policy.effective` and `command.completed` events of the policy
+    /// step, in order.
+    fn step_events(store: &SqliteStore) -> Vec<Event> {
+        let mut all = events(store, ID, "project");
+        all.retain(|event| event.type_name == POLICY_EFFECTIVE);
+        all.extend(
+            events(store, ID, "command/policy.record")
+                .into_iter()
+                .filter(|event| event.type_name == COMMAND_COMPLETED),
+        );
+        all
+    }
+
+    #[test]
+    fn a_server_callers_policy_step_is_not_recorded_without_its_caller_actor_or_time() {
+        let (_dir, store) = store();
+        let caller = server_caller();
+
+        step(
+            &store,
+            &ProjectId(ID.into()),
+            &recorded(),
+            request(1),
+            T1,
+            Some(caller.clone()),
+        )
+        .unwrap();
+
+        let recorded = step_events(&store);
+        assert_eq!(recorded.len(), 2);
+        for event in &recorded {
+            assert_eq!(event.caller.as_ref(), Some(&caller), "{}", event.type_name);
+            assert_eq!(event.actor, Actor::Baley, "{}", event.type_name);
+            assert_eq!(event.recorded_at, T1, "{}", event.type_name);
+        }
+    }
+
+    #[test]
+    fn a_command_line_policy_step_is_not_recorded_with_a_caller_after_a_server_one() {
+        let (_dir, store) = store();
+        let project = ProjectId(ID.into());
+        step(
+            &store,
+            &project,
+            &recorded(),
+            request(1),
+            T1,
+            Some(server_caller()),
+        )
+        .unwrap();
+
+        step(&store, &project, &recorded_at("/w/q"), request(2), T2, None).unwrap();
+
+        let second: Vec<_> = step_events(&store)
+            .into_iter()
+            .filter(|event| event.request_id == request(2))
+            .collect();
+        assert_eq!(second.len(), 2);
+        assert!(second.iter().all(|event| event.caller.is_none()));
+    }
+
+    #[test]
+    fn a_server_callers_policy_step_is_not_left_with_a_claim_or_a_reconciliation() {
+        let (_dir, store) = store();
+        let project = ProjectId(ID.into());
+
+        step(
+            &store,
+            &project,
+            &recorded(),
+            request(1),
+            T1,
+            Some(server_caller()),
+        )
+        .unwrap();
+
+        assert!(store.open_claims(&project).unwrap().is_empty());
+        let filter = HistoryFilter {
+            types: vec![COMMAND_CLAIMED.into(), COMMAND_RECONCILED.into()],
+            git_commit: None,
+        };
+        let page = PageRequest {
+            limit: 100,
+            after: None,
+        };
+        let head = store.head(&project).unwrap().unwrap().seq;
+        let held = store.history(&project, 1..=head, &filter, page).unwrap();
+        assert!(held.items.is_empty());
     }
 }

@@ -57,7 +57,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 | HST-R4 | Baley identifies the host and version from the client info of each `tools/call` and selects that host's adapter. The info comes from `initialize` in a 2025-11-25 session and from the request's own `_meta` in a 2026-07-28 one, never from an earlier call. Negotiation, discover and `tools/list` serve any well-formed client. A `tools/call` from a missing or unsupported client, `baley_version` included, is answered `failed` with code `unknown-host` before any operation runs, carrying the client info reported, the supported host (`claude-code`) and `recorded: false`. It is never an initialize or protocol error, and an unsupported host is never served at a floor. The name is the client's own report, so the answer states what Baley supports and is no defence. | Baley supports a host only when it meets the security bar, and a new host is a new adapter and an ADR (ADR 0033). | SYS-P8, SYS-P12 | Active |
 | HST-R5 | Three tools: `baley_version`, `baley_query` and `baley_apply`. `baley_query` and `baley_apply` requests each name an `operation`, and `baley_version` takes no arguments. Operation names are only ever added. The advertised input schema is a flat object; the full schema of each operation is served by the `schema` operation in parts. A refusal is a typed result with a code and a place, never a protocol error. A server failure that records nothing is a typed `failed` result with a code, a place, `recorded: false` and `retryable`, and is not a refusal or a protocol error either. A protocol error is reserved for a malformed or oversized frame, a missing protocol-required metadata key or an unknown tool. | A small typed wire that the host loads once and never sees change. | SYS-P10 | Active |
 | HST-R6 | Every record and every instruction is read by identity, in parts of at most 24,576 bytes, each naming the next part; nothing is sent twice and nothing is echoed back. Source code is never served: workers read it with the host's own tools. Tools are returned in a fixed order with cache hints. | Bounded reads, no scanning, no duplicate bytes in a context. | SYS-P10, ADR 0009 | Active |
-| HST-R7 | The project comes from the session's `CLAUDE_PROJECT_DIR`, which the server reads once when it starts (CFG-R4), and no call argument selects it. The server records the working directory it started in beside the project, and a directory that differs from the project is valid. It records with every write the caller value of [design 0001's event envelope](0001-evidence-ledger.md#events): the host, the Baley session the server minted, the call identity and its source, the client version and the host's own session when the host supplies them and, for a worker, its work order id. The `tools/call` decisions run one at a time on the server's own worker, behind one bounded queue that the session and its subagents share: one call running, four waiting and 16 MiB of raw frame bytes among them. A call past either bound is answered `failed` with code `server-overloaded`, which is retryable, before anything is prepared (SYS-R5). | Every call is tied to its project and session without asking the host for more, and the record says who did what. | SYS-R5, CFG-R4 | Active |
+| HST-R7 | The project comes from the session's `CLAUDE_PROJECT_DIR`, which the server reads once when it starts (CFG-R4). Every project call discovers its project afresh from that directory, and no call argument, working directory or project field selects it. The call needs the project in this machine's ledger. The server records the working directory it started in beside the project, and a directory that differs from the project is valid. A read appends nothing. A write runs, in order, the replay lookup, the settings read and validation, checkout admission, and the policy step under the host's key, then its own command with the version the step returned. Checkout admission, the step and the command are recorded as the actor `baley`, with the call's caller and the server's time. The server records with every write the caller value of [design 0001's event envelope](0001-evidence-ledger.md#events): the host, the Baley session the server minted, the call identity and its source, the client version and the host's own session when the host supplies them and, for a worker, its work order id. The `tools/call` decisions run one at a time on the server's own worker, behind one bounded queue that the session and its subagents share: one call running, four waiting and 16 MiB of raw frame bytes among them. A call past either bound is answered `failed` with code `server-overloaded`, which is retryable, before anything is prepared (SYS-R5). | Every call is tied to its project and session without asking the host for more, a read cannot change the record, and a write is checked the way the command line checks one. The record says who did what. | SYS-R5, CFG-R4 | Active |
 | HST-R8 | Long work (a suite, a check, a landing step) is claimed and started, and the call answers when the host allows it: on a host that keeps a main-session call open past its foreground limit, the call returns on completion; everywhere else the call returns a handle and `still running` after a bounded wait, and the caller repeats the call with the handle until it completes. The adapter chooses; the work runs the same either way, and a handle survives a session's reconnect. | Hosts limit how long a tool call may run; the work must not. | SYS-R7 | Active |
 | HST-R9 | Baley's questions to the owner are returned in the tool result as typed questions with their options; the host session puts them to the owner and returns the answer through the answering operation, deciding nothing itself. Where the adapter has proven elicitation reaches the person (a main session on Claude Code), it may use it for the same questions with the same records. Every answer is recorded with `owner.name` and Baley's clock. | The owner answers, the session relays, the record holds the answer. | SYS-P5, CFG-R8 | Active |
 | HST-R10 | The owner's identity on every approval is `owner.name` from the global settings, asked by the interview and defaulting to git `user.name`; the time is Baley's clock when the approval arrives. A session never supplies either. | One owner, one clock. | SYS-P5 | Active |
@@ -68,7 +68,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 | HST-R15 | Provider calls (outside reviews, model detection is Baley's own) are made by the host session through `baley exec --key <NAME> -- <command>`. `NAME` is the key's name exactly as written in `keys.env`; Baley sets the key under that same name in that one process's environment and replaces every occurrence of it in the process's output before returning. | Keys stay out of conversations and transcripts. | SYS-R11, CFG-R27 | Active |
 | HST-R16 | The command line serves the owner: `baley init`, `project`, `scope`, `story`, `backlog`, `phase`, `plan`, `exec`, `verify`, `review`, `land`, `milestone`, `release`, `undo`, `pause`, `resume`, `stop`, `config`, `models`, `install`, `doctor`, `verify-ledger`, `export`, `help`. Every command answers with a receipt or a refusal with a code; the same operations are reachable over MCP where a session needs them. The owner never starts `serve`: Claude Code does, once per session. | One way in for a person, the same rules as the wire. | | Active |
 | HST-R17 | `baley install` on Claude Code places the binary, registers the MCP server (user level), installs the hook with the nine-tool matcher of GRD-R1, writes the sandbox configuration (`denyRead` and `denyWrite` over Baley's home and its config folder, `failIfUnavailable` true, `allowUnsandboxedCommands` false) and `Read` and `Edit` deny rules over both, renders the stubs, offers the settings interview when settings are missing, and records the install with the binary version. `baley doctor` re-checks every one of these and reports each with a fix. Claude Code gets no session-start hook. How Baley is delivered and who writes these files wait on the owner's delivery decision (the roadmap's held Build 3 tasks), while their content is rendered in Build 3. | A machine is set up once, the same way, and can be checked. | ADR 0008, ADR 0009, ADR 0033, CFG-R11 | Active |
-| HST-R18 | Every store failure behind a call is answered as a refusal with a code, never as an MCP error; refused `apply` calls are recorded, and a refusal that cannot be recorded is answered as a server failure, not a refusal. | The model self-corrects on a refusal; the record never lies about one. | SYS-P10, EVD-R26 | Active |
+| HST-R18 | A call that fails without recording anything itself, a store failure included, is answered `failed` with a code, a place, `recorded: false` and `retryable`, never as an MCP error or a refusal. `retryable` is true only for `server-overloaded` and a busy ledger (`ledger-busy`). Checkout admission and the policy step are separate transactions, as on the command line, so a checkout admission recorded before a later step failed stays recorded, and a retry records nothing more for an unchanged checkout. Refused `apply` calls are recorded, and a refusal that cannot be recorded is answered as a server failure, not a refusal. | The model self-corrects on a refusal and retries only what can succeed unchanged; the record never lies about a refusal. | SYS-P10, EVD-R26 | Active |
 | HST-R19 | Frames are bounded (4 MiB raw for the whole frame, depth 128) before the protocol layer sees them. A frame over either bound is discarded to its newline and answered with a JSON-RPC error, and the connection keeps serving. Hook input is bounded (64 KiB); every child process Baley starts for its own work runs with a deadline through the process port; a command run through `baley exec` runs until it ends. | No caller can exhaust the server. | SYS-R5 | Active |
 | HST-R20 | On Claude Code, each of the three tool descriptors carries `_meta["anthropic/alwaysLoad"]: true`, so the main session and every subagent see the tools without a tool search, whatever the registration says. | Every capability reaches every agent. | SYS-P12 | Active |
 | HST-R21 | MCP prompts are served on Claude Code as a second entry point for the front doors, listing the same commands the skill stubs list. | A host that lists prompts as commands gets them without a file. | HST-R12 | Backlog |
@@ -96,7 +96,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 
 - **Inputs:** `operation` and its typed arguments; an optional `part`.
 - **Outputs:** the operation's typed result, or one part with the next part's identity.
-- **Refusals:** `unknown-operation`, `malformed-arguments` (naming the field), `not-a-project`, plus the operation's own codes.
+- **Refusals:** `unknown-operation`, `operation-unavailable` (a spelling an earlier server served, naming the build that replaces it), `invalid-arguments` (the reason names the field), plus the operation's own codes. A project that cannot be prepared is not a refusal: the call is answered `failed`, from the table under `baley_apply`.
 
 Query operations are the reads of every area: `help`, `schema`, `document` (a record by identity: work order, plan, story, phase, run, review, verification, roadmap row), `document-search`, `instruction` (an instruction by identity), `progress`, `next` ([0013](0013-next-action-and-progress.md)), `why`, `recall`, `search` ([0014](0014-support-families.md)), `route`, `status` operations per area.
 
@@ -107,6 +107,23 @@ Query operations are the reads of every area: `help`, `schema`, `document` (a re
 - **Refusals:** as `baley_query`, plus `request-id-reuse` (same id, different payload) and the operation's own codes.
 
 Apply operations are the writes of every area, each named in its document: scope, story, phase and plan operations (0004, 0005); execution operations (0006); verification operations (0007); review operations (0008); risk operations (0009); landing, milestone, release, undo, pause (0011); capture, task, debug, spike (0014); `answer` (the owner's answer to a relayed question); `worker-exit`; `round-record`.
+
+### Failed answers of a project call
+
+Before a project read or write runs its operation, the server prepares it (section 8). A step that cannot go on answers `failed` with a code, a place and `recorded: false`. These join the `failed` answers the gate gives before preparation: `unknown-host`, `server-overloaded`, `project-context-missing` (`CLAUDE_PROJECT_DIR` is not set) and `caller-invalid`. The gate answers `project-context-invalid` too, for a variable that was unusable when the server started, and preparation answers it for a directory that cannot be read now.
+
+| Code | Place | Retryable | Answered | The owner's step | First reached by |
+|---|---|---|---|---|---|
+| `project-context-invalid` | `CLAUDE_PROJECT_DIR` | no | read and write | Restore the project directory, which was removed after the server started. | Build 3 T7, `document` |
+| `not-a-project` | `CLAUDE_PROJECT_DIR` | no | read and write | Run `baley init` in the repository, or start the session inside one that holds a `baley.toml`. | Build 3 T7, `document` |
+| `config-unavailable` | `settings` | no | read and write | Repair the settings file the reason names. A read judges only the working tree's `baley.toml`, and a write also judges the global file and HEAD's copy. | Build 3 T7, `document` |
+| `project-not-in-ledger` | `project` | no | read and write | Run `baley init` in the checkout, which ties its project to this machine's ledger. | Build 3 T7, `document` |
+| `ledger-busy` | `ledger` | yes | read and write | None. The caller repeats the same call. | Build 3 T7, `document` |
+| `ledger-unavailable` | `ledger` | no | read and write | Run `baley doctor`. A server whose ledger could not be opened at start needs a new session once the ledger opens. | Build 3 T7, `document` |
+| `checkout-facts-unavailable` | `git` | no | write only | Fix the git fault the reason names, such as a remote that cannot be read. | Build 3 T8, `capture` |
+| `project-id-conflict` | `checkout` | no | write only | Run `baley init --new-id` in the fork's checkout, which gives it its own project. | Build 3 T8, `capture` |
+
+`recorded: false` means the call recorded nothing itself. A write's `ledger-busy` or `ledger-unavailable` answered at the policy step can follow a checkout admission that stays recorded, and a retry records nothing more for an unchanged checkout.
 
 ### Long-call handle
 
@@ -145,7 +162,7 @@ Every event a call records carries one `caller` in its envelope, hashed with the
 - The server form is what the server records for a request. It holds the project directory, the working directory, the host, the Baley session the server minted, and the call identity: the request's JSON-RPC id, with its source. It may also hold the client version, the host's own session id, a work order id and instruction evidence.
 - The hook form is what the guard hook records for a tool call. It holds the host, the working directory and the call identity: Claude Code's tool-use id, with its source. It may also hold the project directory, the host's own session id, a work order id and instruction evidence. It has no Baley session, so a hook cannot claim one.
 
-Instruction evidence is a list of entries, each an instruction's identity, version and hash. Every text is checked when the caller is built and again when it is read back, and each has a byte limit. A command-line command and a reconciliation have no caller: the envelope has no `caller` key, and a caller is never `null`. No caller enters a request digest or request key, so a replay records nothing and the original caller stays on the event the request first produced. No call fills a caller yet ([section 11](#11-build-status)).
+Instruction evidence is a list of entries, each an instruction's identity, version and hash. Every text is checked when the caller is built and again when it is read back, and each has a byte limit. A command-line command and a reconciliation have no caller: the envelope has no `caller` key, and a caller is never `null`. No caller enters a request digest or request key, so a replay records nothing and the original caller stays on the event the request first produced. The server's preparation fills the server form on checkout admission, the policy step and the prepared command ([section 8](#8-workflows)), and [section 11](#11-build-status) says which operations reach it.
 
 ### long_call (table, not an event)
 
@@ -191,6 +208,7 @@ sequenceDiagram
   participant H as Host
   participant S as Baley server
   participant A as Adapter
+  participant L as Ledger
   H->>S: start baley serve over stdio with CLAUDE_PROJECT_DIR set
   S->>S: record the project and the working directory, mint the session id
   H->>S: initialize or discover
@@ -198,9 +216,71 @@ sequenceDiagram
   H->>S: tools/call baley_query schema, with the client info
   S->>A: select adapter for host and version
   S-->>H: one schema part, next part id
+  H->>S: tools/call baley_query document, with the client info
+  S->>A: select adapter for host and version
+  S->>S: after the gate and the queue, discover the project afresh from CLAUDE_PROJECT_DIR
+  S->>S: read the project id from the working tree's baley.toml
+  S->>L: list the ledger's projects
+  alt a step cannot go on
+    S-->>H: failed with a code and a place, recorded false
+  else the project is known
+    S->>L: the operation reads its record
+    S-->>H: the operation's answer
+  end
 ```
 
-*Figure 3. A session starting its server and making a call.*
+*Figure 3. A session starting its server and making calls. The second call is a project read. After the gate and the queue it discovers the project from the session's `CLAUDE_PROJECT_DIR`, reads the project id from the working tree's `baley.toml` and checks that the ledger lists it, then the operation answers. A read stops there and appends nothing. Any step before the answer that cannot go on is answered `failed` with `recorded: false` (section 5).*
+
+```mermaid
+sequenceDiagram
+  participant H as Host session
+  participant S as Baley server
+  participant G as Git
+  participant L as Ledger
+  H->>S: tools/call baley_apply with an operation and its request id
+  S->>S: discover the project from CLAUDE_PROJECT_DIR
+  S->>S: read the project id from the working tree's baley.toml
+  break the directory cannot be read, is not in a project, or its baley.toml cannot be read
+    S-->>H: failed project-context-invalid, not-a-project or config-unavailable, recorded false
+  end
+  S->>L: list the ledger's projects
+  break the ledger is busy or unavailable
+    S-->>H: failed ledger-busy or ledger-unavailable, recorded false
+  end
+  break the project is not in the ledger
+    S-->>H: failed project-not-in-ledger, recorded false
+  end
+  S->>L: look the request up by its command kind and request id
+  break the ledger is busy or unavailable, or holds a record of the request that cannot be read
+    S-->>H: failed ledger-busy or ledger-unavailable, recorded false
+  end
+  alt the ledger already holds the request
+    S->>L: the operation's transaction answers the replay
+    L-->>S: the original receipt
+    S-->>H: the receipt, nothing new recorded
+  else a new request
+    S->>S: read the global file and HEAD's copy of baley.toml, then validate the settings
+    break the settings do not validate
+      S-->>H: failed config-unavailable, recorded false
+    end
+    S->>G: checkout facts from the remote the no-host policy names
+    G-->>S: the remote and the head
+    S->>L: checkout admission, checkout.seen only when the checkout is new or changed
+    break the facts cannot be read, the checkout is a fork, or the ledger is busy or unavailable
+      S-->>H: failed checkout-facts-unavailable, project-id-conflict, ledger-busy or ledger-unavailable, recorded false
+    end
+    S->>L: policy step, policy.effective under the checkout and claude-code only when it changed
+    break the ledger is busy or unavailable
+      S-->>H: failed ledger-busy or ledger-unavailable, recorded false
+    end
+    L-->>S: the policy version in force
+    S->>L: the operation's transaction, carrying that version
+    L-->>S: the receipt
+    S-->>H: the receipt
+  end
+```
+
+*Figure 4. A project write, in the order the server prepares it. A request the ledger already holds goes straight to the operation's transaction, which keeps the final say on a replay, so a retry is answered with its receipt even when the settings no longer validate (HEAD's copy or the merge), but not when the working tree's `baley.toml` can no longer give the project id. A refusal ends preparation at its step: it answers `failed` with `recorded: false`, and a fork records nothing in the project. Checkout admission and the policy step are separate transactions, as on the command line, so a failure at the step leaves the admission's `checkout.seen` recorded. The guard takes none of this route.*
 
 ```mermaid
 sequenceDiagram
@@ -226,7 +306,7 @@ sequenceDiagram
   H->>S: apply worker-exit
 ```
 
-*Figure 4. Delivering a work order and relaying a question.*
+*Figure 5. Delivering a work order and relaying a question.*
 
 ```mermaid
 sequenceDiagram
@@ -248,7 +328,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 5. A long call.*
+*Figure 6. A long call.*
 
 ```mermaid
 sequenceDiagram
@@ -268,7 +348,7 @@ sequenceDiagram
   B-->>O: receipt, run baley doctor to check
 ```
 
-*Figure 6. Installing on a host.*
+*Figure 7. Installing on a host.*
 
 ## 9. Settings
 
@@ -291,27 +371,27 @@ The text of every instruction is owned by the area it serves; this area serves i
 
 ## 11. Build status
 
-The library holds the per-session server (`crates/baley/src/mcp/`), and `baley serve` starts it. The binary also holds the inherited engine, parked for Build 9 to delete (`crates/baley/src/inherited.rs:1-4`). Nothing in production reaches it, and its tests still run.
+The library holds the per-session server (`crates/baley/src/mcp/`), and `baley serve` starts it. The same module prepares a project read or write from the session's own project (`crates/baley/src/mcp/prepare.rs`), built and tested, though no served operation calls it yet (HST-R7). The binary also holds the inherited engine, parked for Build 9 to delete (`crates/baley/src/inherited.rs:1-4`). Nothing in production reaches it, and its tests still run.
 
 | Requirement | Status | Where |
 |---|---|---|
-| HST-R1 | Built | `baley serve` runs one stdio server for the session (`crates/baley/src/main.rs:61-62, 187-200`, `crates/baley/src/mcp/serve.rs:123-201`), and it advertises only the two tested revisions (`crates/baley/src/mcp/tools.rs:65-68`, `crates/baley/src/mcp/handler.rs:118-120`) |
+| HST-R1 | Built | `baley serve` runs one stdio server for the session (`crates/baley/src/main.rs:61-62, 187-200`, `crates/baley/src/mcp/serve.rs:125-210`), and it advertises only the two tested revisions (`crates/baley/src/mcp/tools.rs:65-68`, `crates/baley/src/mcp/handler.rs:174-176`) |
 | HST-R2, HST-R3 | Withdrawn | Nothing to build: each session starts its own stdio server (ADR 0034) |
-| HST-R4 | Built | The 2025 decoder reads `initialize` and the 2026 decoder reads the request's `_meta` (`crates/baley/src/mcp/client.rs:24-40`). The host is selected per call (`crates/baley/src/mcp/client.rs:95-126`, `crates/baley/src/mcp/handler.rs:54-79, 122-130`), and a missing or unsupported client is answered `failed` `unknown-host` before the queue (`crates/baley/src/mcp/gate.rs:71-110, 162-178`). The supported hosts are `Host::ALL` (`crates/baley-core/src/policy/schema.rs:108`) |
-| HST-R5 | Built | Three tools in a fixed order (`crates/baley/src/mcp/tools.rs:83-120`), append-only operation names asserted (`crates/baley/src/mcp/operations.rs:391-503, 516-520`), a flat schema plus the `schema` operation (`crates/baley/src/mcp/tools.rs:122-141`, `crates/baley/src/mcp/operations.rs:314-386`), and `failed` as its own arm of the envelope (`crates/baley/src/envelope.rs:80-139`). The gate raises a protocol error only for an unknown tool (`crates/baley/src/mcp/gate.rs:77, 153-160`) |
+| HST-R4 | Built | The 2025 decoder reads `initialize` and the 2026 decoder reads the request's `_meta` (`crates/baley/src/mcp/client.rs:24-40`). The host is selected per call (`crates/baley/src/mcp/client.rs:95-126`, `crates/baley/src/mcp/handler.rs:94-119, 178-186, 215`), and a missing or unsupported client is answered `failed` `unknown-host` before the queue (`crates/baley/src/mcp/gate.rs:71-110, 162-178`). The supported hosts are `Host::ALL` (`crates/baley-core/src/policy/schema.rs:108`) |
+| HST-R5 | Built | Three tools in a fixed order (`crates/baley/src/mcp/tools.rs:83-120`), append-only operation names asserted (`crates/baley/src/mcp/operations.rs:391-503, 516-520`), a flat schema plus the `schema` operation (`crates/baley/src/mcp/tools.rs:122-141`, `crates/baley/src/mcp/operations.rs:314-386`), and `failed` as its own arm of the envelope (`crates/baley/src/envelope.rs:82-153`). The gate raises a protocol error only for an unknown tool (`crates/baley/src/mcp/gate.rs:77, 153-160`) |
 | HST-R6 | Partly built | Parts at 24,576 bytes (`crates/baley/src/read/instructions.rs:5-7`, `crates/baley/src/mcp/operations.rs:296-297, 359-386`), `help` and `schema` answer (`crates/baley/src/mcp/operations.rs:305-347`), and the tools carry a fixed order and cache hints (`crates/baley/src/mcp/tools.rs:70-81`). `document` and `document-search` answer `operation-unavailable` with the build that replaces them (`crates/baley/src/mcp/operations.rs:98-99, 263-275`) until the served reads are rebuilt (T7) |
-| HST-R7 | Partly built | The session context is gathered once and judged (`crates/baley/src/mcp/context.rs:20-50, 127-158`), each call's context and caller are formed (`crates/baley/src/mcp/context.rs:213-237, 286-314`), and decisions run one at a time on the worker behind one queue (`crates/baley/src/mcp/queue.rs:15-93`, `crates/baley/src/mcp/worker.rs:80-171`, `crates/baley/src/mcp/admission.rs:28-59`). The port holds the caller value (`crates/baley-store/src/caller.rs:569-576`), `Work::push` stamps the command's caller on every event it appends (`crates/baley-store-sqlite/src/transact.rs:851-885`) and the `event.caller` column stores it (`crates/baley-store-sqlite/src/schema.rs:51`). No call records a caller yet: `run_decision` forms it and sets it aside (`crates/baley/src/mcp/handler.rs:82-98`) until per-request preparation (T5), and captures (T8) and the guard's records (T10) fill the other forms |
+| HST-R7 | Partly built | The session context is gathered once and judged (`crates/baley/src/mcp/context.rs:20-50, 127-158`), each call's context and caller are formed (`crates/baley/src/mcp/context.rs:213-237, 286-314`), and decisions run one at a time on the worker behind one queue (`crates/baley/src/mcp/queue.rs:15-93`, `crates/baley/src/mcp/worker.rs:80-217`, `crates/baley/src/mcp/admission.rs:28-59`). The port holds the caller value (`crates/baley-store/src/caller.rs:569-576`), `Work::push` stamps the command's caller on every event it appends (`crates/baley-store-sqlite/src/transact.rs:851-885`) and the `event.caller` column stores it (`crates/baley-store-sqlite/src/schema.rs:51`). Preparation finds the project afresh from the caller's project directory and checks that the ledger lists it, and a write goes on to the replay lookup, the settings, checkout admission and the policy step in that order. The plan is pure and the entry performs each step it asks for (`crates/baley/src/mcp/prepare.rs:263-415, 426-548`). Checkout admission and the step take the call's caller and the server's time and record as Baley (`crates/baley/src/checkout/admit.rs:52-93, 212-243`, `crates/baley/src/checkout/mod.rs:77-101`, `crates/baley/src/policy_step/mod.rs:16-44`, `crates/baley/src/policy_step/record.rs:24-66, 129-160`), and `run_decision` hands the operation the ledger, the host, the caller and the server's time (`crates/baley/src/mcp/handler.rs:55-68, 122-149`). No served operation reaches preparation yet, since each carries `needs_project: false` (`crates/baley/src/mcp/operations.rs:43-56, 67-75`). T7's `document` and T8's `capture` set it there and add their arms to `handler::operate` (`crates/baley/src/mcp/handler.rs:151-167`), where the preparation input already arrives. The guard's records (T10) fill the hook form |
 | HST-R8 | Not built | Only the parked engine runs a suite inside one call (`crates/baley/src/execution_service.rs:275-287`, `crates/baley/src/execution/runner.rs:972-1005`). The session server answers the execution operations as unavailable (`crates/baley/src/mcp/operations.rs:128-195`) until Build 5, so no call it serves runs a suite |
 | HST-R9, HST-R10 | Not built | The parked engine holds owner questions as gate records answered by `execution-authorize` with any non-blank owner and time (`crates/baley/src/execution_service.rs:364-500`). The session server answers that operation as unavailable (`crates/baley/src/mcp/operations.rs:128-195`) until Build 5 |
-| HST-R11 | Partly built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-41`). The caller has a place for each instruction's identity, version and hash (`crates/baley-store/src/caller.rs:273-298`), and no call fills it until the compiled instruction identities (T7) and per-request preparation (T5) land |
+| HST-R11 | Partly built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-41`). The caller has a place for each instruction's identity, version and hash (`crates/baley-store/src/caller.rs:273-298`), and no call fills it until the compiled instruction identities land (T7) |
 | HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:139-176`), with no stub rendering and no install. The effort table and the requested and effective records are Build 4's first dispatch task |
 | HST-R13 | Built | The initialize instructions are one line naming `help` (`crates/baley/src/mcp/tools.rs:52-63`, asserted at `crates/baley/src/mcp/tools.rs:226-232`) |
 | HST-R14 | Not built | The parked engine builds a dispatch answer of an id and a route, never a prompt (`crates/baley/src/execution/boundary.rs:93-147`). The session server answers `execute-next` as unavailable (`crates/baley/src/mcp/operations.rs:112`) until Build 5 |
 | HST-R15 | Partly built | `baley exec` sets the key in the command's environment and redacts both streams (`crates/baley/src/exec.rs:87-203`, `crates/baley/src/process.rs:125-131, 283-302` for `owner_command` and `stdio_plan`). The parked review engine still makes provider calls with keys it reads itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 moves outside calls to the host session. |
 | HST-R16 | Partly built | The CLI has `serve`, which Claude Code starts and the owner does not, `guard`, `skill-description`, the render commands, the ledger commands (`verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor`, `acknowledge-restore`), `exec`, `init`, `config` (`show`, `set` and `interview`) and `models` (`list`, `add`, `remove` and `update`) (`crates/baley/src/main.rs:24-95`). It has no `service` command, and the other commands are later builds. |
 | HST-R17 | Not built | The tracked `hooks/hooks.json` is hand-written, and the remaining registrations are hand-written in owner-local files outside the repository's tracked content |
-| HST-R18 | Partly built | The `failed` answer is built: a code, a place, `recorded: false` and `retryable`, returned as a successful tool result (`crates/baley/src/envelope.rs:80-139`, `crates/baley/src/mcp/gate.rs:66-69`). The server uses it for `unknown-host` (`crates/baley/src/mcp/gate.rs:162-178`), `server-overloaded` (`crates/baley/src/mcp/admission.rs:50-59`) and the project and caller faults (`crates/baley/src/mcp/gate.rs:112-151`). No operation reaches the store yet, so no store failure is answered and no refused apply is recorded until per-request preparation (T5) |
-| HST-R19 | Partly built | The decoder bounds a whole frame at 4 MiB and its depth at 128 (`crates/baley/src/mcp/frame.rs:14-18, 143`). A frame over a bound or not JSON is discarded to its newline and answered with a JSON-RPC error while reading goes on (`crates/baley/src/mcp/frame.rs:470-493`, `crates/baley/src/mcp/transport.rs:52-73, 218-247`). Hook input is bounded (`crates/baley/src/guard/mod.rs:15`). Every git child runs with its registered deadline, enforced by `validate_launch` (`crates/baley/src/process.rs:218-249`, `crates/baley/src/git_process.rs`). The suite runner's `sh -c` (`crates/baley/src/execution/runner.rs`) runs with none, owned by Build 5, and a command under `baley exec` runs with none by design. |
+| HST-R18 | Partly built | The `failed` answer is built: a code, a place, `recorded: false` and `retryable`, returned as a successful tool result (`crates/baley/src/envelope.rs:82-153`, `crates/baley/src/mcp/gate.rs:66-69`). The server uses it for `unknown-host` (`crates/baley/src/mcp/gate.rs:162-178`), `server-overloaded` (`crates/baley/src/mcp/admission.rs:50-59`) and the project and caller faults (`crates/baley/src/mcp/gate.rs:112-151`). Only `server-overloaded` and `ledger-busy` are retryable (`crates/baley/src/envelope.rs:105-114`). Preparation answers each fault as `failed`: its codes and places (`crates/baley/src/mcp/prepare.rs:34-56`, `crates/baley-core/src/policy/parse.rs:16`, `crates/baley-core/src/checkout/judge.rs:12`), the answers a store failure, a git fault and a fork get (`crates/baley/src/mcp/prepare.rs:217-261`, `crates/baley/src/checkout/mod.rs:22-63`) and where the plan raises each (`crates/baley/src/mcp/prepare.rs:263-415`). A ledger that could not be opened at start answers `ledger-unavailable` (`crates/baley/src/mcp/serve.rs:66-93`). Checkout admission and the policy step are separate transactions, so a checkout admission recorded before a later step failed stays recorded (`crates/baley/src/mcp/prepare.rs:1-13`). No served operation reaches preparation yet (HST-R7), so no host is answered a store failure until T7's `document` and T8's `capture` land. Recording a refused apply is T8's |
+| HST-R19 | Partly built | The decoder bounds a whole frame at 4 MiB and its depth at 128 (`crates/baley/src/mcp/frame.rs:14-18, 153, 246`). A frame over a bound or not JSON is discarded to its newline and answered with a JSON-RPC error while reading goes on (`crates/baley/src/mcp/frame.rs:470-493`, `crates/baley/src/mcp/transport.rs:52-73, 218-247`). Hook input is bounded (`crates/baley/src/guard/mod.rs:15`). Every git child runs with its registered deadline, enforced by `validate_launch` (`crates/baley/src/process.rs:218-249`, `crates/baley/src/git_process.rs`). The suite runner's `sh -c` (`crates/baley/src/execution/runner.rs`) runs with none, owned by Build 5, and a command under `baley exec` runs with none by design. |
 | HST-R20 | Built | Each descriptor carries the marker (`crates/baley/src/mcp/tools.rs:83-120`, asserted at `crates/baley/src/mcp/tools.rs:186-196`) |
 
 ## 12. Open questions

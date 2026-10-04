@@ -387,14 +387,14 @@ Not applicable. This area reads no setting of its own. The start runs the settin
 
 ## 11. Build status
 
-The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `plan-read` and `context-intake` (`crates/baley/src/mcp/operations.rs:105-106`) and `plan-submit` and `context-submit` (`crates/baley/src/mcp/operations.rs:153-154`) as `operation-unavailable`, and the operation baseline names Build 4 for them. It answers `verification-complete` (`crates/baley/src/mcp/operations.rs:133`), the roadmap tick, the same way and names Build 5. The baseline has no start, story or phase spelling. Production reaches `baley init` in this area (`crates/baley/src/init.rs:567-576`). Parsing and editing `ROADMAP.md` and `REQUIREMENTS.md` under `.planning/` is the parked engine's.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `plan-read` and `context-intake` (`crates/baley/src/mcp/operations.rs:105-106`) and `plan-submit` and `context-submit` (`crates/baley/src/mcp/operations.rs:153-154`) as `operation-unavailable`, and the operation baseline names Build 4 for them. It answers `verification-complete` (`crates/baley/src/mcp/operations.rs:133`), the roadmap tick, the same way and names Build 5. The baseline has no start, story or phase spelling. Production reaches `baley init` in this area (`crates/baley/src/init.rs:557-566`). Parsing and editing `ROADMAP.md` and `REQUIREMENTS.md` under `.planning/` is the parked engine's.
 
 | Requirement | Status | Where |
 |---|---|---|
 | PRJ-R1, PRJ-R2, PRJ-R5, PRJ-R7 | Not built | No start operation exists |
 | PRJ-R3 | Not built | Only the parked engine validates a context submission field by field (`crates/baley/src/context_service.rs:60-63`, `crates/baley/src/context/validation.rs:5-106`), and no scope submission exists. The session server answers `context-submit` as unavailable (`crates/baley/src/mcp/operations.rs:154`) until Build 4 |
 | PRJ-R4 | Not built | The parked engine seeds `REQUIREMENTS.md` rows at plan-submit (`crates/baley/src/plan_service.rs:410-437`) and has no assignment check. The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:153`) until Build 4 |
-| PRJ-R6 | Partly built | `baley init` is built as its own command (`crates/baley/src/init.rs:567-576`); the start operation that runs it is Build 4 (#25) |
+| PRJ-R6 | Partly built | `baley init` is built as its own command (`crates/baley/src/init.rs:557-566`); the start operation that runs it is Build 4 (#25) |
 | PRJ-R8, PRJ-R9 | Not built | |
 | PRJ-R10 | Not built | The parked engine parses phase ids as floating-point numbers (`crates/baley/src/derivation/model.rs:20-22`) and takes their order from the textual order of `ROADMAP.md` (`crates/baley/src/derivation/parse.rs:150-191`) |
 | PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw exists. The parked engine edits `ROADMAP.md` only to tick a phase (`crates/baley/src/verification/completion.rs:264-303`), and the session server answers `verification-complete` as unavailable (`crates/baley/src/mcp/operations.rs:133`) until Build 5 |

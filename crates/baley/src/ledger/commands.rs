@@ -10,7 +10,7 @@ use super::{
     ticker::ThreadTicker,
     trace::StoreTrace,
 };
-use crate::checkout::{AdmitError, EntryError, Site, gather_and_admit};
+use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::{init, policy_step, settings};
 use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
@@ -198,8 +198,8 @@ fn purge_policy_version(
     let (PurgePolicy::RunStep, Some((_, root, working))) = (choice, checkout) else {
         return Ok(0);
     };
-    let reads = policy_step::gather(config, &root, working.as_ref());
-    let policy = policy_step::build(&reads).map_err(|e| Render::refusal(e.to_string()))?;
+    let reads = policy_step::gather(config, &root, working.as_ref(), &mut crate::process::System);
+    let policy = policy_step::build(&reads, None).map_err(|e| Render::refusal(e.to_string()))?;
     let recorded = recorded_policy(&root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
     let site = Site {
         root: &root,
@@ -308,12 +308,16 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
             let path = folder.join(PROJECT_FILE);
             let read = settings::read(&path);
             let id = init::observe_file(read.clone());
-            let reads =
-                policy_step::gather(config, &root, read.as_ref().ok().and_then(Option::as_ref));
+            let reads = policy_step::gather(
+                config,
+                &root,
+                read.as_ref().ok().and_then(Option::as_ref),
+                &mut crate::process::System,
+            );
             Gathered {
                 settings: Settings {
                     project_file: Some(ProjectFile { path, id }),
-                    policy: policy_step::build(&reads),
+                    policy: policy_step::build(&reads, None),
                     pending: command_plan::pending_note(&reads),
                 },
                 root: Some(root),
@@ -327,7 +331,7 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
             Gathered {
                 settings: Settings {
                     project_file: None,
-                    policy: policy_step::build(&reads),
+                    policy: policy_step::build(&reads, None),
                     pending: command_plan::pending_note(&reads),
                 },
                 root: None,
@@ -389,16 +393,6 @@ fn checkout_policy(
     Ok((root, policy, recorded))
 }
 
-/// Renders why checkout admission stopped: a gather or fork refusal as a
-/// refusal, a store error through `display::store_error`.
-fn admission_render(error: EntryError, project: &ProjectId) -> Render {
-    match error {
-        EntryError::Gather(text) => Render::refusal(text),
-        EntryError::Admit(AdmitError::Fork(conflict)) => Render::refusal(conflict.to_string()),
-        EntryError::Admit(AdmitError::Store(e)) => display::store_error(&e, Some(&project.0)),
-    }
-}
-
 /// Gathers the checkout's facts and admits it, before the policy step. It
 /// prints nothing.
 fn admit_checkout(store: &SqliteStore, project: &ProjectId, site: &Site<'_>) -> Result<(), Render> {
@@ -409,8 +403,9 @@ fn admit_checkout(store: &SqliteStore, project: &ProjectId, site: &Site<'_>) -> 
         &mut crate::process::System,
         new_request_id(),
         &SystemClock::now(),
+        None,
     )
-    .map_err(|e| admission_render(e, project))
+    .map_err(|e| display::entry_error(&e, &project.0))
 }
 
 /// Runs the policy step for the checkout and returns the version in force.
@@ -425,6 +420,7 @@ fn run_step(
         recorded,
         new_request_id(),
         &SystemClock::now(),
+        None,
     )
     .map_err(|e| display::store_error(&e, Some(&project.0)))
 }

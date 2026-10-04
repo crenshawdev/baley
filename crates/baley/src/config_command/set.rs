@@ -71,7 +71,8 @@ fn attempt(
         Some((folder, root)) => {
             let working = settings::read(&folder.join(PROJECT_FILE));
             let head = working.as_ref().ok().and_then(Option::as_ref);
-            let reads = policy_step::gather(&folders.config, &root, head);
+            let reads =
+                policy_step::gather(&folders.config, &root, head, &mut crate::process::System);
             (
                 Some(ProjectSeen {
                     folder,
@@ -161,8 +162,9 @@ fn attempt(
                     &mut crate::process::System,
                     new_request_id(),
                     &at,
+                    None,
                 )
-                .map_err(|error| init::admission_render(error, &project.id))?;
+                .map_err(|error| crate::ledger::display::entry_error(&error, &project.id))?;
                 record_policy(store, project, &recorded, new_request_id(), &at)
             };
             step().map_err(|mut render| {
@@ -196,7 +198,12 @@ fn regather(config: &Path, project: &Project) -> Result<Reads, Unavailable> {
             cause: "the file was not found".to_owned(),
         },
     })?;
-    Ok(policy_step::gather(config, &project.root, Some(&working)))
+    Ok(policy_step::gather(
+        config,
+        &project.root,
+        Some(&working),
+        &mut crate::process::System,
+    ))
 }
 
 /// Each host's accepted model names from the `user` project's `model_catalog`
@@ -251,7 +258,7 @@ fn build_policy(
     project: &Project,
     reads: &Reads,
 ) -> Result<(EffectivePolicy, RecordedPolicy), Render> {
-    let policy = policy_step::build(reads).map_err(refusal)?;
+    let policy = policy_step::build(reads, None).map_err(refusal)?;
     let recorded = recorded_policy(&project.root, &policy).map_err(refusal)?;
     Ok((policy, recorded))
 }
@@ -271,6 +278,7 @@ fn record_policy(
         recorded,
         request_id,
         at,
+        None,
     )
     .map_err(|error| display::store_error(&error, Some(&project.id)))
 }
@@ -350,7 +358,7 @@ fn prepare(
         }
         None => None,
     };
-    policy_step::build(reads)?;
+    policy_step::build(reads, None)?;
     let (target, base) = match (layer, &seen) {
         (FileLayer::Project, Some((seen, _))) => {
             (seen.folder.join(PROJECT_FILE), seen.working.clone()?)

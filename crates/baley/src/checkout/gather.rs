@@ -253,7 +253,7 @@ mod tests {
                 pending: None,
             })),
         };
-        crate::policy_step::build(&reads).unwrap()
+        crate::policy_step::build(&reads, None).unwrap()
     }
 
     fn upstream() -> EffectivePolicy {

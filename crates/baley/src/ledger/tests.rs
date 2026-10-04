@@ -1407,7 +1407,7 @@ fn managed(
             path: CHECKOUT_FILE.into(),
             id,
         }),
-        policy: crate::policy_step::build(&reads),
+        policy: crate::policy_step::build(&reads, None),
         pending: command_plan::pending_note(&reads),
     }
 }
@@ -1417,7 +1417,7 @@ fn outside_settings(
     let reads = crate::policy_step::Reads { global, head: None };
     command_plan::Settings {
         project_file: None,
-        policy: crate::policy_step::build(&reads),
+        policy: crate::policy_step::build(&reads, None),
         pending: command_plan::pending_note(&reads),
     }
 }
