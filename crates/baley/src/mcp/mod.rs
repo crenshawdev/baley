@@ -25,3 +25,6 @@ pub mod queue;
 
 /// Admits a call in the order faults are answered: the gate first, then the queue.
 pub mod admission;
+
+/// Shutdown as transitions: stop admission, drain for at most ten seconds, one checkpoint attempt.
+pub mod lifecycle;
