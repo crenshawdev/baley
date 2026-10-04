@@ -77,16 +77,36 @@ No model is dispatched by this area.
 
 ### baley guard (hook entry)
 
-- **Inputs:** the hook's JSON on standard input: tool name, tool input (command, or file or notebook path and content), working directory, session id, call id.
+- **Inputs:** the hook's JSON on standard input, read up to 64 KiB. The guard reads these fields:
+  - `tool_name`, the tool, and `tool_input`, its input;
+  - `cwd`, the working directory;
+  - `session_id`;
+  - `tool_use_id`, the call id, which is never invented: a call with none cannot be recorded (GRD-R9);
+  - `hook_event_name`, which must be `PreToolUse` when present.
+
+  Each tool's `tool_input` is read as follows:
+
+  | Tool | Fields read |
+  |---|---|
+  | `Bash` | `command` |
+  | `Monitor`, command form | `command` |
+  | `Monitor`, watch form | none: a watch has no `command` and is not scanned |
+  | `PowerShell` | none: the call is judged by its tool name |
+  | `Read` | `file_path` |
+  | `Grep` | `path` and `glob`, both optional: an absent `path` means the hook's working directory. Grep's search `pattern` is not read |
+  | `Glob` | `pattern`, required, and `path`: an absent `path` means the hook's working directory |
+  | `Write`, `Edit` | `file_path` |
+  | `NotebookEdit` | `notebook_path` |
+
 - **Outputs:** nothing for pass and pass on failure; for ask and deny, Claude Code's permission form with the reason.
 - **Refusals (as answers):**
 
   | Answer | When | Requirement |
   |---|---|---|
-  | `ask` | push; protected commit under `ask`; torn settings | GRD-R4, GRD-R5, GRD-R7 |
-  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write, Edit or NotebookEdit to a protected path or outside the lease; a `Read`, `Grep` or `Glob` call whose path lies inside or contains Baley's home or its config folder, with or without a project; an unrecordable ask | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11, GRD-R13 |
+  | `ask` | push; protected commit under `ask`; torn settings; a `PowerShell` call in a project | GRD-R3, GRD-R4, GRD-R5, GRD-R7 |
+  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write, Edit or NotebookEdit to Baley's home or config folder, a protected `baley.toml` or a stub, or, once Build 5 supplies the lease, outside it during a dispatch; a `Read`, `Grep` or `Glob` call whose target or pattern reaches either folder, with or without a project; malformed, oversized or incomplete input for one of the six path tools; an unrecordable ask, a missing call id included | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11, GRD-R13, GRD-R14 |
   | `pass on failure` | git or branch unreadable without hard fail | GRD-R6 |
-  | `pass` | everything else, including a declined command and any other call outside a project | GRD-R2, GRD-R3 |
+  | `pass` | everything else, including a declined or unreadable command, a `Monitor` watch, and any `Bash`, `Monitor` or `PowerShell` call outside a project | GRD-R2, GRD-R3 |
 
 ### baley doctor (the guard's part)
 
