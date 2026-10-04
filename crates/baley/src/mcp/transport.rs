@@ -108,6 +108,11 @@ impl Control {
         self.closing.send_replace(true);
     }
 
+    /// How the input ended, once it has.
+    pub fn ended(&self) -> Option<InputEnd> {
+        *self.ended.borrow()
+    }
+
     /// Waits until the input ends on its own. It never returns after
     /// [`Control::close_admission`] alone.
     pub async fn input_ended(&mut self) -> InputEnd {

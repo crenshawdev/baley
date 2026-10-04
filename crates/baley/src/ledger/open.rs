@@ -36,13 +36,6 @@ pub(crate) fn options() -> Options {
 /// The registry of `options()` with the startup `quick_check` on, for the
 /// per-session server's open. It is built from `options()` so the two never
 /// disagree on events, views or the view set version.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the per-session server opens the ledger with it once it is wired in"
-    )
-)]
 pub(crate) fn server_options() -> Options {
     Options {
         startup_check: true,

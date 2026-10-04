@@ -1,0 +1,266 @@
+//! One session's start and end.
+//!
+//! Start gathers the project and the store and serves the handler over stdio.
+//! End is driven by [`super::lifecycle`]: input ending or SIGTERM closes
+//! admission, accepted work gets up to ten seconds, and exactly one checkpoint
+//! attempt follows. Nothing here runs a checkpoint or a timer while the
+//! connection is open. The orchestration is gathering and has no unit test.
+//! Its words for stderr come from pure functions that do.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use baley_store_sqlite::{ExitCheckpoint, SkipReason, SqliteStore, StartupHealth};
+use rmcp::ServiceExt;
+use rmcp::service::ServerInitializeError;
+
+use super::context::{Observation, judge};
+use super::handler::SessionHandler;
+use super::lifecycle::{Action, Event, State, step};
+use super::transport::{InputEnd, StdioTransport};
+use super::worker::Worker;
+use crate::folders::{Environment, Folders, Platform};
+use crate::ledger::{clock::SystemClock, open};
+use crate::store::writer::SERVER_DRAIN_BOUND;
+
+/// The line for the one checkpoint attempt. `None` means the ledger was never
+/// opened, so there was nothing to attempt. No line says the log was
+/// shortened: a passive checkpoint only copies frames into the database file.
+pub fn checkpoint_line(outcome: Option<&ExitCheckpoint>) -> String {
+    match outcome {
+        None => "baley: exit checkpoint skipped, the ledger was not opened".to_owned(),
+        Some(ExitCheckpoint::Skipped(SkipReason::Fenced)) => {
+            "baley: exit checkpoint skipped, the ledger failed its startup check".to_owned()
+        }
+        Some(ExitCheckpoint::Skipped(SkipReason::EpochNotThisBinary)) => {
+            "baley: exit checkpoint skipped, the ledger belongs to another binary's epoch and is read-only here"
+                .to_owned()
+        }
+        Some(ExitCheckpoint::Complete) => {
+            "baley: exit checkpoint complete, every logged change is in the database file"
+                .to_owned()
+        }
+        Some(ExitCheckpoint::Incomplete) => {
+            "baley: exit checkpoint incomplete, some logged changes stay in the log until SQLite folds them in"
+                .to_owned()
+        }
+        Some(ExitCheckpoint::Unavailable) => {
+            "baley: exit checkpoint unavailable, the database was in use, so SQLite will fold the log in later"
+                .to_owned()
+        }
+        Some(ExitCheckpoint::Error(text)) => format!("baley: exit checkpoint error: {text}"),
+    }
+}
+
+/// The line for work still open when the drain bound passed.
+pub fn abandoned_line() -> String {
+    format!(
+        "baley: work still open after {} seconds was left to SQLite's rollback",
+        SERVER_DRAIN_BOUND.as_secs()
+    )
+}
+
+/// Opens the per-user ledger for the server. A failure leaves the server
+/// running without one: no operation needs the store yet, and Claude Code does
+/// not restart a stdio server that exits.
+fn open_store() -> Option<SqliteStore> {
+    let folders = match Folders::resolve(Platform::current(), &Environment::read()) {
+        Ok(folders) => folders,
+        Err(refusal) => {
+            eprintln!("baley: the ledger home cannot be found: {refusal}");
+            return None;
+        }
+    };
+    let store = match open::store(&folders.home, &SystemClock::now(), open::server_options()) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("baley: the ledger cannot be opened: {error}");
+            return None;
+        }
+    };
+    if let StartupHealth::Unhealthy { report } = store.startup_health() {
+        eprintln!("baley: the ledger failed its startup check, so writes are refused: {report}");
+    }
+    Some(store)
+}
+
+#[cfg(unix)]
+type Terminate = tokio::signal::unix::Signal;
+
+#[cfg(unix)]
+fn listen_for_terminate() -> std::io::Result<Terminate> {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+}
+
+#[cfg(unix)]
+async fn terminated(signal: &mut Terminate) {
+    signal.recv().await;
+}
+
+/// Serves one session on stdin and stdout until input ends or SIGTERM, then
+/// drains and makes the one checkpoint attempt. Returns whether the run ended
+/// cleanly: the service started, input did not fail and the drain finished
+/// inside its bound. The checkpoint's outcome does not change that, since the
+/// attempt is best effort.
+pub async fn run() -> bool {
+    let mut terminate = match listen_for_terminate() {
+        Ok(signal) => signal,
+        Err(error) => {
+            eprintln!("baley: cannot listen for SIGTERM: {error}");
+            return false;
+        }
+    };
+    let session = Arc::new(judge(Observation::gather()));
+    for note in &session.notes {
+        eprintln!("baley: {note}");
+    }
+    let store = open_store();
+    let worker = match Worker::start() {
+        Ok(worker) => Arc::new(worker),
+        Err(error) => {
+            eprintln!("baley: cannot start the decision worker: {error}");
+            return false;
+        }
+    };
+    let handler = SessionHandler::new(session, Arc::clone(&worker));
+    let (transport, mut control) = StdioTransport::new(tokio::io::stdin(), tokio::io::stdout());
+    let mut service = tokio::spawn(async move {
+        match handler.serve(transport).await {
+            Ok(service) => service.waiting().await.is_ok(),
+            Err(ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled) => {
+                true
+            }
+            Err(error) => {
+                eprintln!("baley: failed to start the MCP server: {error}");
+                false
+            }
+        }
+    });
+
+    let mut clean = true;
+    let first = tokio::select! {
+        _ = control.input_ended() => Event::InputEnded,
+        _ = terminated(&mut terminate) => Event::Terminate,
+        finished = &mut service => {
+            clean &= finished.unwrap_or(false);
+            Event::InputEnded
+        }
+    };
+    clean &= control.ended() != Some(InputEnd::Failed);
+
+    let began = Instant::now();
+    let mut drained = worker.drained();
+    let (mut state, mut actions) = step(State::Serving, first);
+    loop {
+        for action in std::mem::take(&mut actions) {
+            match action {
+                Action::StopAdmission => {
+                    control.close_admission();
+                    worker.close();
+                }
+                Action::Wait => {}
+                Action::AbandonWaiting => worker.abandon(),
+                Action::AttemptCheckpoint { abandoned } => {
+                    if abandoned {
+                        clean = false;
+                        eprintln!("{}", abandoned_line());
+                    }
+                    let outcome = store.as_ref().map(SqliteStore::checkpoint_at_exit);
+                    eprintln!("{}", checkpoint_line(outcome.as_ref()));
+                }
+                Action::Exit => return clean,
+            }
+        }
+        let remaining = SERVER_DRAIN_BOUND.saturating_sub(began.elapsed());
+        let event = tokio::select! {
+            _ = drained.wait_for(|drained| *drained) => Event::QueueDrained,
+            _ = tokio::time::sleep(remaining) => Event::Elapsed(began.elapsed()),
+        };
+        (state, actions) = step(state, event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn every_outcome() -> Vec<Option<ExitCheckpoint>> {
+        vec![
+            None,
+            Some(ExitCheckpoint::Skipped(SkipReason::Fenced)),
+            Some(ExitCheckpoint::Skipped(SkipReason::EpochNotThisBinary)),
+            Some(ExitCheckpoint::Complete),
+            Some(ExitCheckpoint::Incomplete),
+            Some(ExitCheckpoint::Unavailable),
+            Some(ExitCheckpoint::Error("disk full".into())),
+        ]
+    }
+
+    #[test]
+    fn each_outcome_line_names_its_own_outcome() {
+        let named = [
+            (None, "skipped"),
+            (Some(ExitCheckpoint::Skipped(SkipReason::Fenced)), "skipped"),
+            (
+                Some(ExitCheckpoint::Skipped(SkipReason::EpochNotThisBinary)),
+                "skipped",
+            ),
+            (Some(ExitCheckpoint::Complete), "complete"),
+            (Some(ExitCheckpoint::Incomplete), "incomplete"),
+            (Some(ExitCheckpoint::Unavailable), "unavailable"),
+            (Some(ExitCheckpoint::Error("disk full".into())), "error"),
+        ];
+        for (outcome, word) in named {
+            let line = checkpoint_line(outcome.as_ref());
+            assert!(
+                line.starts_with("baley: exit checkpoint ") && line.contains(word),
+                "{outcome:?}: {line}"
+            );
+        }
+        let error = checkpoint_line(Some(&ExitCheckpoint::Error("disk full".into())));
+        assert!(error.contains("disk full"), "{error}");
+    }
+
+    #[test]
+    fn no_line_says_the_log_was_truncated_emptied_or_reset() {
+        for outcome in every_outcome() {
+            let line = checkpoint_line(outcome.as_ref()).to_lowercase();
+            for word in ["truncat", "empti", "reset", "cleared"] {
+                assert!(!line.contains(word), "{outcome:?}: {line}");
+            }
+        }
+        let line = abandoned_line().to_lowercase();
+        assert!(
+            !line.contains("truncat") && !line.contains("reset"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_line_for_an_attempt_that_did_not_finish_never_says_it_completed() {
+        for outcome in [
+            ExitCheckpoint::Incomplete,
+            ExitCheckpoint::Unavailable,
+            ExitCheckpoint::Error("disk full".into()),
+            ExitCheckpoint::Skipped(SkipReason::Fenced),
+            ExitCheckpoint::Skipped(SkipReason::EpochNotThisBinary),
+        ] {
+            let line = checkpoint_line(Some(&outcome));
+            assert!(!line.contains("completed"), "{outcome:?}: {line}");
+            let stripped = line.replace("incomplete", "");
+            assert!(!stripped.contains("complete"), "{outcome:?}: {line}");
+        }
+        assert!(checkpoint_line(None).find("complete").is_none());
+    }
+
+    #[test]
+    fn the_abandoned_drain_line_names_the_ten_second_bound() {
+        assert_eq!(SERVER_DRAIN_BOUND, Duration::from_secs(10));
+        assert!(
+            abandoned_line().contains("10 seconds"),
+            "{}",
+            abandoned_line()
+        );
+    }
+}

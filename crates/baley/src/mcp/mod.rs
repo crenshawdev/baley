@@ -37,3 +37,6 @@ pub mod transport;
 
 /// The rmcp handler for one session: gates, queue and worker behind rmcp's validation.
 pub mod handler;
+
+/// One session's start and end: gather, serve, drain and make the one checkpoint attempt.
+pub mod serve;
