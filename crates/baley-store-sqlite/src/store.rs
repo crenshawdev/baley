@@ -9,7 +9,7 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
 use baley_store::{
@@ -23,6 +23,9 @@ use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionB
 use crate::queue::{FileLock, Monotonic, Timing, Turn, pause_for};
 use crate::schema::{EPOCH, SCHEMA};
 use crate::view::ViewSet;
+
+/// How long a store's connections wait on a lock held by another process.
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
 /// The page size every store is created with. It cannot change once the
 /// write-ahead log is on.
@@ -112,7 +115,8 @@ pub struct TraceEntry {
 /// The user's ledger database: one connection for writes, one for reads,
 /// so a read never waits behind this store's own write.
 pub struct SqliteStore {
-    writer: Mutex<Connection>,
+    /// Crate-visible so a test can hold it or read its settings.
+    pub(crate) writer: Mutex<Connection>,
     /// Crate-visible so a test can see whether a stream holds it.
     pub(crate) reader: Mutex<Connection>,
     queue: FileLock,
@@ -488,6 +492,19 @@ impl SqliteStore {
         Ok(value)
     }
 
+    /// A free connection of the store, the writer first and then the reader,
+    /// or `None` when both are in use. It never waits. A poisoned mutex is
+    /// usable, as `lock` treats it.
+    pub(crate) fn try_connection(&self) -> Option<MutexGuard<'_, Connection>> {
+        [&self.writer, &self.reader]
+            .into_iter()
+            .find_map(|conn| match conn.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) => None,
+            })
+    }
+
     /// Holds the writer queue and write connection for maintenance outside a transaction.
     pub(crate) fn maintenance<T>(
         &self,
@@ -504,8 +521,7 @@ impl SqliteStore {
 /// writes to the database file.
 pub(crate) fn connect(path: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open(path).map_err(sql)?;
-    conn.busy_timeout(Duration::from_millis(5000))
-        .map_err(sql)?;
+    conn.busy_timeout(BUSY_TIMEOUT).map_err(sql)?;
     conn.execute_batch(
         "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
     )
@@ -525,8 +541,7 @@ pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(sql)?;
-    conn.busy_timeout(Duration::from_millis(5000))
-        .map_err(sql)?;
+    conn.busy_timeout(BUSY_TIMEOUT).map_err(sql)?;
     Ok(conn)
 }
 
