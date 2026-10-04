@@ -4,6 +4,7 @@
 //! in tests.
 
 mod contain;
+mod read;
 mod resolve;
 mod write;
 
@@ -11,6 +12,7 @@ mod write;
 mod tests;
 
 pub use contain::{contains, is_inside};
+pub use read::read_answer;
 pub use resolve::{
     Disk, Entry, Lookup, Part, ResolveFailure, canonical_cwd, resolve_existing_prefix,
     resolve_target, resolve_under,

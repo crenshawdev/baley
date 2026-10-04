@@ -99,7 +99,7 @@ fn protected_by(
 }
 
 /// A protected entry as its canonical path, whether or not it exists yet.
-fn resolve_entry(entry: &Path, fs: &dyn Lookup) -> Result<PathBuf, ResolveFailure> {
+pub(super) fn resolve_entry(entry: &Path, fs: &dyn Lookup) -> Result<PathBuf, ResolveFailure> {
     if !entry.is_absolute() {
         return Err(ResolveFailure::NotAbsolute);
     }

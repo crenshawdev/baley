@@ -4,7 +4,7 @@
 //! a disk, reads the environment or starts a program.
 
 use super::{
-    Entry, Lease, Lookup, Part, ProtectedPaths, ResolveFailure, contains, is_inside,
+    Entry, Lease, Lookup, Part, ProtectedPaths, ResolveFailure, contains, is_inside, read_answer,
     resolve_existing_prefix, resolve_target, write_answer,
 };
 use baley_core::guard::Answer;
@@ -584,4 +584,125 @@ fn a_baley_toml_elsewhere_a_sibling_and_a_project_file_are_allowed() {
     ] {
         assert_eq!(write("/p", target, &fs), Answer::Pass, "{target}");
     }
+}
+
+fn read(cwd: &str, path: Option<&str>, pattern: Option<&str>, fs: &Tree) -> Answer {
+    read_answer(cwd, path, pattern, &protected_list(), fs)
+}
+
+fn read_tree() -> Tree {
+    protected_tree().dir("/work").dir("/work/p")
+}
+
+#[test]
+fn a_read_inside_the_config_or_home_folder_is_refused() {
+    let fs = read_tree();
+    for path in [
+        "/u/.config/baley/keys.env",
+        "/u/.config/baley",
+        "/u/.local/share/baley/ledger.db",
+        "/u/.config/baley/not-yet.env",
+        "cfg/keys.env",
+    ] {
+        assert!(is_deny(&read("/p", Some(path), None, &fs)), "{path}");
+    }
+}
+
+#[test]
+fn a_search_from_a_folder_that_holds_a_protected_folder_is_refused() {
+    let fs = read_tree();
+    assert!(is_deny(&read("/p", Some("/u"), None, &fs)));
+    assert!(is_deny(&read("/p", Some("/u/.config"), None, &fs)));
+    assert!(is_deny(&read("/u", None, None, &fs)));
+}
+
+#[test]
+fn a_search_with_no_path_searches_the_cwd() {
+    let fs = read_tree();
+    assert!(is_deny(&read("/u/.config/baley", None, None, &fs)));
+    assert_eq!(read("/p", None, None, &fs), Answer::Pass);
+    assert_eq!(read("/p", None, Some("**/*.rs"), &fs), Answer::Pass);
+}
+
+#[test]
+fn a_pattern_whose_fixed_folders_reach_the_config_folder_is_refused_from_an_ordinary_cwd() {
+    let fs = read_tree();
+    assert!(is_deny(&read(
+        "/work",
+        None,
+        Some("/u/.config/baley/*.env"),
+        &fs
+    )));
+    assert!(is_deny(&read(
+        "/work/p",
+        None,
+        Some("../../u/.config/baley/**"),
+        &fs
+    )));
+    assert!(is_deny(&read(
+        "/work",
+        Some("/p"),
+        Some("/u/.config/baley/*.env"),
+        &fs
+    )));
+}
+
+#[test]
+fn a_wildcard_inside_a_protected_folders_name_still_checks_the_folder_above_it() {
+    let fs = read_tree();
+    assert!(is_deny(&read(
+        "/work",
+        None,
+        Some("/u/.config/bal*/keys.env"),
+        &fs
+    )));
+}
+
+#[test]
+fn a_parent_step_after_a_wildcard_refuses_the_call() {
+    let fs = read_tree();
+    assert!(is_deny(&read("/p", None, Some("src/*/../../.."), &fs)));
+    assert!(is_deny(&read("/p", Some("/p/src"), Some("**/../*"), &fs)));
+}
+
+#[test]
+fn a_parent_step_before_the_first_wildcard_is_resolved_and_not_refused_by_itself() {
+    let fs = read_tree();
+    assert_eq!(read("/p/src", None, Some("../src/*.rs"), &fs), Answer::Pass);
+}
+
+#[test]
+fn a_read_whose_target_cannot_be_resolved_is_refused() {
+    let fs = read_tree().failing(Ask::Present, "/p/src");
+    assert!(is_deny(&read("/p", Some("src/lib.rs"), None, &fs)));
+    assert!(is_deny(&read("p", Some("src/lib.rs"), None, &read_tree())));
+    let fs = read_tree().failing(Ask::Present, "/p/src");
+    assert!(is_deny(&read("/p", Some("/p"), Some("src/*.rs"), &fs)));
+}
+
+#[test]
+fn a_read_outside_the_protected_folders_is_allowed() {
+    let fs = read_tree();
+    assert_eq!(
+        read("/p", Some("/u/.config/baley-old"), None, &fs),
+        Answer::Pass
+    );
+    assert_eq!(read("/p", Some("/p/src"), Some("*.rs"), &fs), Answer::Pass);
+    assert_eq!(read("/p", Some("/p/baley.toml"), None, &fs), Answer::Pass);
+    assert_eq!(
+        read("/p", Some("/u/.claude/CLAUDE.md"), None, &fs),
+        Answer::Pass
+    );
+}
+
+#[test]
+fn a_refusal_names_the_folder_it_protects() {
+    let Answer::Deny(reason) = read("/p", Some("/u/.config/baley/keys.env"), None, &read_tree())
+    else {
+        panic!("refused");
+    };
+    assert!(
+        reason.contains("config folder (/u/.config/baley)"),
+        "{reason}"
+    );
 }
