@@ -147,7 +147,7 @@ flowchart TB
   host["Host agent<br/><small>Claude Code, sandboxed</small>"]
   subgraph baley [Baley]
     direction TB
-    server["MCP server<br/><small>shared server in Build 3; Hardin decides the next step</small>"]
+    server["MCP server<br/><small>one per Claude Code session, over stdio; Hardin decides the next step</small>"]
     guard["Guard hook<br/><small>one per tool call; refuses unsafe actions</small>"]
     cli["CLI<br/><small>verify, doctor, export, purge, anchor,<br/>acknowledge-restore, rebuild, scrub<br/>show in Build 9</small>"]
     db[("Ledger database<br/><small>SQLite, one per user</small>")]
@@ -169,7 +169,7 @@ flowchart TB
   class host,checkout external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Each Claude Code session starts its own MCP server, so several can run beside the guard hook and the command line. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database.*
 
 ### Terms
 
@@ -1024,7 +1024,7 @@ TOML is a format people already read, diff and edit by hand; when Baley writes t
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent.
 
-**Checkout admission.** Every command that records in a project's chain from a checkout of that project admits the checkout first, by judging it against the project's other checkouts and recording `checkout.seen` (path, root commit, remote URL). Those commands are `baley init`, `purge` from a checkout of the project it names, `baley config set` after a write in a project in this machine's ledger, `anchor` and `acknowledge-restore`. These admit nothing: `verify`, `doctor`, `export`, `rebuild`, `scrub`, a `config set` that changes nothing or runs outside a ledgered project, a `purge` run anywhere else, and the records in the per-user project `user`. The shared server and the guard admit the checkout per request in Build 3.
+**Checkout admission.** Every command that records in a project's chain from a checkout of that project admits the checkout first, by judging it against the project's other checkouts and recording `checkout.seen` (path, root commit, remote URL). Those commands are `baley init`, `purge` from a checkout of the project it names, `baley config set` after a write in a project in this machine's ledger, `anchor` and `acknowledge-restore`. These admit nothing: `verify`, `doctor`, `export`, `rebuild`, `scrub`, a `config set` that changes nothing or runs outside a ledgered project, a `purge` run anywhere else, and the records in the per-user project `user`. A session's server and the guard admit the checkout per request in Build 3.
 
 The order is the same for each. The project is discovered and its settings are read and validated, and for `anchor` and `acknowledge-restore` `git.remote` is checked against `git remote` by exact name. The checkout's root commit and remote URL are gathered. The judgement and `checkout.seen` are made in one transaction. The policy step then runs in a transaction of its own, and the command last. A refusal at or before checkout admission records nothing in the project's chain.
 
@@ -1089,7 +1089,7 @@ Baley's records never live in the working tree (EVD-R18). The only writes Baley 
 
 Each process opens its own connection. SQLite's write-ahead log lets any number of readers run alongside one writer, and readers see a consistent snapshot.
 
-- **MCP server.** The shared server arrives in Build 3, with one process per user (0002, SYS-R1). The inherited server still serves one host session. The ledger adapter holds one write connection and one read connection per store.
+- **MCP server.** One per Claude Code session, over stdio, serving the session and its subagents (0002, SYS-R1). Each server opens its own write connection and read connection to the per-user store, beside the guard hook's and the command line's, and the ledger adapter holds one of each per store.
 - **Guard hook.** Starts per tool call, opens a connection without an integrity scan, reads the views it needs and, for a decision worth recording, appends one `guard` event. It holds no write transaction while it evaluates.
 - **CLI.** Opens one store per command. Chain verification uses its own read-only connection. An anchor renews its lease on a second thread, stopped and joined before the record step.
 
@@ -1099,11 +1099,11 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 
 **Batch timing.** A store has one timing dependency, a monotonic clock and a pause, and every rebuild, cleanup and view verification batch uses it, whether started by the owner or by a project's first use. A batch's hold runs from acquiring the writer queue, not the wait for it, through commit and release; the 15 ms bound is read from the same clock, and the pause after the batch is as long as the hold. Tests supply their own instants and record the pauses asked for, so no test reads a live clock or sleeps.
 
-**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. No migration exists yet, so an older epoch is refused at open. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable. `schema_meta` records the digest of the schema text at creation; a build with a different epoch-1 schema refuses to open the file as a schema change and tells the owner to delete it. That covers a file written before `event.caller` existed, and an export home, which opens through the same check.
+**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. A session's server keeps the binary it started with, so after an upgrade it answers read-only until a new session starts the new binary, and nothing hands its session over. The exit checkpoint reads the stored epoch and skips a store that is not at its own. No migration exists yet, so an older epoch is refused at open. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable. `schema_meta` records the digest of the schema text at creation; a build with a different epoch-1 schema refuses to open the file as a schema change and tells the owner to delete it. That covers a file written before `event.caller` existed, and an export home, which opens through the same check.
 
 **Verification.** `verify` opens a read-only connection of its own, which cannot create a missing database file and sets only the busy timeout, and holds one read transaction for the project's events, its latest anchor row, its references, bodies and excerpts, as a payload stream and a view comparison do. The store's read connection stays free, and commands keep committing beside it, unseen by the snapshot. It holds one stored event, or one 64 KiB chunk of one body, at a time, plus the report.
 
-**Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison, and a chain verification's snapshot, which lasts one project's walk; the shared server's idle checkpoint arrives with the server. `baley doctor` reports the log size and warns above 8,192,000 bytes, 1,000 pages of this store's 8 KiB page size.
+**Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages, and in steady state nothing else does: a server checkpoints at no idle moment and runs no timer while its connection is open. A reader that never finishes would stop the automatic fold and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison, and a chain verification's snapshot, which lasts one project's walk. When a session's server exits, it stops taking calls, gives accepted work at most ten seconds and then makes one `PASSIVE` attempt. The attempt takes a free connection without waiting and sets its busy timeout to zero, and it takes neither the writer queue nor the maintenance lock, so it cannot hold up another session or the guard. It never loops or retries, and it may be incomplete: the server says on stderr whether it was complete, incomplete, unavailable or an error, and never claims the log was shortened. It is skipped on a fenced store. A server that is killed rather than stopped makes no attempt, and the automatic fold covers the log later. `baley doctor` reports the log size and warns above 8,192,000 bytes, 1,000 pages of this store's 8 KiB page size.
 
 #### Opening the store
 
@@ -1119,9 +1119,9 @@ stateDiagram-v2
   Opening --> ReadOnly : epoch newer than this binary
   Opening --> Refused : epoch older than this binary, no migration exists
   Opening --> Refused : epoch current, but not in write-ahead-log mode with 8 KiB pages
-  Opening --> Checking : epoch current, server start only
-  Checking --> Declaring
-  Checking --> ReadOnly : quick_check failed
+  Opening --> Checking : epoch current and a schema already there, server start only
+  Checking --> Declaring : quick_check ok
+  Checking --> Fenced : quick_check failed or could not run
   Opening --> Declaring : epoch current, guard or CLI
   Declaring --> Refused : a view version stored with another spec, or the view set version stored with other views
   Declaring --> Ready : missing view tables, indexes and catalog rows created under the writer queue
@@ -1129,11 +1129,11 @@ stateDiagram-v2
   Unavailable --> [*]
 ```
 
-*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project. The command line resolves the home and creates it with mode 0700 when missing. Locating checks the real home and each store file present before anything is opened or created.*
+*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project. The command line resolves the home and creates it with mode 0700 when missing. Locating checks the real home and each store file present before anything is opened or created. A store whose `quick_check` failed stays open but fenced: every write is refused, reads continue and no view is declared.*
 
 Open checks each declared view version's spec against `view_catalog` and the declared view set version's names against `view_set_catalog`, reading first on the read connection so that an open that finds everything in place takes no write. It records a spec or set version seen for the first time, creates missing view tables and indexes under the writer queue, and refuses a version already recorded with another spec or other names. It looks at no project's views: each project is brought to this binary's views on its first use, as in Figure 8, so one project that needs a rebuild never keeps the store from opening.
 
-The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI do not, so a guard call never scans the database. The full `integrity_check`, chain and view verification run in `baley doctor`.
+A session's MCP server runs SQLite's `quick_check` when it opens a store whose schema already exists, after the epoch, schema-digest and file-setting checks and before any view is declared. A schema that open creates skips it. A check that fails, or cannot run, fences the store: every write is refused as unavailable and carries the check's report, reads continue, nothing is declared and the exit checkpoint is skipped. The refusal is not a read-only one, because a damaged file needs no newer binary. The fence belongs to that open and is not recorded in the file. The guard and the CLI never run the check, so a guard call never scans the database and they open the same file as before. The full `integrity_check`, chain and view verification run in `baley doctor`.
 
 ### Workflows
 
@@ -1496,6 +1496,7 @@ classDiagram
 - [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md), superseding ADR 0007 in part
 - [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part, superseded in part by ADR 0032 and ADR 0033
 - [ADR 0033: Support only hosts whose sandboxing and execution controls meet Baley's requirements](../adr/0033-host-security-bar.md), superseding ADR 0008, ADR 0018, ADR 0020, ADR 0027 and ADR 0029 in part
+- [ADR 0034: Run one Baley server per session over stdio](../adr/0034-one-server-per-session.md)
 - [ADR 0035: Report purge uncertainty after restoring a store](../adr/0035-restore-purge-uncertainty.md), superseding ADR 0022 in part
 
 ## Future work
