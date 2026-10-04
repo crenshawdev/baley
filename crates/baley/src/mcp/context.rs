@@ -10,7 +10,12 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::Path;
 
-use baley_store::{MAX_DIRECTORY_BYTES, MAX_HOST_SESSION_BYTES};
+use baley_core::policy::Host;
+use baley_store::{
+    CallerError, MAX_CLIENT_VERSION_BYTES, MAX_DIRECTORY_BYTES, MAX_HOST_SESSION_BYTES,
+    ServerCaller,
+};
+use serde_json::Value;
 
 /// What the process told us at startup, before any rule is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,9 +186,138 @@ fn host_session(value: &OsStr, notes: &mut Vec<String>) -> Option<String> {
     usable.map(str::to_owned)
 }
 
+/// What one call knows: the session's context plus who is calling and under
+/// which JSON-RPC id. It has no input from the call's arguments, so no `cwd`,
+/// project or root a caller sends can reach it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallContext {
+    /// The host selected for this call.
+    pub host: Host,
+    /// The client's version, dropped when empty or over its limit.
+    pub client_version: Option<String>,
+    /// The request's JSON-RPC id, a string or an integer.
+    pub request_id: Value,
+    /// The session's project.
+    pub project: ProjectContext,
+    /// The session's startup working directory.
+    pub working_directory: WorkingDirectory,
+    /// The session's minted id, the same for the main session and every
+    /// subagent. The JSON-RPC id tells their calls apart.
+    pub baley_session: String,
+    /// The session's host id, when usable.
+    pub host_session: Option<String>,
+    /// This call's notes for the process to print.
+    pub notes: Vec<String>,
+}
+
+/// Builds one call's context. Nothing here appends or opens the store.
+pub fn call_context(
+    session: &SessionContext,
+    host: Host,
+    client_version: &str,
+    request_id: Value,
+) -> CallContext {
+    let mut notes = Vec::new();
+    let kept = !client_version.is_empty() && client_version.len() <= MAX_CLIENT_VERSION_BYTES;
+    if !kept {
+        notes.push(format!(
+            "the client version is empty or over {MAX_CLIENT_VERSION_BYTES} bytes, so it is not recorded"
+        ));
+    }
+    CallContext {
+        host,
+        client_version: kept.then(|| client_version.to_owned()),
+        request_id,
+        project: session.project.clone(),
+        working_directory: session.working_directory.clone(),
+        baley_session: session.baley_session.clone(),
+        host_session: session.host_session.clone(),
+        notes,
+    }
+}
+
+/// Why a call cannot form a caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallerFault {
+    /// The JSON-RPC id cannot form a call identity.
+    Id(CallerError),
+    /// The startup working directory is unusable.
+    WorkingDirectory(DirectoryFault),
+    /// Another caller field was refused. The session context judges these
+    /// fields by the port's own rules, so this is a safety net, not a path.
+    Invalid(CallerError),
+}
+
+impl CallerFault {
+    /// The input at fault, as a `failed` answer names it.
+    pub fn place(&self) -> &'static str {
+        match self {
+            Self::Id(_) => "id",
+            Self::WorkingDirectory(_) => "working-directory",
+            Self::Invalid(_) => "caller",
+        }
+    }
+}
+
+impl fmt::Display for CallerFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Id(error) | Self::Invalid(error) => error.fmt(f),
+            Self::WorkingDirectory(fault) => {
+                write!(
+                    f,
+                    "the startup working directory cannot be recorded: {fault}"
+                )
+            }
+        }
+    }
+}
+
+/// Judges the JSON-RPC id of any call, even one that records nothing, by the
+/// port's own call-identity construction so the limit is the one the store
+/// applies. The other caller fields here are fixed valid values.
+pub fn judge_id(id: &Value) -> Result<(), CallerFault> {
+    const SESSION: &str = "00000000-0000-4000-8000-000000000000";
+    ServerCaller::new("/", "/", Host::ClaudeCode.name(), SESSION, id)
+        .map(drop)
+        .map_err(CallerFault::Id)
+}
+
+/// Forms the caller for a call that records, over the session's valid project.
+pub fn form_caller(call: &CallContext, project: &str) -> Result<ServerCaller, CallerFault> {
+    judge_id(&call.request_id)?;
+    let working_directory = match &call.working_directory {
+        WorkingDirectory::Usable(text) => text,
+        WorkingDirectory::Unusable(fault) => {
+            return Err(CallerFault::WorkingDirectory(fault.clone()));
+        }
+    };
+    let mut caller = ServerCaller::new(
+        project,
+        working_directory,
+        call.host.name(),
+        &call.baley_session,
+        &call.request_id,
+    )
+    .map_err(CallerFault::Invalid)?;
+    if let Some(version) = &call.client_version {
+        caller = caller
+            .with_client_version(version)
+            .map_err(CallerFault::Invalid)?;
+    }
+    if let Some(session) = &call.host_session {
+        caller = caller
+            .with_host_session(session)
+            .map_err(CallerFault::Invalid)?;
+    }
+    Ok(caller)
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::ffi::OsStringExt;
+
+    use serde_json::json;
 
     use super::*;
 
@@ -383,5 +517,134 @@ mod tests {
         let context = judge(observed());
         assert_eq!(context.host_session, None);
         assert!(context.notes.is_empty());
+    }
+    fn session() -> SessionContext {
+        judge(Observation {
+            host_session: Some("host-abc".into()),
+            ..observed()
+        })
+    }
+
+    fn call(id: Value) -> CallContext {
+        call_context(&session(), Host::ClaudeCode, "2.1.287", id)
+    }
+
+    #[test]
+    fn a_subagents_call_carries_the_main_sessions_baley_session() {
+        let main = call(json!(1));
+        let subagent = call(json!("sub-2"));
+        assert_eq!(main.baley_session, MINTED);
+        assert_eq!(subagent.baley_session, main.baley_session);
+        assert_ne!(main.request_id, subagent.request_id);
+    }
+
+    #[test]
+    fn a_client_version_over_128_bytes_is_dropped_with_a_note_and_the_call_goes_on() {
+        let over = "9".repeat(MAX_CLIENT_VERSION_BYTES + 1);
+        for version in [over.as_str(), ""] {
+            let context = call_context(&session(), Host::ClaudeCode, version, json!(1));
+            assert_eq!(context.client_version, None);
+            assert_eq!(context.notes.len(), 1);
+            assert!(form_caller(&context, "/work/project").is_ok());
+        }
+        let at_limit = "9".repeat(MAX_CLIENT_VERSION_BYTES);
+        let kept = call_context(&session(), Host::ClaudeCode, &at_limit, json!(1));
+        assert_eq!(kept.client_version, Some(at_limit));
+        assert!(kept.notes.is_empty());
+    }
+
+    #[test]
+    fn an_integer_id_forms_a_caller_and_a_300_byte_string_id_does_not() {
+        assert!(form_caller(&call(json!(7)), "/work/project").is_ok());
+        let long = call(json!("x".repeat(300)));
+        assert!(matches!(
+            form_caller(&long, "/work/project"),
+            Err(CallerFault::Id(_))
+        ));
+    }
+
+    #[test]
+    fn the_id_judgement_uses_the_ports_limit_which_counts_the_quotes() {
+        assert_eq!(judge_id(&json!(7)), Ok(()));
+        assert_eq!(judge_id(&json!("sub-2")), Ok(()));
+        assert_eq!(judge_id(&json!("x".repeat(254))), Ok(()));
+        assert!(matches!(
+            judge_id(&json!("x".repeat(255))),
+            Err(CallerFault::Id(_))
+        ));
+        assert!(matches!(
+            judge_id(&json!("x".repeat(300))),
+            Err(CallerFault::Id(_))
+        ));
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_string_or_integer_is_an_id_fault() {
+        for id in [json!(null), json!(1.5), json!(true)] {
+            assert_eq!(judge_id(&id).unwrap_err().place(), "id");
+        }
+    }
+
+    #[test]
+    fn a_formed_caller_carries_the_session_contexts_values() {
+        let caller = form_caller(&call(json!(7)), "/work/project").unwrap();
+        let context = session();
+        assert_eq!(caller.project_directory(), "/work/project");
+        assert_eq!(caller.working_directory(), "/work/project");
+        assert_eq!(caller.host(), "claude-code");
+        assert_eq!(caller.baley_session(), context.baley_session);
+        assert_eq!(caller.client_version(), Some("2.1.287"));
+        assert_eq!(caller.host_session(), Some("host-abc"));
+        assert_eq!(caller.call().text(), "7");
+    }
+
+    #[test]
+    fn the_caller_keeps_a_working_directory_that_differs_from_the_project() {
+        let context = judge(Observation {
+            working_dir: Some("/elsewhere".into()),
+            ..observed()
+        });
+        let call = call_context(&context, Host::ClaudeCode, "1", json!(1));
+        let caller = form_caller(&call, "/work/project").unwrap();
+        assert_eq!(caller.project_directory(), "/work/project");
+        assert_eq!(caller.working_directory(), "/elsewhere");
+    }
+
+    #[test]
+    fn an_unusable_working_directory_fails_the_caller_but_not_the_id_judgement() {
+        let context = judge(Observation {
+            working_dir: None,
+            ..observed()
+        });
+        let call = call_context(&context, Host::ClaudeCode, "1", json!(1));
+        let fault = form_caller(&call, "/work/project").unwrap_err();
+        assert_eq!(fault.place(), "working-directory");
+        assert_eq!(judge_id(&call.request_id), Ok(()));
+    }
+
+    #[test]
+    fn an_id_fault_wins_over_a_working_directory_fault_and_names_place_id() {
+        let context = judge(Observation {
+            working_dir: None,
+            ..observed()
+        });
+        let call = call_context(&context, Host::ClaudeCode, "1", json!("x".repeat(300)));
+        assert_eq!(
+            form_caller(&call, "/work/project").unwrap_err().place(),
+            "id"
+        );
+    }
+
+    #[test]
+    fn a_refused_session_or_project_is_a_caller_fault_not_a_panic() {
+        let bad_session = judge(Observation {
+            minted_session: "not-a-uuid".into(),
+            ..observed()
+        });
+        let call = call_context(&bad_session, Host::ClaudeCode, "1", json!(1));
+        assert_eq!(
+            form_caller(&call, "/work/project").unwrap_err().place(),
+            "caller"
+        );
     }
 }
