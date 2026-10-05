@@ -153,11 +153,11 @@ stateDiagram-v2
   Deciding --> Ask: push, or protected commit under ask, or torn settings
   Deciding --> Deny: protected commit under refuse, or hard fail, or remembered denial
   Deciding --> PassOnFailure: git or branch unreadable
-  Deciding --> Pass: unprotected commit
+  Deciding --> Pass: unprotected commit, or protected commit under allow
   Ask --> Recorded: guard.answered
   Deny --> Recorded: guard.answered
   PassOnFailure --> Recorded: guard.answered
-  Ask --> Deny: record could not be written
+  Ask --> Deny: decision cannot be recorded
   Recorded --> Answered: host form rendered
   Silent --> [*]
   Pass --> [*]
@@ -269,14 +269,14 @@ The running `baley guard` is the binary's inherited guard. It uses the core scan
 | GRD-R10 | Built | `crates/baley/src/guard/bash.rs:404-413` |
 | GRD-R11 | Partly built | The library write decision and its lease input (`crates/baley/src/protected_paths/write.rs:18-99`), with path resolution and containment (`crates/baley/src/protected_paths/resolve.rs:151-238`, `crates/baley/src/protected_paths/contain.rs:23-58`). Build 5 owns the lease. The live hook still applies its inherited `.planning`, `config.v4.json` and rendered-skill protections through its own resolver (`crates/baley/src/guard/mod.rs:186-207, 246-334, 351-391`), which T10 deletes, and `NotebookEdit` is not matched yet (GRD-R1) |
 | GRD-R12 | Not built | Only Claude Code's form is written, inline in the guard (`crates/baley/src/guard/mod.rs:223-244`). The renderer this requirement describes is built with Build 3 T10 |
-| GRD-R13 | Partly built | The library read decision (`crates/baley/src/protected_paths/read.rs:22-105`) is built and T10 calls it. The sandbox settings and the `Read` and `Edit` deny rules are T11's, and the doctor is T13's. The sandbox probe is a spike (`spikes/host-matrix`) that Build 3 T12 extends to separate home and config folders and the built-in file tools |
+| GRD-R13 | Partly built | The library read decision (`crates/baley/src/protected_paths/read.rs:22-105`) is built and T10 calls it. T11 renders the sandbox settings and the `Read` and `Edit` deny rules, T15 applies them once delivery is decided, and the doctor is T13's. The sandbox probe is a spike (`spikes/host-matrix`) that Build 3 T12 extends to separate home and config folders and the built-in file tools |
 | GRD-R14 | Partly built | The live hook reads input to the bound and answers `Write` and `Edit` input it cannot read with a deny (`crates/baley/src/guard/mod.rs:15, 105-174`), and runs git for the branch (`crates/baley/src/guard/bash.rs:157-270`). The library classifier applies the bound to every tool and denies unreadable input for the six path tools (`crates/baley/src/hook_input/mod.rs:19-21, 133-149, 225-233`) |
 
 ## 12. Open questions
 
-The guard's tool-input facts below are not yet measured on Claude Code. Only the `Bash` input's `command` field has been observed. Build 3 T12 measures the rest live. Until then the guard applies the rule stated with each item.
+The guard's tool-input facts below are not yet measured on Claude Code. The host-matrix probe has observed only the `Bash` input's `command` field. Other names section 5 lists come from Claude Code tool calls seen in session transcripts, and the ones the first item names have not been seen at all. Build 3 T12 measures them live. Until then the guard applies the rule stated with each item.
 
-- **Field names.** The `tool_input` field names of `Monitor`'s WebSocket form, `PowerShell`, `NotebookEdit`, `Grep`'s `glob` and `Glob`'s `path` are not recorded. Meanwhile the guard reads the names section 5 lists. A path tool that lacks a field it needs is denied, so a wrong path-field name fails closed. A `Monitor` input with no `command` is a watch and passes, so a wrong name for `Monitor`'s command field would pass a `Monitor` command unjudged. A `PowerShell` call is judged by its tool name and none of its input is read.
+- **Field names.** No tool call seen so far shows the `tool_input` fields of `Monitor`'s WebSocket form, `PowerShell`, `NotebookEdit`, `Grep`'s `glob` or `Glob`'s `path`. Meanwhile the guard reads the names section 5 lists. A path tool that lacks a field it requires (`file_path`, `notebook_path` or `Glob`'s `pattern`) is denied, so a wrong name for one of those fails closed. `Grep`'s `path` and `glob` and `Glob`'s `path` are optional, so a wrong name for one of them is read as absent: the call is judged against the hook's working directory, or without its `glob`, and can pass. A `Monitor` input with no `command` is a watch and passes, so a wrong name for `Monitor`'s command field would pass a `Monitor` command unjudged. A `PowerShell` call is judged by its tool name and none of its input is read.
 - **Pattern reach.** Whether a `Glob` `pattern` or a `Grep` `glob` can reach outside `path`, and whether either follows symbolic links inside a searched folder, is not known. Meanwhile the guard checks the folders a pattern names before its first wildcard whatever `path` is, refuses a `..` component after a wildcard, and does not look inside the searched folder. Links inside it are left to the sandbox and the `Read` deny rules (GRD-R13).
 - **Absent path.** Whether an absent `Grep` or `Glob` `path` means the hook's working directory is not known. Meanwhile the guard takes it as the working directory.
 - **On-disk case.** Whether `canonicalize` returns the on-disk case of a path on a case-insensitive macOS volume is not known. The identity check in GRD-R11 and GRD-R13 compares existing ancestors by (device, inode), so it covers either answer.
