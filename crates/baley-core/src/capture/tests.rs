@@ -240,9 +240,92 @@ fn a_malformed_capture_recorded_accepted_into_the_view_is_caught() {
 }
 
 #[test]
-fn a_capture_projector_handling_or_reading_anything_beyond_capture_recorded_is_caught() {
+fn a_capture_projector_missing_purges_or_reading_documents_for_a_new_capture_is_caught() {
     let projector = CaptureProjector::new();
-    assert_eq!(projector.handles(), ["capture.recorded"]);
+    assert_eq!(projector.handles(), ["capture.recorded", "payload.purged"]);
     let payload = inline_payload("c1", CaptureKind::Note, None, "x");
     assert!(projector.keys(&recorded(3, payload)).is_empty());
+}
+
+const REASON: &str = "the owner asked";
+
+fn purge(seq: u64, released: Value) -> Event {
+    event(
+        "payload.purged",
+        seq,
+        json!({"requested": ["ab".repeat(32)], "released": released,
+            "removed": ["ab".repeat(32)], "shared": [], "reason": REASON}),
+    )
+}
+
+/// The payload capture recorded at seq 9, as the view holds it.
+fn present() -> (DocKey, Value) {
+    let payload = stored_payload("c2", CaptureKind::Story, None, &body());
+    put(CaptureProjector::new()
+        .apply(&recorded(9, payload), &[])
+        .unwrap())
+}
+
+#[test]
+fn a_purge_of_a_captures_own_body_deleting_it_or_leaving_it_present_is_caught() {
+    let projector = CaptureProjector::new();
+    let event = purge(12, json!([[9, "ab".repeat(32)]]));
+    assert_eq!(projector.keys(&event), [DocKey(vec![KeyValue::Integer(9)])]);
+    let (key, document) = put(projector.apply(&event, &[present()]).unwrap());
+    assert_eq!(key, DocKey(vec![KeyValue::Integer(9)]));
+    assert_eq!(
+        document,
+        json!({"seq": 9, "id": "c2", "kind": "story", "phase": null, "bytes": 4097,
+            "recorded_at": AT, "hash": "ab".repeat(32), "state": "purged", "reason": REASON})
+    );
+}
+
+#[test]
+fn a_purge_of_another_sequence_marking_this_capture_is_caught() {
+    let event = purge(12, json!([[10, "ab".repeat(32)]]));
+    let changes = CaptureProjector::new().apply(&event, &[present()]).unwrap();
+    assert!(changes.is_empty(), "{changes:?}");
+}
+
+#[test]
+fn a_purge_of_another_hash_marking_this_capture_or_an_inline_one_is_caught() {
+    let event = purge(12, json!([[7, "ab".repeat(32)], [9, "cd".repeat(32)]]));
+    let inline = put(CaptureProjector::new()
+        .apply(
+            &recorded(7, inline_payload("c1", CaptureKind::Note, None, "x")),
+            &[],
+        )
+        .unwrap());
+    let changes = CaptureProjector::new()
+        .apply(&event, &[inline, present()])
+        .unwrap();
+    assert!(changes.is_empty(), "{changes:?}");
+}
+
+#[test]
+fn a_malformed_purge_payload_accepted_into_the_view_is_caught() {
+    for payload in [
+        json!("not an object"),
+        json!({"released": [[9, "ab".repeat(32)]], "reason": REASON}),
+        json!({"requested": [], "released": [[9]], "removed": [], "shared": [], "reason": REASON}),
+    ] {
+        let event = event("payload.purged", 12, payload.clone());
+        let error = CaptureProjector::new()
+            .apply(&event, &[present()])
+            .expect_err(&format!("{payload} must be refused"));
+        assert!(error.0.contains("payload.purged at seq 12"), "{}", error.0);
+    }
+}
+
+#[test]
+fn a_capture_and_its_purge_folding_differently_on_a_rebuild_is_caught() {
+    let fold = || {
+        let projector = CaptureProjector::new();
+        let payload = stored_payload("c2", CaptureKind::Story, None, &body());
+        let recorded = put(projector.apply(&recorded(9, payload), &[]).unwrap());
+        put(projector
+            .apply(&purge(12, json!([[9, "ab".repeat(32)]])), &[recorded])
+            .unwrap())
+    };
+    assert_eq!(fold(), fold());
 }

@@ -1,10 +1,10 @@
 //! The `capture` view: one document per `capture.recorded`, keyed by the
-//! event's sequence and found by capture id (design 0001 Views, design 0014
-//! section 6).
+//! event's sequence and found by capture id, with the purge state of a body
+//! its project released (design 0001 Views, design 0014 section 6).
 
 use baley_store::{
     Change, DocKey, Event, FieldKind, FieldSpec, IndexField, IndexSpec, KeyValue, Order,
-    PayloadRef, Projector, ProjectorError, ViewSpec,
+    PAYLOAD_PURGED, PayloadRef, Projector, ProjectorError, PurgedEvent, ViewSpec,
 };
 use serde_json::{Map, Value, json};
 
@@ -56,7 +56,8 @@ pub fn capture_key(seq: u64) -> DocKey {
     )])
 }
 
-/// Keeps the `capture` view current from `capture.recorded`.
+/// Keeps the `capture` view current from `capture.recorded` and the store's
+/// `payload.purged`.
 ///
 /// A document holds the sequence, id, kind, phase, byte count and recording
 /// time, then either the inline text or the body's hash with a purge state
@@ -64,6 +65,11 @@ pub fn capture_key(seq: u64) -> DocKey {
 /// keeping it here brings back nothing a purge removed. Payload text is never
 /// copied in. The caller is not kept: the hashed envelope is the record of
 /// who captured.
+///
+/// When this project releases a body, the document's state becomes `purged`
+/// with the purge's reason. The document is never deleted: a purged capture
+/// is still known by its id and answers a tombstone. The state is per
+/// project, so another project holding the same bytes keeps its text.
 pub struct CaptureProjector {
     spec: ViewSpec,
 }
@@ -89,18 +95,33 @@ impl Projector for CaptureProjector {
     }
 
     fn handles(&self) -> &[&str] {
-        &[CAPTURE_RECORDED]
+        &[CAPTURE_RECORDED, PAYLOAD_PURGED]
     }
 
-    // Each capture gets a document of its own, so none is read first.
-    fn keys(&self, _event: &Event) -> Vec<DocKey> {
-        Vec::new()
+    // A new capture gets a document of its own, so none is read first. A
+    // purge names each released reference by the sequence that holds it,
+    // which is the key of the capture recorded there, if any.
+    fn keys(&self, event: &Event) -> Vec<DocKey> {
+        if event.type_name != PAYLOAD_PURGED {
+            return Vec::new();
+        }
+        let Some(purge) = PurgedEvent::from_value(&event.payload) else {
+            // `apply` refuses it with a reason.
+            return Vec::new();
+        };
+        let mut keys: Vec<DocKey> = purge
+            .released
+            .iter()
+            .map(|(seq, _)| capture_key(*seq))
+            .collect();
+        keys.dedup();
+        keys
     }
 
     fn apply(
         &self,
         event: &Event,
-        _documents: &[(DocKey, Value)],
+        documents: &[(DocKey, Value)],
     ) -> Result<Vec<Change>, ProjectorError> {
         let refuse = |message: &str| {
             ProjectorError(format!(
@@ -108,6 +129,12 @@ impl Projector for CaptureProjector {
                 event.type_name, event.seq
             ))
         };
+        if event.type_name == PAYLOAD_PURGED {
+            let Some(purge) = PurgedEvent::from_value(&event.payload) else {
+                return Err(refuse("the purge payload cannot be read"));
+            };
+            return Ok(purged(&purge, documents));
+        }
         let Value::Object(payload) = &event.payload else {
             return Err(refuse("the payload is not an object"));
         };
@@ -143,6 +170,35 @@ impl Projector for CaptureProjector {
             body: Value::Object(body),
         }])
     }
+}
+
+/// The documents `purge` marks purged: each at a released sequence whose
+/// body hash is the one released there. Inline captures hold no hash and
+/// stay as they are.
+fn purged(purge: &PurgedEvent, documents: &[(DocKey, Value)]) -> Vec<Change> {
+    documents
+        .iter()
+        .filter_map(|(key, document)| {
+            let Value::Object(fields) = document else {
+                return None;
+            };
+            let hash = fields.get("hash").and_then(Value::as_str)?;
+            let released = purge
+                .released
+                .iter()
+                .any(|(seq, released)| capture_key(*seq) == *key && released.to_hex() == hash);
+            if !released {
+                return None;
+            }
+            let mut body = fields.clone();
+            body.insert("state".into(), json!("purged"));
+            body.insert("reason".into(), json!(purge.reason));
+            Some(Change::Put {
+                key: key.clone(),
+                body: Value::Object(body),
+            })
+        })
+        .collect()
 }
 
 /// A payload member as given, `null` when absent.
