@@ -829,6 +829,11 @@ mod tests {
                 crate::instruction::read_contract::VERSION,
                 crate::instruction::read_contract::HASH,
             ),
+            (
+                "bal-capture",
+                crate::instruction::capture::VERSION,
+                crate::instruction::capture::HASH,
+            ),
         ] {
             let answer = instruction_call(identity);
             assert_eq!(answer["status"], "ok", "{identity}: {answer}");

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 
-/// The twenty front doors not served yet, with their owning builds, written out from the
+/// The nineteen front doors not served yet, with their owning builds, written out from the
 /// design rather than read from the table under test.
 const UNAVAILABLE: &[(&str, u32)] = &[
     ("bal-context", 4),
@@ -24,12 +24,11 @@ const UNAVAILABLE: &[(&str, u32)] = &[
     ("bal-debug", 8),
     ("bal-spike", 8),
     ("bal-why", 8),
-    ("bal-capture", 3),
 ];
 
 #[test]
 fn an_unavailable_front_door_is_never_presented_as_usable_and_names_its_owning_build() {
-    assert_eq!(UNAVAILABLE.len(), 20);
+    assert_eq!(UNAVAILABLE.len(), 19);
     for (identity, build) in UNAVAILABLE {
         assert_eq!(
             lookup(identity),
@@ -97,6 +96,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "bal-read-contract",
         "1",
         "4feb8474b44d0f4b85290797064cc1e57a369f5b3afdc0ca866afe8ea7d6c217",
+    ),
+    (
+        "bal-capture",
+        "1",
+        "52867052fb5ae23a0962120f07e6fbfa3ba0010bf2e52c109351ff8a1e8b7c5e",
     ),
 ];
 
@@ -170,6 +174,18 @@ fn the_help_text_asks_for_its_identity_on_apply_calls_only() {
     assert!(body.contains("`bal-help`") && body.contains("`instruction`"));
     assert!(body.contains("on every `baley_apply` call"));
     assert!(body.contains("Never send it on a `baley_query` call"));
+}
+
+#[test]
+fn a_capture_text_without_its_identity_request_or_either_kind_is_caught() {
+    let Lookup::Served { text, .. } = lookup("bal-capture") else {
+        panic!("bal-capture is served");
+    };
+    let body = text.body;
+    assert!(body.contains("`baley_apply`"));
+    assert!(body.contains(r#""operation":"capture""#));
+    assert!(body.contains(r#""instruction":"bal-capture""#));
+    assert!(body.contains(r#""kind":"note""#) && body.contains(r#""kind":"story""#));
 }
 
 #[test]

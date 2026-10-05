@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::envelope::Refusal;
 use crate::help::front_door;
 
+pub mod capture;
 pub mod read_contract;
 
 /// The served text of one instruction, pinned in source.
@@ -158,11 +159,15 @@ pub static ENTRIES: &[Entry] = &[
         build: 6,
         text: None,
     },
-    // The capture operation is Build 3's, so the capture text is served when it lands.
+    // Build 3 serves the capture text beside the `capture` operation it drives.
     Entry {
-        identity: "bal-capture",
+        identity: capture::IDENTITY,
         build: 3,
-        text: None,
+        text: Some(Text {
+            version: capture::VERSION,
+            hash: capture::HASH,
+            body: capture::TEXT,
+        }),
     },
     // Build 3 serves the help front door, whose words the help area owns.
     Entry {

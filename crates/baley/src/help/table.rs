@@ -255,7 +255,7 @@ mod tests {
     /// design rather than read from the registry under test.
     const EXPECTED: &[(&str, bool, u64)] = &[
         ("bal-help", true, 3),
-        ("bal-capture", false, 3),
+        ("bal-capture", true, 3),
         ("bal-context", false, 4),
         ("bal-plan", false, 4),
         ("bal-review", false, 4),
