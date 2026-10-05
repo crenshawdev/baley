@@ -52,3 +52,6 @@ pub mod prepare;
 
 /// Records a note or story as one `capture.recorded` in its own domain transaction.
 pub mod capture;
+
+/// Reads a capture back by identity: its text, or a tombstone once its body is purged.
+pub mod document;
