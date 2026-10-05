@@ -10,18 +10,27 @@ use baley_core::capture::{
     stored_payload, text_form,
 };
 use baley_store::{
-    Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind, Recorded, RequestId,
-    RetentionClass, StoreError, StreamName, request_digest,
+    Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind, Payloads, Recorded,
+    Refusal as StoreRefusal, RequestId, RetentionClass, StoreError, StreamName, request_digest,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::envelope::Refusal;
-use crate::mcp::prepare::WriteRequest;
+use crate::envelope::{Envelope, LEDGER_BUSY, Refusal};
+use crate::ledger::answer::{AnswerUnread, answer_value};
+use crate::mcp::prepare::{LEDGER_UNAVAILABLE, WriteRequest};
 
 /// The command kind every capture is recorded under.
 pub const CAPTURE_COMMAND: &str = "capture.record";
+
+/// The code for a capture whose exact bytes were purged before.
+pub const TEXT_PURGED: &str = "text-purged";
+
+/// The code for a request id already used for a different capture.
+pub const REQUEST_ID_REUSE: &str = "request-id-reuse";
+
+const PLACE_LEDGER: &str = "ledger";
 
 /// The arguments `capture` takes beside its `operation`. Unknown fields are
 /// refused. `schema` serves this same declaration.
@@ -196,6 +205,60 @@ pub fn record<L: Ledger + ?Sized>(
     })
 }
 
+/// The answer for a capture's transaction result. A new or replayed outcome
+/// answers the recorded answer, read through `payloads` when it was stored. A
+/// recorded answer that cannot be read is a ledger fault, not a domain
+/// outcome, so it answers `failed`.
+pub fn answer(result: Result<Recorded, StoreError>, payloads: &dyn Payloads) -> Value {
+    match result {
+        Ok(Recorded::New { outcome, .. } | Recorded::Replayed { outcome }) => {
+            match answer_value(&outcome.answer, payloads) {
+                Ok(value) => value,
+                Err(AnswerUnread::Read(error)) => store_failed(&error),
+                Err(AnswerUnread::Gone(_)) => failed(
+                    LEDGER_UNAVAILABLE,
+                    "the capture is recorded, but its stored answer is no longer held",
+                    PLACE_LEDGER,
+                ),
+                Err(AnswerUnread::Malformed) => failed(
+                    LEDGER_UNAVAILABLE,
+                    "the capture is recorded, but its stored answer cannot be read",
+                    PLACE_LEDGER,
+                ),
+            }
+        }
+        Err(StoreError::Refused(StoreRefusal::RequestDigestMismatch { .. })) => Refusal::new(
+            REQUEST_ID_REUSE,
+            "this request_id was already used for a different capture, so nothing was recorded. A new capture needs a new request_id",
+        )
+        .slot("request_id")
+        .value(),
+        Err(StoreError::Refused(StoreRefusal::PayloadTombstoned(_))) => failed(
+            TEXT_PURGED,
+            "this exact text was purged from the ledger and cannot be stored again, so nothing was recorded",
+            "text",
+        ),
+        Err(error) => store_failed(&error),
+    }
+}
+
+/// A store fault's answer: only a busy ledger may be retried unchanged.
+fn store_failed(error: &StoreError) -> Value {
+    match error {
+        StoreError::Busy => failed(
+            LEDGER_BUSY,
+            "the ledger is busy, so the capture was not recorded. Try it again",
+            PLACE_LEDGER,
+        ),
+        error => failed(LEDGER_UNAVAILABLE, error.to_string(), PLACE_LEDGER),
+    }
+}
+
+fn failed(code: &str, reason: impl Into<String>, place: &str) -> Value {
+    serde_json::to_value(Envelope::<Value>::failed(code, reason.into(), place))
+        .expect("a failed answer serializes")
+}
+
 /// A capture's decision: it observes nothing, carries no git facts and is not
 /// sensitive.
 fn decision(kind: OutcomeKind, answer: Value) -> Decision {
@@ -279,7 +342,7 @@ mod tests {
         store.head(&project()).unwrap().map_or(0, |head| head.seq)
     }
 
-    fn answer(recorded: &Recorded) -> (OutcomeKind, Value) {
+    fn outcome_answer(recorded: &Recorded) -> (OutcomeKind, Value) {
         let outcome = match recorded {
             Recorded::New { outcome, .. } | Recorded::Replayed { outcome } => outcome,
         };
@@ -375,7 +438,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let (kind, receipt) = answer(&recorded);
+        let (kind, receipt) = outcome_answer(&recorded);
         assert_eq!(kind, OutcomeKind::Done);
         assert_eq!(
             receipt,
@@ -394,7 +457,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let (_, receipt) = answer(&recorded);
+        let (_, receipt) = outcome_answer(&recorded);
         assert_eq!(receipt["form"], "payload");
         assert_eq!(receipt["bytes"], 4097);
         let serialized = serde_json::to_string(&receipt).unwrap();
@@ -421,8 +484,8 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(again, Recorded::Replayed { .. }), "{again:?}");
-        assert_eq!(answer(&again), answer(&first));
-        assert_eq!(answer(&again).1["recorded_at"], T1);
+        assert_eq!(outcome_answer(&again), outcome_answer(&first));
+        assert_eq!(outcome_answer(&again).1["recorded_at"], T1);
         assert_eq!(of_type(&history(&store), "capture.recorded").len(), 1);
     }
 
@@ -440,7 +503,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(recorded, Recorded::New { .. }), "{recorded:?}");
-        let (kind, refusal) = answer(&recorded);
+        let (kind, refusal) = outcome_answer(&recorded);
         assert_eq!(kind, OutcomeKind::Refused);
         assert_eq!(refusal["status"], "refused");
         assert_eq!(refusal["code"], "no-such-phase");
@@ -505,7 +568,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_ne!(answer(&one).1["id"], answer(&two).1["id"]);
+        assert_ne!(outcome_answer(&one).1["id"], outcome_answer(&two).1["id"]);
     }
 
     #[test]
@@ -671,5 +734,130 @@ mod tests {
         let again = capture(&store, &arguments(json!({})), T2).unwrap();
         assert!(matches!(again, Recorded::Replayed { .. }), "{again:?}");
         assert_eq!(of_type(&history(&store), "capture.recorded").len(), 1);
+    }
+
+    /// A payload seam whose every read finds the ledger busy.
+    struct BusyPayloads;
+
+    impl Payloads for BusyPayloads {
+        fn open(&self, _hash: &Hash) -> Result<PayloadBody<'_>, StoreError> {
+            Err(StoreError::Busy)
+        }
+
+        fn status(&self, _hash: &Hash) -> Result<baley_store::PayloadStatus, StoreError> {
+            Err(StoreError::Busy)
+        }
+    }
+
+    fn new(kind: OutcomeKind, answer: Answer) -> Result<Recorded, StoreError> {
+        Ok(Recorded::New {
+            outcome: baley_store::Outcome { kind, answer },
+            head: baley_store::Head {
+                seq: 4,
+                hash: Hash([1; 32]),
+            },
+        })
+    }
+
+    fn assert_failed(value: &Value, code: &str, place: &str, retryable: bool) {
+        assert_eq!(value["status"], "failed", "{value}");
+        assert_eq!(value["code"], code, "{value}");
+        assert_eq!(value["place"], place, "{value}");
+        assert_eq!(value["recorded"], false, "{value}");
+        assert_eq!(value["retryable"], retryable, "{value}");
+    }
+
+    #[test]
+    fn an_inline_or_replayed_answer_not_returned_as_recorded_is_caught() {
+        let receipt = json!({"status": "ok", "id": "c1", "kind": "note", "phase": null,
+            "bytes": 1, "form": "inline", "recorded_at": T1});
+        let inline = Answer::Inline(receipt.clone());
+        assert_eq!(
+            answer(new(OutcomeKind::Done, inline.clone()), &BusyPayloads),
+            receipt
+        );
+        let replayed = Ok(Recorded::Replayed {
+            outcome: baley_store::Outcome {
+                kind: OutcomeKind::Done,
+                answer: inline,
+            },
+        });
+        assert_eq!(answer(replayed, &BusyPayloads), receipt);
+    }
+
+    #[test]
+    fn a_stored_answer_not_read_back_through_the_payloads_is_caught() {
+        let (_dir, store) = store();
+        let stored = json!({"status": "ok", "id": "c1"});
+        let recorded = store
+            .transact(&command(REQUEST, 1, T1), &mut |_tx| {
+                Ok(Decision {
+                    sensitive: true,
+                    ..decision(OutcomeKind::Done, stored.clone())
+                })
+            })
+            .unwrap();
+        let Recorded::New { outcome, .. } = &recorded else {
+            panic!("{recorded:?}");
+        };
+        assert!(matches!(outcome.answer, Answer::Stored(_)), "{recorded:?}");
+        assert_eq!(answer(Ok(recorded), &store), stored);
+    }
+
+    #[test]
+    fn an_unreadable_answer_answered_as_a_domain_outcome_or_busy_not_retryable_is_caught() {
+        let (_dir, store) = store();
+        let missing = PayloadRef {
+            hash: Hash([5; 32]),
+            bytes: 10,
+            class: RetentionClass::Record,
+        };
+        let gone = Answer::Tombstone {
+            reference: missing.clone(),
+            status: baley_store::PayloadStatus::Purged { reason: "r".into() },
+        };
+        for unreadable in [gone, Answer::Stored(missing.clone())] {
+            let value = answer(new(OutcomeKind::Done, unreadable), &store);
+            assert_failed(&value, "ledger-unavailable", "ledger", false);
+        }
+        let value = answer(
+            new(OutcomeKind::Done, Answer::Stored(missing)),
+            &BusyPayloads,
+        );
+        assert_failed(&value, "ledger-busy", "ledger", true);
+    }
+
+    #[test]
+    fn a_busy_ledger_mapped_to_ledger_unavailable_or_not_retryable_is_caught() {
+        let value = answer(Err(StoreError::Busy), &BusyPayloads);
+        assert_failed(&value, "ledger-busy", "ledger", true);
+    }
+
+    #[test]
+    fn a_reused_request_id_answered_as_failed_or_in_another_slot_is_caught() {
+        let mismatch = StoreError::Refused(StoreRefusal::RequestDigestMismatch {
+            request_id: RequestId(REQUEST.into()),
+        });
+        let value = answer(Err(mismatch), &BusyPayloads);
+        assert_eq!(value["status"], "refused", "{value}");
+        assert_eq!(value["code"], "request-id-reuse");
+        assert_eq!(value["slot"], "request_id");
+        assert!(value.get("retryable").is_none());
+    }
+
+    #[test]
+    fn purged_text_marked_retryable_or_answered_at_another_place_is_caught() {
+        let tombstoned = StoreError::Refused(StoreRefusal::PayloadTombstoned(Hash([5; 32])));
+        let value = answer(Err(tombstoned), &BusyPayloads);
+        assert_failed(&value, "text-purged", "text", false);
+        assert!(value["reason"].as_str().unwrap().contains("purged"));
+    }
+
+    #[test]
+    fn another_store_error_answered_as_retryable_or_as_a_refusal_is_caught() {
+        let down = StoreError::Unavailable("disk full".into());
+        let value = answer(Err(down), &BusyPayloads);
+        assert_failed(&value, "ledger-unavailable", "ledger", false);
+        assert!(value["reason"].as_str().unwrap().contains("disk full"));
     }
 }
