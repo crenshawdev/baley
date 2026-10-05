@@ -2,6 +2,8 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::instruction::{self, Lookup};
+
 #[derive(Serialize)]
 pub struct Command {
     pub name: &'static str,
@@ -124,6 +126,31 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
+/// One help row as the answer shows it: the command, whether its instruction
+/// is served now, and the build that owns it. Both come from the registry when
+/// the answer is built, so the table holds them only once.
+#[derive(Serialize)]
+struct Row<'a> {
+    #[serde(flatten)]
+    command: &'a Command,
+    available: bool,
+    build: u32,
+}
+
+fn row(command: &Command) -> Row<'_> {
+    let (available, build) = match instruction::lookup(command.name) {
+        Lookup::Served { entry, .. } => (true, entry.build),
+        Lookup::Unavailable { build, .. } => (false, build),
+        // A test checks every row, so a command with no entry never ships.
+        Lookup::Unknown => panic!("help row {} has no registry entry", command.name),
+    };
+    Row {
+        command,
+        available,
+        build,
+    }
+}
+
 pub fn description(name: &str) -> &'static str {
     COMMANDS
         .iter()
@@ -156,7 +183,7 @@ pub fn answer(name: Option<&str>) -> Value {
     let Some(name) = name else {
         let clusters: Vec<_> = CLUSTERS.iter().map(|cluster| json!({
             "name": cluster,
-            "commands": COMMANDS.iter().filter(|row| row.cluster == *cluster).collect::<Vec<_>>(),
+            "commands": COMMANDS.iter().filter(|row| row.cluster == *cluster).map(row).collect::<Vec<_>>(),
         })).collect();
         return json!({"status":"ok", "clusters":clusters});
     };
@@ -165,6 +192,7 @@ pub fn answer(name: Option<&str>) -> Value {
     let rows: Vec<_> = COMMANDS
         .iter()
         .filter(|row| row.name.strip_prefix("bal-") == Some(name))
+        .map(row)
         .collect();
     let mut closest = Vec::new();
     if rows.is_empty() {
@@ -198,4 +226,76 @@ fn edit_distance(left: &str, right: &str) -> usize {
         previous = current;
     }
     previous[right.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every help row's availability and owning build, written out from the
+    /// design rather than read from the registry under test.
+    const EXPECTED: &[(&str, bool, u64)] = &[
+        ("bal-help", true, 3),
+        ("bal-capture", false, 3),
+        ("bal-context", false, 4),
+        ("bal-plan", false, 4),
+        ("bal-review", false, 4),
+        ("bal-plan-review", false, 4),
+        ("bal-decision-review", false, 4),
+        ("bal-minimalism-review", false, 4),
+        ("bal-execute", false, 5),
+        ("bal-verify", false, 5),
+        ("bal-audit", false, 5),
+        ("bal-coverage", false, 5),
+        ("bal-land", false, 6),
+        ("bal-milestone", false, 6),
+        ("bal-undo", false, 6),
+        ("bal-progress", false, 7),
+        ("bal-suggest", false, 7),
+        ("bal-task", false, 8),
+        ("bal-debug", false, 8),
+        ("bal-spike", false, 8),
+        ("bal-why", false, 8),
+    ];
+
+    fn triple(row: &Value) -> (String, bool, u64) {
+        (
+            row["name"].as_str().expect("a row name").to_owned(),
+            row["available"].as_bool().expect("a row says available"),
+            row["build"].as_u64().expect("a row names its build"),
+        )
+    }
+
+    #[test]
+    fn every_row_of_the_cluster_list_shows_the_availability_and_build_the_design_gives_it() {
+        let answer = answer(None);
+        let mut shown: Vec<_> = answer["clusters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|cluster| cluster["commands"].as_array().unwrap())
+            .map(triple)
+            .collect();
+        shown.sort();
+        let mut expected: Vec<_> = EXPECTED
+            .iter()
+            .map(|(name, available, build)| ((*name).to_owned(), *available, *build))
+            .collect();
+        expected.sort();
+        assert_eq!(expected.len(), 21);
+        assert_eq!(shown, expected);
+    }
+
+    #[test]
+    fn a_named_answer_shows_the_availability_and_build_of_its_row() {
+        let plan = answer(Some("plan"));
+        let rows = plan["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(triple(&rows[0]), ("bal-plan".to_owned(), false, 4));
+        let help = answer(Some("/bal-help"));
+        assert_eq!(
+            triple(&help["rows"].as_array().unwrap()[0]),
+            ("bal-help".to_owned(), true, 3)
+        );
+    }
 }
