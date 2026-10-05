@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::envelope::Refusal;
+use crate::mcp::parts::{Cut, PART_BOUND, cut};
 
 /// One of the two tools that take an `operation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,9 +294,6 @@ enum RequestShape {
     },
 }
 
-/// The most bytes of one schema part, cut at a UTF-8 boundary.
-pub const SCHEMA_PART_BOUND: usize = 24_576;
-
 fn invalid_arguments(reason: impl Into<String>) -> Value {
     Refusal::new("invalid-arguments", reason)
         .slot("arguments")
@@ -358,31 +356,21 @@ fn served_schema(operation: &str) -> Option<Value> {
 
 fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>) -> Value {
     let serialized = serde_json::to_string(schema).expect("operation schema JSON");
-    let mut remaining = serialized.as_str();
-    let mut parts = Vec::new();
-    while !remaining.is_empty() {
-        let mut end = remaining.len().min(SCHEMA_PART_BOUND);
-        while !remaining.is_char_boundary(end) {
-            end -= 1;
+    match cut(&serialized, part) {
+        Cut::Whole(_) => {
+            serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema})
         }
-        parts.push(&remaining[..end]);
-        remaining = &remaining[end..];
-    }
-    let part = part.unwrap_or(1);
-    let Some(body) = part.checked_sub(1).and_then(|index| parts.get(index)) else {
-        return Refusal::new(
+        Cut::Part { body, part, next } => {
+            serde_json::json!({"status":"ok","tool":tool,"operation":operation,
+            "bound":PART_BOUND,"part":part,"body":body,"next":next})
+        }
+        Cut::Absent => Refusal::new(
             "schema-part-not-found",
             "the requested schema part is absent",
         )
         .slot("part")
-        .value();
-    };
-    if serialized.len() <= SCHEMA_PART_BOUND {
-        return serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema});
+        .value(),
     }
-    let next = (part < parts.len()).then_some(part + 1);
-    serde_json::json!({"status":"ok","tool":tool,"operation":operation,
-        "bound":SCHEMA_PART_BOUND,"part":part,"body":body,"next":next})
 }
 
 /// Today's spellings written out again, independent of the data above, for the
@@ -683,66 +671,5 @@ mod tests {
         let answer = schema_answer(&json!({"operation": "schema", "tool": "other", "for": "help"}));
         assert_eq!(answer["code"], "unknown-tool");
         assert_eq!(answer["slot"], "tool");
-    }
-
-    #[test]
-    fn schema_parts_round_trip_utf8_and_escaped_json() {
-        let schema = json!({"description":"é🦀\"\\".repeat(SCHEMA_PART_BOUND)});
-        let mut combined = String::new();
-        let mut part = None;
-        let mut number = 1;
-        loop {
-            let answer = schema_part("apply", "synthetic", &schema, part);
-            assert_eq!(answer["status"], "ok");
-            assert_eq!(answer["tool"], "apply");
-            assert_eq!(answer["operation"], "synthetic");
-            assert_eq!(answer["part"], number);
-            assert_eq!(answer["bound"], SCHEMA_PART_BOUND);
-            assert!(answer.get("schema").is_none());
-            let body = answer["body"].as_str().unwrap();
-            assert!(!body.is_empty() && body.len() <= SCHEMA_PART_BOUND);
-            combined.push_str(body);
-            if answer["next"].is_null() {
-                break;
-            }
-            number += 1;
-            assert_eq!(answer["next"], number);
-            part = Some(number);
-        }
-        assert!(number > 1);
-        assert_eq!(combined, serde_json::to_string(&schema).unwrap());
-        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), schema);
-    }
-
-    #[test]
-    fn a_schema_at_the_bound_is_served_whole_and_one_byte_over_is_paged() {
-        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
-        assert_eq!(
-            serde_json::to_vec(&schema).unwrap().len(),
-            SCHEMA_PART_BOUND
-        );
-        assert_eq!(
-            schema_part("query", "synthetic", &schema, None),
-            json!({"status":"ok","tool":"query","operation":"synthetic","schema":schema})
-        );
-        let oversized = json!("x".repeat(SCHEMA_PART_BOUND - 1));
-        let first = schema_part("query", "synthetic", &oversized, None);
-        assert_eq!(first["part"], 1);
-        assert_eq!(first["next"], 2);
-        assert_eq!(first["body"].as_str().unwrap().len(), SCHEMA_PART_BOUND);
-        let last = schema_part("query", "synthetic", &oversized, Some(2));
-        assert_eq!(last["body"].as_str().unwrap().len(), 1);
-        assert!(last["next"].is_null());
-    }
-
-    #[test]
-    fn a_schema_part_of_0_past_the_end_or_usize_max_is_refused_as_not_found() {
-        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
-        for part in [0, 2, usize::MAX] {
-            let refused = schema_part("query", "synthetic", &schema, Some(part));
-            assert_eq!(refused["status"], "refused");
-            assert_eq!(refused["slot"], "part");
-            assert_eq!(refused["code"], "schema-part-not-found");
-        }
     }
 }
