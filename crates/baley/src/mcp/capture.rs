@@ -3,6 +3,7 @@
 //! write preparation returned (design 0014 section 5, SUP-R1).
 
 use std::num::NonZeroU32;
+use std::path::Path;
 
 use baley_core::capture::{
     BLANK_TEXT, CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION, CAPTURE_STREAM, CaptureKind, TextForm,
@@ -19,7 +20,8 @@ use serde_json::{Value, json};
 
 use crate::envelope::{Envelope, LEDGER_BUSY, Refusal};
 use crate::ledger::answer::{AnswerUnread, answer_value};
-use crate::mcp::prepare::{LEDGER_UNAVAILABLE, WriteRequest};
+use crate::mcp::handler::Preparation;
+use crate::mcp::prepare::{LEDGER_UNAVAILABLE, WriteRequest, prepare};
 
 /// The command kind every capture is recorded under.
 pub const CAPTURE_COMMAND: &str = "capture.record";
@@ -32,8 +34,9 @@ pub const REQUEST_ID_REUSE: &str = "request-id-reuse";
 
 const PLACE_LEDGER: &str = "ledger";
 
+// `schema` serves this same declaration, so its doc comments are wire text.
 /// The arguments `capture` takes beside its `operation`. Unknown fields are
-/// refused. `schema` serves this same declaration.
+/// refused.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureShape {
@@ -203,6 +206,51 @@ pub fn record<L: Ledger + ?Sized>(
             }),
         ))
     })
+}
+
+/// Serves one `capture` call for the session's `preparation`: the arguments
+/// are judged first, and a refusal is answered before anything is prepared
+/// or recorded. Then the write is prepared, which may record checkout
+/// admission and the policy step, and the capture runs in its own
+/// transaction. A `failed` preparation answer is returned as it is.
+pub fn serve(arguments: &Value, preparation: &Preparation) -> Value {
+    let judged = match judge_arguments(arguments) {
+        Ok(judged) => judged,
+        Err(refusal) => return refusal,
+    };
+    let ledger = preparation.ledger.as_deref();
+    // With no ledger, preparation fails at the project check, before any
+    // settings are read from the config folder.
+    let config = ledger.map_or(Path::new(""), |ledger| ledger.config.as_path());
+    let prepared = match prepare(
+        ledger.map(|ledger| &ledger.store),
+        &preparation.caller,
+        Some(&judged.request),
+        config,
+        preparation.host,
+        &preparation.at,
+        &mut crate::process::System,
+    ) {
+        Ok(prepared) => prepared,
+        Err(failed) => return serde_json::to_value(*failed).expect("a failed answer serializes"),
+    };
+    let (Some(ledger), Some(command)) = (ledger, prepared.command) else {
+        return failed(
+            LEDGER_UNAVAILABLE,
+            "the write was prepared without a ledger or a command",
+            PLACE_LEDGER,
+        );
+    };
+    answer(
+        record(
+            &ledger.store,
+            &command,
+            judged.kind,
+            &judged.text,
+            judged.phase,
+        ),
+        &ledger.store,
+    )
 }
 
 /// The answer for a capture's transaction result. A new or replayed outcome
