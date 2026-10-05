@@ -351,23 +351,37 @@ pub fn instruction_answer(arguments: &Value) -> Value {
         Err(error) => return invalid_arguments(error.to_string()),
     };
     match instruction::lookup(&identity) {
-        instruction::Lookup::Served { entry, text } => match cut(text.body, part) {
-            Cut::Whole(body) => serde_json::json!({"status":"ok","identity":entry.identity,
-            "version":text.version,"hash":text.hash,"text":body}),
-            Cut::Part { body, part, next } => serde_json::json!({"status":"ok",
-            "identity":entry.identity,"version":text.version,"hash":text.hash,
-            "bound":PART_BOUND,"part":part,"body":body,"next":next}),
-            Cut::Absent => Refusal::new(
-                "instruction-part-not-found",
-                "the requested instruction part is absent",
-            )
-            .slot("part")
-            .value(),
-        },
+        instruction::Lookup::Served { entry, text } => {
+            instruction_part(entry.identity, text.version, text.hash, text.body, part)
+        }
         instruction::Lookup::Unavailable { identity, build } => {
             instruction::unavailable(identity, build)
         }
         instruction::Lookup::Unknown => instruction::unknown(),
+    }
+}
+
+/// One instruction whole when it fits, or one numbered part of its text. Every
+/// part carries the evidence of the whole text, since the hash covers all parts.
+fn instruction_part(
+    identity: &str,
+    version: &str,
+    hash: &str,
+    body: &str,
+    part: Option<usize>,
+) -> Value {
+    match cut(body, part) {
+        Cut::Whole(body) => serde_json::json!({"status":"ok","identity":identity,
+        "version":version,"hash":hash,"text":body}),
+        Cut::Part { body, part, next } => serde_json::json!({"status":"ok",
+        "identity":identity,"version":version,"hash":hash,
+        "bound":PART_BOUND,"part":part,"body":body,"next":next}),
+        Cut::Absent => Refusal::new(
+            "instruction-part-not-found",
+            "the requested instruction part is absent",
+        )
+        .slot("part")
+        .value(),
     }
 }
 
@@ -796,6 +810,100 @@ mod tests {
             &json!({"operation": "instruction", "identity": "bal-help", "part": 1}),
         );
         assert_eq!(first, whole);
+    }
+
+    /// Fetches part 1 with no part named, then follows `next` to the end,
+    /// checking the fields every paged answer carries. Returns each part.
+    fn every_part(fetch: impl Fn(Option<usize>) -> Value) -> Vec<Value> {
+        let mut parts = vec![fetch(None)];
+        loop {
+            let answer = parts.last().unwrap();
+            let number = parts.len();
+            assert_eq!(answer["status"], "ok", "{answer}");
+            assert_eq!(answer["bound"], PART_BOUND);
+            assert_eq!(answer["part"], number);
+            let body = answer["body"].as_str().expect("a part body");
+            assert!(!body.is_empty() && body.len() <= PART_BOUND);
+            if answer["next"].is_null() {
+                break;
+            }
+            assert_eq!(answer["next"], number + 1);
+            parts.push(fetch(Some(number + 1)));
+        }
+        assert!(parts.len() > 1, "the answer must be paged");
+        parts
+    }
+
+    fn joined(parts: &[Value]) -> String {
+        parts
+            .iter()
+            .map(|part| part["body"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_schema_part_that_drops_its_wire_fields_or_loses_bytes_is_caught() {
+        let schema = json!({"description":"é🦀\"\\".repeat(PART_BOUND)});
+        let parts = every_part(|part| schema_part("apply", "synthetic", &schema, part));
+        for part in &parts {
+            assert_eq!(part["tool"], "apply");
+            assert_eq!(part["operation"], "synthetic");
+            assert!(
+                part.get("schema").is_none(),
+                "a part carries no parsed schema"
+            );
+        }
+        let combined = joined(&parts);
+        assert_eq!(combined, serde_json::to_string(&schema).unwrap());
+        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), schema);
+    }
+
+    #[test]
+    fn a_schema_part_of_0_past_the_end_or_usize_max_served_instead_of_refused_is_caught() {
+        // Quoted, these serialize to exactly the bound and two bytes over it.
+        let fitting = json!("x".repeat(PART_BOUND - 2));
+        let paged = json!("x".repeat(PART_BOUND));
+        for (schema, past_end) in [(&fitting, 2), (&paged, 3)] {
+            for part in [0, past_end, usize::MAX] {
+                let refused = schema_part("query", "synthetic", schema, Some(part));
+                assert_eq!(refused["status"], "refused", "part {part}");
+                assert_eq!(refused["slot"], "part");
+                assert_eq!(refused["code"], "schema-part-not-found");
+            }
+        }
+    }
+
+    #[test]
+    fn a_help_part_that_drops_its_wire_fields_or_serves_a_missing_part_is_caught() {
+        let answer = json!({"status":"ok","about":"é🦀".repeat(PART_BOUND)});
+        let parts = every_part(|part| help_part(answer.clone(), part));
+        for part in &parts {
+            assert!(
+                part.get("about").is_none(),
+                "a part carries no answer field"
+            );
+        }
+        let combined = joined(&parts);
+        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), answer);
+        let past = help_part(answer, Some(parts.len() + 1));
+        assert_eq!(past["code"], "help-part-not-found");
+        assert_eq!(past["slot"], "part");
+    }
+
+    #[test]
+    fn an_instruction_part_that_drops_its_evidence_or_serves_a_missing_part_is_caught() {
+        let body = "é🦀".repeat(PART_BOUND);
+        let parts = every_part(|part| instruction_part("bal-synthetic", "7", "abc", &body, part));
+        for part in &parts {
+            assert_eq!(part["identity"], "bal-synthetic");
+            assert_eq!(part["version"], "7");
+            assert_eq!(part["hash"], "abc");
+            assert!(part.get("text").is_none(), "a part carries no whole text");
+        }
+        assert_eq!(joined(&parts), body);
+        let past = instruction_part("bal-synthetic", "7", "abc", &body, Some(parts.len() + 1));
+        assert_eq!(past["code"], "instruction-part-not-found");
+        assert_eq!(past["slot"], "part");
     }
 
     #[test]
