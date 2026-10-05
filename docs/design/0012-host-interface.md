@@ -40,7 +40,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 | Client info | What a host sends when it connects: its name and version. |
 | Operation | One typed request under the `query` or `apply` tool, named by a string that is only ever added, never renamed or removed. |
 | Refusal | A typed answer that a request was not done, with a code and a place. |
-| Identity | The name by which a record or an instruction is read: a kind plus keys, never a path. |
+| Identity | The name by which a record or an instruction is read. A record is read by a kind plus keys, and an instruction by its short name, such as `bal-help`. Neither is ever a path. |
 | Part | One bounded piece of a served record or instruction, at most 24,576 bytes, with the identity of the next part. |
 | Work order | The complete dispatch for one worker ([0002](0002-system-design.md) section 8), read by id. |
 | Stub | A file a host needs on disk to list or launch something, rendered by Baley at install from its tables: frontmatter and one line pointing at Baley. |
@@ -100,6 +100,8 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 
 Query operations are the reads of every area: `help`, `schema`, `document` (a record by identity: work order, plan, story, phase, run, review, verification, roadmap row), `document-search`, `instruction` (an instruction by identity), `progress`, `next` ([0013](0013-next-action-and-progress.md)), `why`, `recall`, `search` ([0014](0014-support-families.md)), `route`, `status` operations per area.
 
+`help` takes an optional command `name`, `schema` takes `tool` and `for`, and `instruction` takes `identity`. Each takes an optional one-based `part`. An answer that fits in 24,576 bytes comes whole. A larger one comes in parts, each carrying `bound`, `part`, `body` and `next`, where `next` is the next part's number, or null on the last part, and joining the bodies in order gives the answer's bytes. The bound counts body bytes, not the encoded result, and the tool result carries each answer both as text and as structured content. `instruction` answers with the text and its identity, version and hash. The refusals are `instruction-unavailable`, which names the build that owns an identity not yet served, `unknown-instruction` for any other identity, `help-part-not-found`, `schema-part-not-found` and `instruction-part-not-found` for a part that does not exist, and `invalid-arguments` for a field the shape lacks, so an identity sent on a read is refused. None of these reads needs a project or records anything.
+
 ### baley_apply (tool)
 
 - **Inputs:** `operation`, a request id, its typed arguments.
@@ -114,12 +116,12 @@ Before a project read or write runs its operation, the server prepares it (secti
 
 | Code | Place | Retryable | Answered | The owner's step | First reached by |
 |---|---|---|---|---|---|
-| `project-context-invalid` | `CLAUDE_PROJECT_DIR` | no | read and write | Restore the project directory, which was removed after the server started. | Build 3 T7, `document` |
-| `not-a-project` | `CLAUDE_PROJECT_DIR` | no | read and write | Run `baley init` in the repository, or start the session inside one that holds a `baley.toml`. | Build 3 T7, `document` |
-| `config-unavailable` | `settings` | no | read and write | Repair the settings file the reason names. A read judges only the working tree's `baley.toml`, and a write also judges the global file and HEAD's copy. | Build 3 T7, `document` |
-| `project-not-in-ledger` | `project` | no | read and write | Run `baley init` in the checkout, which ties its project to this machine's ledger. | Build 3 T7, `document` |
-| `ledger-busy` | `ledger` | yes | read and write | None. The caller repeats the same call. | Build 3 T7, `document` |
-| `ledger-unavailable` | `ledger` | no | read and write | Run `baley doctor`. A server whose ledger could not be opened at start needs a new session once the ledger opens. | Build 3 T7, `document` |
+| `project-context-invalid` | `CLAUDE_PROJECT_DIR` | no | read and write | Restore the project directory, which was removed after the server started. | Build 3 T8, `capture` and `document` |
+| `not-a-project` | `CLAUDE_PROJECT_DIR` | no | read and write | Run `baley init` in the repository, or start the session inside one that holds a `baley.toml`. | Build 3 T8, `capture` and `document` |
+| `config-unavailable` | `settings` | no | read and write | Repair the settings file the reason names. A read judges only the working tree's `baley.toml`, and a write also judges the global file and HEAD's copy. | Build 3 T8, `capture` and `document` |
+| `project-not-in-ledger` | `project` | no | read and write | Run `baley init` in the checkout, which ties its project to this machine's ledger. | Build 3 T8, `capture` and `document` |
+| `ledger-busy` | `ledger` | yes | read and write | None. The caller repeats the same call. | Build 3 T8, `capture` and `document` |
+| `ledger-unavailable` | `ledger` | no | read and write | Run `baley doctor`. A server whose ledger could not be opened at start needs a new session once the ledger opens. | Build 3 T8, `capture` and `document` |
 | `checkout-facts-unavailable` | `git` | no | write only | Fix the git fault the reason names, such as a remote that cannot be read. | Build 3 T8, `capture` |
 | `project-id-conflict` | `checkout` | no | write only | Run `baley init --new-id` in the fork's checkout, which gives it its own project. | Build 3 T8, `capture` |
 
@@ -162,7 +164,7 @@ Every event a call records carries one `caller` in its envelope, hashed with the
 - The server form is what the server records for a request. It holds the project directory, the working directory, the host, the Baley session the server minted, and the call identity: the request's JSON-RPC id, with its source. It may also hold the client version, the host's own session id, a work order id and instruction evidence.
 - The hook form is what the guard hook records for a tool call. It holds the host, the working directory and the call identity: Claude Code's tool-use id, with its source. It may also hold the project directory, the host's own session id, a work order id and instruction evidence. It has no Baley session, so a hook cannot claim one.
 
-Instruction evidence is a list of entries, each an instruction's identity, version and hash. Every text is checked when the caller is built and again when it is read back, and each has a byte limit. A command-line command and a reconciliation have no caller: the envelope has no `caller` key, and a caller is never `null`. No caller enters a request digest or request key, so a replay records nothing and the original caller stays on the event the request first produced. The server's preparation fills the server form on checkout admission, the policy step and the prepared command ([section 8](#8-workflows)), and [section 11](#11-build-status) says which operations reach it.
+Instruction evidence is a list of entries, each an instruction's identity, version and hash. A session sends only an instruction's identity, as `instruction` on a `baley_apply` call. The server takes the version and hash from its compiled registry, and refuses an identity the registry does not serve. Reading an instruction records nothing. Every text is checked when the caller is built and again when it is read back, and each has a byte limit. A command-line command and a reconciliation have no caller: the envelope has no `caller` key, and a caller is never `null`. No caller enters a request digest or request key, so a replay records nothing and the original caller stays on the event the request first produced. The server's preparation fills the server form on checkout admission, the policy step and the prepared command ([section 8](#8-workflows)), and [section 11](#11-build-status) says which operations reach it.
 
 ### long_call (table, not an event)
 
@@ -357,6 +359,8 @@ sequenceDiagram
 | `owner.name` | text | git `user.name` | global | 0012 | The owner recorded on every approval (HST-R10) |
 | `[host.<name>]` sections | see [0003](0003-configuration-and-routing.md) | | both | 0003 | Per-host overrides the adapter applies |
 
+No setting selects, loads or overrides an instruction, because every instruction is compiled in (HST-R11).
+
 ## 10. Instructions served
 
 | Instruction | Served to | Carries requirements |
@@ -365,9 +369,11 @@ sequenceDiagram
 | Agent stubs (Claude Code) | The host, on disk at install: per role and rung, frontmatter with the model and the rung's own effort level, and one line: "read your work order from Baley by the id in your prompt" | HST-R12 |
 | Front-door instructions | The host session, by identity: what the command does, which operations it calls, that the owner approves and answers, that the session relays and adjudicates and never decides | HST-R9, HST-R14 |
 | Read contract | Every worker and session, by identity: read records and instructions by identity in parts; read source with the host's tools; never search for instructions | HST-R6 |
-| Help | The host session and the owner: the list of commands with one line each | HST-R13, HST-R16 |
+| Help | The host session and the owner: the list of commands with one line each, each command's availability and owning build, and help's own identity, version and hash | HST-R13, HST-R16 |
 
 The text of every instruction is owned by the area it serves; this area serves it.
+
+Each instruction is compiled into the binary with an identity, a version and a hash. A front door's identity is its help-table name, and the read contract's is `bal-read-contract`. The version is a number pinned beside the text, raised whenever the text changes, and the hash is the lowercase hex SHA-256 of the text, which is every part joined. `instruction` serves the text by identity in parts, and answers an identity whose work is not built yet with the build that owns it. A front door's text asks the session to send its identity as `instruction` on each `baley_apply` call made under it.
 
 ## 11. Build status
 
