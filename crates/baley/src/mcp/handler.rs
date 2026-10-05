@@ -387,12 +387,33 @@ mod tests {
             &json!(7),
         )
         .unwrap();
-        // No ledger, so a preparation that ran first would answer `failed`.
+        // A real store holding one project, so a refusal written to the ledger
+        // shows in its head. A preparation that ran first would answer
+        // `failed`, since the caller's directory holds no project.
+        let at = "2026-10-05T09:00:00Z";
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::ledger::open::store(
+            &dir.path().join("home"),
+            at,
+            crate::ledger::open::options(),
+        )
+        .unwrap();
+        let project = baley_store::ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        baley_store::Admin::create_project(&store, &project, "a", at).unwrap();
+        let head = |store: &SqliteStore| {
+            baley_store::Ledger::head(store, &project)
+                .unwrap()
+                .map(|head| head.seq)
+        };
+        let before = head(&store);
         let preparation = Preparation {
-            ledger: None,
+            ledger: Some(Arc::new(SessionLedger {
+                store,
+                config: dir.path().join("config"),
+            })),
             host: Host::ClaudeCode,
             caller,
-            at: "2026-10-05T09:00:00Z".into(),
+            at: at.into(),
         };
         let answer = operate(
             &Called::Operation(Tool::Apply, "capture".into()),
@@ -403,6 +424,8 @@ mod tests {
         );
         assert_eq!(answer["status"], "refused", "{answer}");
         assert_eq!(answer["code"], "unknown-kind", "{answer}");
+        let ledger = preparation.ledger.as_deref().expect("a ledger");
+        assert_eq!(head(&ledger.store), before);
     }
 
     #[test]

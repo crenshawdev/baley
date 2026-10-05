@@ -904,7 +904,8 @@ mod tests {
             reference: missing.clone(),
             status: baley_store::PayloadStatus::Purged { reason: "r".into() },
         };
-        for unreadable in [gone, Answer::Stored(missing.clone())] {
+        let malformed = Answer::Inline(json!(["not", "an", "object"]));
+        for unreadable in [gone, Answer::Stored(missing.clone()), malformed] {
             let value = answer(new(OutcomeKind::Done, unreadable), &store);
             assert_failed(&value, "ledger-unavailable", "ledger", false);
         }

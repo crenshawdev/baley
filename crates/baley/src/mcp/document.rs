@@ -519,17 +519,19 @@ mod tests {
         #[test]
         fn a_purged_long_capture_served_or_its_tombstone_lost_on_rebuild_is_caught() {
             let (_dir, store) = store();
-            let id = capture(&store, A, &long());
+            let text = long();
+            let id = capture(&store, A, &text);
+            capture(&store, B, &text);
             purge(&store, A, body_hash(&store, A), "pasted a secret");
-            let value = read(&store, &project(A), &shape(&id));
-            assert_eq!(
-                value["tombstone"],
-                json!({"state": "purged", "reason": "pasted a secret"}),
-                "{value}"
-            );
-            assert!(value.get("text").is_none() && value.get("body").is_none());
+            // B keeps the body, so the store would still open it: only the
+            // purge state A's view rebuilt from its events gives the tombstone.
             store.rebuild(&project(A)).unwrap();
-            assert_eq!(read(&store, &project(A), &shape(&id)), value);
+            assert_eq!(
+                read(&store, &project(A), &shape(&id)),
+                json!({"status": "ok", "identity": {"kind": "capture", "id": id},
+                    "kind": "note", "phase": null, "bytes": 4097, "recorded_at": T1,
+                    "tombstone": {"state": "purged", "reason": "pasted a secret"}})
+            );
         }
 
         #[test]
