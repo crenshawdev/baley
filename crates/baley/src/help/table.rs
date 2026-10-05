@@ -103,7 +103,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "bal-capture",
         cluster: "Support",
-        description: "Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item.",
+        description: "Record a note, or a story candidate for the backlog, in the ledger.",
     },
     Command {
         name: "bal-help",
@@ -255,7 +255,7 @@ mod tests {
     /// design rather than read from the registry under test.
     const EXPECTED: &[(&str, bool, u64)] = &[
         ("bal-help", true, 3),
-        ("bal-capture", false, 3),
+        ("bal-capture", true, 3),
         ("bal-context", false, 4),
         ("bal-plan", false, 4),
         ("bal-review", false, 4),
@@ -355,10 +355,15 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_row_still_offering_todos_or_seeds_or_missing_a_kind_is_caught() {
+        let described = description("bal-capture");
+        assert!(described.contains("note") && described.contains("story"));
+        assert!(!described.contains("todo") && !described.contains("seed"));
+    }
+
+    #[test]
     fn no_help_answer_names_a_read_build_3_does_not_serve_or_a_skills_path() {
         let forbidden = [
-            "`document`",
-            "\"document\"",
             "document-search",
             ".planning",
             "skills/",

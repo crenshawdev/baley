@@ -5,6 +5,7 @@
 //! chain live in the port, because both sides of it speak them.
 
 pub mod anchor;
+pub mod capture;
 pub mod catalog;
 pub mod checkout;
 pub mod forge;

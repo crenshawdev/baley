@@ -1,6 +1,6 @@
 //! Owner commands over the evidence ledger.
 pub(crate) mod anchor_plan;
-mod answer;
+pub(crate) mod answer;
 mod args;
 pub(crate) mod clock;
 mod command_plan;

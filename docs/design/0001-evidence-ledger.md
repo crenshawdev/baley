@@ -375,7 +375,7 @@ Every event has an envelope and a payload.
 | `request_id` | The command that recorded it. |
 | `git` | The git facts the event depends on: `commit`, `tree`, and the `checkout` it was observed in. Absent when the event depends on none. |
 | `policy_version` | The effective policy the command ran under. |
-| `payload` | The event's typed content, as canonical JSON. Every fact a projector or the search index needs is inline. Attachments (outputs, review material, prompts, plan and context text) are references `{ "payload": "<sha256>", "bytes": n, "class": "<retention class>" }`. |
+| `payload` | The event's typed content, as canonical JSON. Every fact a projector needs is inline. Attachments (outputs, review material, prompts, plan and context text, capture text over 4 KiB) are references `{ "payload": "<sha256>", "bytes": n, "class": "<retention class>" }`. Build 8's search rows derived from an attachment's body are keyed by the body's hash and are not held in the event (EVD-R10). |
 | `prev_hash`, `hash` | The hash chain. |
 
 Payloads are JSON so that the ledger stays readable with standard tools and queryable through SQLite's JSON functions. For hashing, the envelope (without `hash`) and the payload are serialized with the JSON Canonicalization Scheme (RFC 8785), so the same event always hashes the same way on any platform. The envelope includes the nested `caller` when the event has one and leaves the key out when it has none, as it does `git`, so an event with no caller hashes exactly as it did before the field existed.
@@ -404,7 +404,6 @@ Streams used by the record families:
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.authorized`, `landing.claimed`, `landing.step`, `landing.reconciled`, `landing.confirmed`, `landing.completed`, `tracker.checked` ([0011](0011-milestones-landing-undo-pause.md)) |
 | `pause` | `pause.recorded`, `pause.resumed` |
 | `capture`, `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the support families' records ([0014](0014-support-families.md)) |
-| `capture` | `item.captured`, `item.resolved` |
 | `guard` | `guard.allowed`, `guard.asked`, `guard.refused`, `guard.policy_recorded` |
 | `command/<kind>` | `command.claimed`, `command.completed`, `command.reconciled` |
 | `retention` | `payload.reduced`, `payload.purged` |
@@ -753,7 +752,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `policy` | (project, checkout, host) | | The latest `policy.effective` per checkout and host, with its version |
 | `checkout` | (project, path) | path | Each checkout's latest `checkout.seen`, its root commit and remote URL, which checkout admission judges a fork against |
 | `guard_policy` | project | | The remembered denial policy |
-| `capture` | (project, item id) | phase, disposition | The capture queue |
+| `capture` | (project, recording sequence) | capture id | Each capture's kind, phase, size, time and short text, or a long text's body hash with its purge state |
 | `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
 | `claim_scope` | (project, scope token) | | The open claim holding each scope token, for the scope check |
 | `model_catalog` | (project, catalog) | | The model names each host and provider accepts, with their source, tier and placement, and the catalog version ([0003](0003-configuration-and-routing.md)) |
@@ -768,7 +767,7 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 
 | Class | Examples | Default retention |
 |---|---|---|
-| `record` | plan and context text, verdict detail | Kept for the life of the project |
+| `record` | plan and context text, verdict detail, capture text over 4 KiB | Kept for the life of the project |
 | `output` | test and command output | Kept until the milestone that produced it closes, then reduced |
 | `material` | review material, prompts sent to models | Kept for 90 days after its review closes |
 
@@ -778,15 +777,15 @@ A reference stops requiring its body when its project records `payload.reduced` 
 
 **Reduction** applies only to an `output` reference. It stores the first and last 64 KiB as a new `record` payload attached to `payload.reduced`, which names the original hash, excerpt hash and byte ranges kept. An output of 128 KiB or less is kept whole and records no event. The store checks the original body's hash and length before releasing the reference. The original body is tombstoned only when no other reference still requires it whole. Reduction after purge is refused. Verification checks the excerpt in full and the original as a commitment.
 
-**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it no longer requires. A trace entry derived from a body must name it. Search rows join this removal in Build 8. Events, request rows and view documents remain; they hold no body text.
+**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it no longer requires. A trace entry derived from a body must name it. Build 8's search rows derived from a body are removed by the same step, beside the trace rows, keyed to the body's hash. That step is `remove_derived` in `crates/baley-store-sqlite/src/retention.rs`, the derived-data seam the search slice extends. Events, request rows and view documents remain; they hold no payload body. A capture of 4,096 bytes or less is not a payload: its text is inline in the hashed `capture.recorded` event and in the `capture` view, so purge cannot remove it.
 
 The `payload.purged` event lists each released reference as a `[source sequence, hash]` pair. Its `released` list and each `payload_ref.released_seq` can therefore be rebuilt from events alone. Trace removal covers a removed body's rows in every project and rows in the purging project only when that project has no other live reference to the hash. The report's `shared` list holds hashes released or requested whose body or excerpt is still required by another reference, in any project. This includes a requested original that stays reduced because another reduction requires its excerpt.
 
 The standalone, idempotent scrub checks the compatibility epoch before any write, then holds the writer queue through a passive checkpoint, `VACUUM` and up to three truncating checkpoint attempts. It judges each truncating checkpoint's result row: only `busy = 0` completes the main database scrub and clears `scrub_pending`. Until then, purged bytes may remain in free pages or the write-ahead log, and `doctor` reports the pending marker. A purge also reads `export_record` in its logical transaction, on first run and replay. `PurgeReport.unreachable` lists sorted, distinct export targets that already received any removed or shared hash through a reference live at the export's recorded head, including an excerpt of a reduced original. A pending export is listed whenever its project references the hash. An export made after its project released the reference is not listed. Standalone `scrub` lists nothing.
 
-Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
+Purge removes a secret held in a payload body from everything Baley manages. It cannot remove a secret written inline, such as in a capture of 4,096 bytes or less, which stays in the hashed event and the `capture` view. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
-**Invariant (EVD-R10).** Every fact a projector or the search index needs is inline in the event. Payloads are attachments only. So a purge never changes what a view knows, only whether an attachment's body can be shown, and a rebuild after any purge yields the same views, with tombstones in place of purged attachments. Replay after a reduction or purge reads the same inline facts: `payload.reduced` and `payload.purged` replay like any other event, the `request` view keeps each answer's reference, and replay never opens a payload body. So a rebuild or a view verification never reconstructs a purged body, an excerpt or a released reference. `payload_ref.released_seq` is not view data and a rebuild never touches it.
+**Invariant (EVD-R10).** Every fact a projector needs is inline in the event. Payloads are attachments only. So a purge changes no view except through the `payload.purged` event it records, as the `capture` view's purge state does, and otherwise changes only whether an attachment's body can be shown. A rebuild after any purge replays that event too, so it yields the same views, with tombstones in place of purged attachments. Replay after a reduction or purge reads the same inline facts: `payload.reduced` and `payload.purged` replay like any other event, the `request` view keeps each answer's reference, and replay never opens a payload body. So a rebuild or a view verification never reconstructs a purged body, an excerpt or a released reference. `payload_ref.released_seq` is not view data and a rebuild never touches it. Build 8's search rows derived from a body are not views either: they are derived data keyed by the body's hash, removed on purge by `remove_derived`, and never rebuilt from events.
 
 ```mermaid
 stateDiagram-v2
@@ -823,7 +822,7 @@ sequenceDiagram
     L->>Q: view version fence, readability fence
     L->>Q: release this project's references to each hash and its own reductions' excerpts
     L->>Q: tombstone every body no unreleased reference requires
-    L->>Q: delete derived trace rows (search rows from Build 8)
+    L->>Q: delete derived trace rows, and from Build 8 search rows, by the hash of each released body
     L->>Q: read export_record for removed and shared hashes
     L->>Q: append payload.purged, set scrub_pending
     L->>Q: append command.completed, advance head, COMMIT
@@ -840,7 +839,7 @@ sequenceDiagram
   L-->>O: PurgeReport: purged, shared, recorded, unreachable, scrubbed
 ```
 
-*Figure 10. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
+*Figure 10. A purge: the logical removal in one transaction, then the scrub. The logical removal deletes, by body hash, the derived rows that name a released body: the trace rows, and from Build 8 the search rows, in the same step. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
 
 #### Physical schema (SQLite adapter)
 
@@ -1546,11 +1545,11 @@ Found unused in the current code and not carried forward: the store operations `
 
 ## Appendix B: Reads mapped to views
 
-The reads the inherited server served, with the view and key that will serve each. Every one but `help` and `schema`, which read no store, now answers operation-unavailable until the build that replaces it. All queries page with a cursor and are bounded; lists are ordered as stated.
+The reads the inherited server served, with the view and key that will serve each. `help` and `schema` read no store. `document` is served for a capture identity only, read through the `capture` view by capture id, and refuses any other identity kind as invalid arguments until the build that records it. Every other read answers operation-unavailable until the build that replaces it. All queries page with a cursor and are bounded; lists are ordered as stated.
 
 | Query operation | View and key | Order |
 |---|---|---|
-| `progress` | `roadmap` (project); `phase` by status; `dispatch` by state; `capture` by disposition; `review_queue` by state; `pause` (project) | Roadmap order |
+| `progress` | `roadmap` (project); `phase` by status; `dispatch` by state; `capture` by disposition, an index the built view lacks, which Builds 7 and 8 add with a projector version bump; `review_queue` by state; `pause` (project) | Roadmap order |
 | `execute-next` | `phase`, `plan`, `admission`, `dispatch` for (project, phase); evidence events for the phase | |
 | `verify-next` | `phase`, `plan`, `evidence_map`, `dispatch`, `verification` for (project, phase) | |
 | `verification-read` | `verification` (project, attempt id), or by phase index | Newest first |
@@ -1559,7 +1558,7 @@ The reads the inherited server served, with the view and key that will serve eac
 | `evidence-read` | `evidence_map` (project, phase, plan); evidence events for the plan | Sequence |
 | `plan-read` | `plan` by phase; `evidence_map` | Plan number |
 | `context-intake` | `phase` (project, phase); `roadmap` | |
-| `document` | By identity: `phase` for phase context; `plan` for a phase plan; `dispatch` for a dispatch; `verification` for an attempt; `run` for run output; `review` for a review entry; `roadmap` for a roadmap row; `task`, `debug`, `spike` by slug | |
+| `document` | By identity: `capture` by capture id for a note or story; `phase` for phase context; `plan` for a phase plan; `dispatch` for a dispatch; `verification` for an attempt; `run` for run output; `review` for a review entry; `roadmap` for a roadmap row; `task`, `debug`, `spike` by slug | |
 | `document-search` | `Search` scoped to (project, phase), returning identities and parts | Relevance |
 | `recall` | `Search` scoped to the project, optionally a phase | Relevance |
 | `why` | `event(project_id, git_commit)` index, then the events' streams | Sequence |

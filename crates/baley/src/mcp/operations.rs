@@ -47,7 +47,7 @@ impl Tool {
 pub enum Status {
     /// Served by this server.
     Available {
-        /// Whether it needs a project. None does yet. T8's `capture` and `document` set it.
+        /// Whether it needs a project, as `capture` and `document` do.
         needs_project: bool,
     },
     /// Not served here, and the build that replaces it.
@@ -97,7 +97,7 @@ pub const QUERY_OPERATIONS: &[Operation] = &[
     retired("progress", 7),
     retired("suggest", 7),
     retired("why", 8),
-    retired("document", 3),
+    with_project("document"),
     retired("document-search", 8),
     retired("verify-next", 5),
     retired("verification-read", 5),
@@ -165,7 +165,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     retired("risk-check", 4),
     retired("risk-fire", 4),
     retired("risk-consequence", 4),
-    retired("capture", 3),
+    with_project("capture"),
     retired("milestone-release", 6),
     retired("milestone-release-confirm", 6),
     retired("milestone-close", 6),
@@ -196,6 +196,16 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     retired("task-open", 8),
     retired("task-close", 8),
 ];
+
+/// A spelling served only from a project, which its call prepares.
+const fn with_project(name: &'static str) -> Operation {
+    Operation {
+        name,
+        status: Status::Available {
+            needs_project: true,
+        },
+    }
+}
 
 /// What a request's `operation` comes to for one tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,6 +318,12 @@ enum RequestShape {
         /// Concatenate the returned bodies in order.
         part: Option<usize>,
     },
+    // `capture` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "capture")]
+    Capture(#[allow(dead_code)] crate::mcp::capture::CaptureShape),
+    // `document` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "document")]
+    Document(#[allow(dead_code)] crate::mcp::document::DocumentShape),
 }
 
 fn invalid_arguments(reason: impl Into<String>) -> Value {
@@ -611,7 +627,7 @@ mod tests {
         for tool in [Tool::Query, Tool::Apply] {
             for name in names(tool)
                 .into_iter()
-                .filter(|n| !["help", "schema", "instruction"].contains(n))
+                .filter(|n| !["help", "schema", "instruction", "capture", "document"].contains(n))
             {
                 assert!(
                     matches!(lookup(tool, Some(name)), Lookup::Unavailable { .. }),
@@ -619,6 +635,18 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            lookup(Tool::Apply, Some("capture")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
+        assert_eq!(
+            lookup(Tool::Query, Some("document")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
     }
 
     #[test]
@@ -627,8 +655,6 @@ mod tests {
             Lookup::Unavailable { build } => build,
             other => panic!("{name} is {other:?}"),
         };
-        assert_eq!(build(Tool::Query, "document"), 3);
-        assert_eq!(build(Tool::Apply, "capture"), 3);
         assert_eq!(build(Tool::Query, "config-entry"), 2);
         assert_eq!(build(Tool::Apply, "config-apply"), 2);
         assert_eq!(build(Tool::Query, "plan-read"), 4);
@@ -686,12 +712,12 @@ mod tests {
 
     #[test]
     fn operation_unavailable_names_the_build_in_words_and_as_an_integer() {
-        let refusal = operation_unavailable(Tool::Query, "document", 3);
+        let refusal = operation_unavailable(Tool::Query, "document-search", 8);
         assert_eq!(refusal["status"], "refused");
         assert_eq!(refusal["code"], "operation-unavailable");
         assert_eq!(refusal["slot"], "operation");
-        assert_eq!(refusal["details"], json!({"build": 3}));
-        assert!(refusal["reason"].as_str().unwrap().contains("Build 3"));
+        assert_eq!(refusal["details"], json!({"build": 8}));
+        assert!(refusal["reason"].as_str().unwrap().contains("Build 8"));
     }
     #[test]
     fn help_answers_what_the_help_table_answers_for_the_same_name() {
@@ -739,6 +765,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_capture_schema_left_out_of_the_request_shapes_or_served_on_query_is_caught() {
+        let answer =
+            schema_answer(&json!({"operation": "schema", "tool": "apply", "for": "capture"}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        assert_eq!(answer["tool"], "apply");
+        assert_eq!(
+            answer["schema"]["properties"]["operation"]["const"],
+            "capture"
+        );
+        for property in ["request_id", "kind", "text", "phase", "instruction"] {
+            assert!(
+                answer["schema"]["properties"].get(property).is_some(),
+                "{property} missing from {answer}"
+            );
+        }
+        let query =
+            schema_answer(&json!({"operation": "schema", "tool": "query", "for": "capture"}));
+        assert_eq!(query["code"], "unknown-operation", "{query}");
+    }
+
+    #[test]
+    fn a_document_schema_left_out_of_the_request_shapes_is_caught() {
+        let answer =
+            schema_answer(&json!({"operation": "schema", "tool": "query", "for": "document"}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        assert_eq!(answer["tool"], "query");
+        assert_eq!(
+            answer["schema"]["properties"]["operation"]["const"],
+            "document"
+        );
+        for property in ["identity", "part"] {
+            assert!(
+                answer["schema"]["properties"].get(property).is_some(),
+                "{property} missing from {answer}"
+            );
+        }
+    }
+
     fn sha256_hex(text: &str) -> String {
         use sha2::{Digest, Sha256};
         Sha256::digest(text.as_bytes())
@@ -763,6 +828,11 @@ mod tests {
                 "bal-read-contract",
                 crate::instruction::read_contract::VERSION,
                 crate::instruction::read_contract::HASH,
+            ),
+            (
+                "bal-capture",
+                crate::instruction::capture::VERSION,
+                crate::instruction::capture::HASH,
             ),
         ] {
             let answer = instruction_call(identity);

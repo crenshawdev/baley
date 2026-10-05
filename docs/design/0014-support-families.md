@@ -64,7 +64,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) these are doma
 | SUP-R7 | When an episode is stuck (attempts at or past `debug.attempt_threshold`, default 3, or every hypothesis refuted), Baley offers the owner a review of kind `diagnosis` ([0008](0008-review.md) REV-R14) over the episode's symptom, its reproduction (the command, the symptom signature and the reproduction files by path and digest) and every run Baley recorded of it with exit code, bounded output and classification (SUP-R13, SUP-R14), its hypotheses, observations and named files; its findings are adjudicated and ruled like any review. There is no other outside call from debug. | Fresh eyes through the one review path. | REV-R14, SUP-R13, SUP-R14 | Active |
 | SUP-R8 | A spike is opened with a question, the decision it informs, and ordered criteria; the open is immutable. Each criterion gets one observation, in order; the verdict (`validated`, `invalidated`, `inconclusive`) needs every criterion observed and freezes them. Close needs the verdict and an absolute throwaway location outside the project; nothing of the spike is committed to the project. | An experiment is recorded by what it set out to prove and what it found. | ADR 0006 | Active |
 | SUP-R9 | Recall is full-text search over the ledger's recorded text, ranked by BM25, bounded by a limit (default 5) with the total count, filtered by phase or kind when asked, excluding declined captures and everything purged; a blank query is refused. It reads no file and no git history and needs no setting. | The record answers what was said, without an index to keep. | EVD-R13 | Active |
-| SUP-R10 | An exact question (a plan, a phase, a story, a work order, a run) is answered by its typed identity through `document` ([0012](0012-host-interface.md) HST-R6), never by search; Baley serves no code search, and agents read source with the host's tools. | Search is for words; records are fetched by name. | SYS-P10 | Active |
+| SUP-R10 | An exact question (a capture, a plan, a phase, a story, a work order, a run) is answered by its typed identity through `document` ([0012](0012-host-interface.md) HST-R6), never by search; Baley serves no code search, and agents read source with the host's tools. | Search is for words; records are fetched by name. | SYS-P10 | Active |
 | SUP-R11 | `why <commit or task or plan or story>` answers the events that name it, in order, with the decisions they record (the plan it served, the truth it proved, the finding it fixed, the ruling that allowed it), joined through the ledger's git facts; a commit the ledger never saw is answered as `not-in-record`. Nothing is read from Markdown or git history. | The owner can ask why a change exists and get the record's answer. | EVD-R4 | Active |
 | SUP-R12 | `help` lists every command with one line each from the compiled table, and for one name returns its line and up to three closest names. | A user can always ask what exists. | HST-R13 | Active |
 | SUP-R13 | An episode's reproduction is one command and a symptom signature, both non-blank (`blank-text`), and its reproduction files (SUP-R15), given with `debug reproduce`; Baley runs it (SUP-R14). The run is the red run only when it exits non-zero and its output contains the symptom signature; Baley then records the episode as reproduced, and the episode leaves unreproduced. A run that exits zero, or fails without the signature, is recorded, the reproduce is refused (`reproduction-not-red`), and the episode stays unreproduced; the session may give the same command again or another one. Once the red run is recorded the reproduction, its command and its files, is fixed, and a further `debug reproduce` is refused (`reproduction-fixed`). | A check that never caught the bug cannot prove it gone; a failure Baley watched on the symptom is the proof that the reproduction reaches it. | SUP-R14, SUP-R15 | Active |
@@ -88,9 +88,11 @@ No worker of its own is dispatched; the diagnosis review dispatches through 0008
 
 ### capture, capture decline, capture list
 
-- **Inputs:** `capture`: kind, text, optional phase; `decline`: the capture id; `list`: optional kind.
-- **Outputs:** the capture record and the open count against the bound; the declined record; the list.
-- **Refusals:** `blank-text`, `unknown-kind`, `no-such-phase`, `no-such-capture`, `already-promoted` (a `story` capture already declared as a story) (SUP-R1, SUP-R2).
+- **Inputs:** `capture`: a request id, which is a UUID in lowercase hyphenated form, the kind, the text, an optional phase numbered from 1, and an optional instruction identity; `decline`: the capture id; `list`: optional kind.
+- **Outputs:** `capture`: the receipt, which names the capture id, the kind, the phase, the text's byte count, whether the text is inline or a payload, and the time, and never carries the text. The receipt carries no open count against `planning.max_capture_bullets`, because progress reports that count (SUP-R3). A replay of the same request returns the same receipt. `decline`: the declined record; `list`: the list.
+- **Refusals:** `blank-text`; `unknown-kind`, which names `todo` or `seed` when one of them is sent, since a capture no longer takes those kinds; `no-such-phase`; and, for decline and promotion, `no-such-capture` and `already-promoted` (a `story` capture already declared as a story) (SUP-R1, SUP-R2). A capture of text over 4,096 bytes whose exact bytes were purged is answered `failed` with code `text-purged`, not retryable, because purged bytes cannot be stored again.
+
+A refusal judged from the call's own arguments (`blank-text`, `unknown-kind`, a request id that is not a UUID, arguments that do not fit the shape, or an instruction identity the registry does not serve) is answered before preparation and records nothing, so a corrected retry may reuse its request id. `no-such-phase` is judged against the ledger and is recorded with the command, as a refused `command.completed` with no `capture.recorded`. A `text-purged` answer records nothing.
 
 ### task open, task close
 
@@ -151,11 +153,12 @@ No worker of its own is dispatched; the diagnosis review dispatches through 0008
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | capture id | Digest of request, kind, text, phase |
+| `id` | capture id | Digest of the request id, kind, text and phase |
 | `kind` | `note`, `story` | |
-| `text` | text | |
-| `phase` | integer or absent | |
-| `by` | actor | Owner or session |
+| `text` or `body` | text, or payload reference | The text inline in `text` through 4,096 UTF-8 bytes; longer text is stored as a `record` payload, and `body` holds its reference in place of `text` |
+| `bytes` | integer | The text's length in UTF-8 bytes |
+| `phase` | integer, or `null` | The phase the capture is about, `null` when none is named |
+| `by` | caller | The event's caller in the envelope, hashed with the event, with Baley as the actor. It is not a payload field |
 | `story` | story id | The story it became (promoted) |
 | `owner`, `at` | actor, time | (promoted, declined) |
 
@@ -189,7 +192,7 @@ Every event carries the episode version. A reproduce whose run is not red writes
 
 | View | Key | Content |
 |---|---|---|
-| `capture` | project | Open, promoted and declined captures by kind |
+| `capture` | project, the sequence of the capture's `capture.recorded`; indexed by capture id | Each capture's id, kind, phase, byte count and recording time, with its text when that is 4,096 bytes or less. For longer text, the body's hash and its purge state: `present`, or `purged` with the purge's reason |
 | `task` | project, slug | State, commits, scan, review |
 | `debug` | project, slug | The episode as it stands: state (unreproduced, open, stuck, resolving, held on risk, resolved, closed unreproduced), reproduction with its files' digests and red run when recorded, runs, hypotheses, observations, attempts, the close reason when closed unreproduced, version |
 | `spike` | project, slug | Criteria, observations, verdict, close |
@@ -206,7 +209,7 @@ stateDiagram-v2
   Declined --> [*]
 ```
 
-*Figure 1. States of a capture. A `note` stays Open; it is a record, not a queue item.*
+*Figure 1. States of a capture. A `note` stays Open; it is a record, not a queue item. A purge of a long capture's body leaves the capture's state and identity in place, and a read of it by identity answers a tombstone with the purge's reason.*
 
 ```mermaid
 stateDiagram-v2
@@ -341,6 +344,49 @@ sequenceDiagram
 
 *Figure 5. A debug episode. The reproduction comes first: Baley runs it until one run fails with the symptom signature, and refuses any hypothesis before then. The owner may instead close an episode whose symptom never reproduced, with a reason; it then leaves the open debug list. At resolve the owner names no command; Baley first compares the reproduction files with their digests at the red run and refuses the resolve if any changed, then reruns the reproduction recorded at the red run and scans the change the passing run saw. A second reproduce after the red run is refused (`reproduction-fixed`), and so is a close (`episode-reproduced`).*
 
+```mermaid
+sequenceDiagram
+  participant H as Host session
+  participant S as Baley server
+  participant L as Ledger
+  H->>S: baley_apply capture with a request id, kind, text and optional instruction identity
+  alt the arguments are refused
+    S-->>H: refused at once, nothing recorded
+  else the arguments pass
+    S->>S: prepare the write as in 0012 Figure 4
+    S->>L: the capture transaction
+    alt the ledger already holds the request
+      L-->>S: the stored answer
+      S-->>H: the same answer again, nothing new recorded
+    else a phase is named
+      L->>L: command.completed, refused no-such-phase
+      S-->>H: refused no-such-phase, recorded
+    else the text is over 4,096 bytes and those exact bytes were purged
+      L-->>S: the bytes cannot be stored again, nothing recorded
+      S-->>H: failed text-purged, not retryable
+    else
+      opt the text is over 4,096 bytes
+        L->>L: store the text as a record payload
+      end
+      L->>L: capture.recorded on the capture stream
+      L->>L: command.completed with the receipt
+      S-->>H: the receipt, without the text
+    end
+  end
+  H->>S: later, baley_query document with the capture id
+  S->>S: prepare the read, the project found and known
+  S->>L: find the capture in the capture view by its id
+  alt no capture has that id
+    S-->>H: refused no-such-capture
+  else this project released the body
+    S-->>H: a tombstone with the purge's reason
+  else
+    S-->>H: the text, whole or in parts
+  end
+```
+
+*Figure 6. A capture and a later read of it. The server judges the call's arguments first, and a refusal there is answered at once and records nothing. Preparation then runs as in [0012](0012-host-interface.md) Figure 4. In the capture's own transaction, a request the ledger already holds is answered with its stored answer. A named phase is refused `no-such-phase` and recorded as a refused `command.completed` with no `capture.recorded`. Text over 4,096 bytes is stored as a `record` payload, and bytes that were purged before are answered `failed` `text-purged` with nothing recorded. Otherwise `capture.recorded` goes on the `capture` stream, followed by `command.completed` holding the receipt, which never carries the text. A later `document` read by the capture id finds it in the `capture` view and answers the text, whole or in parts, or a tombstone with the purge's reason when this project released the body.*
+
 ## 9. Settings
 
 | Setting | Type | Default | Scope | Owner | Effect |
@@ -354,7 +400,7 @@ sequenceDiagram
 
 | Instruction | Served to | Carries requirements |
 |---|---|---|
-| Capture stub | The host session: record what the owner said, as `note` or `story`, and nothing else | SUP-R1 |
+| Capture stub | The host session, which reads the capture front door by its identity `bal-capture`, with its version and hash, and sends that identity as `instruction` on `capture`: record what the owner said, as `note` or `story`, and nothing else | SUP-R1 |
 | Task stub | The host session and the agent doing the hotfix: open, commit signed and conventional, close with a report; the scan is Baley's | SUP-R4 |
 | Debug stub | The host session: before any hypothesis, give Baley the reproduction, one command, the text its output shows when the symptom is present, and the reproduction files, and let Baley run it; name as reproduction files the test file, script or fixture the command runs that make up the reproduction itself, never the code the fix is expected to change; if the run passes or fails for another reason, find a command that fails on the symptom and give that; record no hypothesis until Baley has recorded the red run; then record every hypothesis, observation and attempt as it happens; never change the reproduction command or any reproduction file after the red run, since Baley refuses a resolve over a changed file; resolve by asking Baley to rerun it, never by reporting a run of your own; accept the diagnosis offer only on the owner's word; close an episode that never reproduced only on the owner's word, with the owner's reason relayed unchanged | SUP-R5 to SUP-R7, SUP-R13 to SUP-R16 |
 | Spike stub | The host session: the code lives outside the project; observe each criterion in order; give the verdict | SUP-R8 |
@@ -362,13 +408,13 @@ sequenceDiagram
 
 ## 11. Build status
 
-The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `capture` (`crates/baley/src/mcp/operations.rs:168`) and `document` (`crates/baley/src/mcp/operations.rs:100`) as unavailable, and the operation baseline still names Build 3 for them, which T8 builds. It answers `recall`, the debug reads, `why` and `document-search` (`crates/baley/src/mcp/operations.rs:90-93, 99, 101`) and the debug, spike and task apply spellings (`crates/baley/src/mcp/operations.rs:186-197`) as unavailable naming Build 8. It serves `help` from the compiled table, with each command's availability from the instruction registry (`crates/baley/src/mcp/operations.rs:319-342`, `crates/baley/src/help/table.rs:130-153`), and serves the help front door's instruction as `bal-help` through `instruction` (`crates/baley/src/mcp/operations.rs:344-386`, `crates/baley/src/instruction/mod.rs:64-222`). The other front doors' identities answer `instruction-unavailable` naming their builds: capture Build 3, which T8 makes available, and debug, spike, task and why Build 8 (`crates/baley/src/instruction/mod.rs:64-205`). Production reaches the capture, debug, spike, task, why and help front doors through their `*-instructions` renderers (`crates/baley/src/instruction_surfaces.rs:5-7, 12, 14, 18`). The JSON snapshots, Markdown and git-history parsing are the parked engine's.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server serves `capture` (`crates/baley/src/mcp/operations.rs:168`) and `document` (`crates/baley/src/mcp/operations.rs:100`), each needing a project (`crates/baley/src/mcp/operations.rs:200-208`), through their arms in `handler::operate` (`crates/baley/src/mcp/handler.rs:169-174`). It answers `recall`, the debug reads, `why` and `document-search` (`crates/baley/src/mcp/operations.rs:90-93, 99, 101`) and the debug, spike and task apply spellings (`crates/baley/src/mcp/operations.rs:186-197`) as unavailable naming Build 8. It serves `help` from the compiled table, with each command's availability from the instruction registry (`crates/baley/src/mcp/operations.rs:335-358`, `crates/baley/src/help/table.rs:130-153`), and serves the help front door's instruction as `bal-help` and the capture front door's as `bal-capture` through `instruction` (`crates/baley/src/mcp/operations.rs:360-402`, `crates/baley/src/instruction/mod.rs:65-227`, `crates/baley/src/instruction/capture.rs:1-26`). The other front doors' identities answer `instruction-unavailable` naming their builds, Builds 4 to 8, among them debug, spike, task and why Build 8 (`crates/baley/src/instruction/mod.rs:65-210`). Production still reaches the inherited capture, debug, spike, task, why and help front doors through their `*-instructions` renderers (`crates/baley/src/instruction_surfaces.rs:5-7, 12, 14, 18`). The JSON snapshots, Markdown and git-history parsing are the parked engine's.
 
 | Requirement | Status | Where |
 |---|---|---|
-| SUP-R1 | Not built | Only the parked capture service records a capture, of three kinds (`crates/baley/src/capture_service.rs:19-132`, `crates/baley/src/capture/mod.rs:18-91`). The session server answers `capture` as unavailable (`crates/baley/src/mcp/operations.rs:168`) until Build 3 |
-| SUP-R2 | Not built | The parked capture service has no promote or decline operation, and its bound counts every capture ever made |
-| SUP-R3 | Not built | The capture bound is the session layer's `capture_report`, which only the parked capture service calls (`crates/baley/src/session/mod.rs:612-619`, `crates/baley/src/config/mod.rs:68-77`). The session server answers `capture` as unavailable (`crates/baley/src/mcp/operations.rs:168`) until Build 3 |
+| SUP-R1 | Partly built | The core holds the `capture.recorded` event, the capture id, the byte threshold, the judgements of kind, text and phase, and the `capture` view and its projector (`crates/baley-core/src/capture/event.rs:1-114`, `crates/baley-core/src/capture/judge.rs:1-52`, `crates/baley-core/src/capture/view.rs:1-207`), registered at view set 6 (`crates/baley/src/ledger/open.rs:12-37`). The arguments are judged before preparation (`crates/baley/src/mcp/capture.rs:41-59, 85-165`), and the capture is recorded in its own domain transaction under the prepared command, with Baley as the actor and the call's caller, and text over 4,096 bytes stored as a `record` payload (`crates/baley/src/mcp/capture.rs:182-245`). The session server serves `capture` (`crates/baley/src/mcp/capture.rs:247-292`, `crates/baley/src/mcp/handler.rs:169-171`, `crates/baley/src/mcp/operations.rs:168`), and a replay answers the stored receipt (`crates/baley/src/mcp/capture.rs:294-329`). No `phase` view exists, so a named phase is refused `no-such-phase` until Build 4 records phases (`crates/baley-core/src/capture/judge.rs:41-52`, `crates/baley/src/mcp/capture.rs:201-215`) |
+| SUP-R2 | Not built | The served `capture` records captures only, and nothing promotes or declines one. The parked capture service has no promote or decline operation either, and its bound counts every capture ever made |
+| SUP-R3 | Not built | The capture receipt carries no open count (`crates/baley/src/mcp/capture.rs:232-243`): the bound is reported by progress, which is Build 7's. The inherited bound is the session layer's `capture_report`, which only the parked capture service calls (`crates/baley/src/session/mod.rs:612-619`, `crates/baley/src/config/mod.rs:68-77`) |
 | SUP-R4 | Not built | Only the parked task service opens and closes a task episode (`crates/baley/src/task_service.rs:111-440`), and the episode is memory-only without a planning root (`crates/baley/src/task_service.rs:25-44`). The session server answers `task-open` and `task-close` as unavailable (`crates/baley/src/mcp/operations.rs:196-197`) until Build 8 |
 | SUP-R5 | Not built | Only the parked engine records an open, a recall snapshot, hypotheses, observations, attempts and versions (`crates/baley/src/debug_service.rs:41-472`, `crates/baley/src/debug/model.rs:10-107, 518-567`), and it accepts a hypothesis, observation or attempt from open, with no red-run gate and no `not-reproduced` refusal (`crates/baley/src/debug/model.rs:520-567`). The session server answers the debug spellings as unavailable (`crates/baley/src/mcp/operations.rs:91-93, 186-189`) until Build 8 |
 | SUP-R6 | Not built | Only the parked engine scans staged material for risk and gates the review (`crates/baley/src/debug_service.rs:168-472`), and its resolve takes the caller's own reproduction outcome (test, result, passed) instead of a run by Baley, needs no earlier red run and binds no command (`crates/baley/src/debug/model.rs:44-50, 603-633`). The session server answers `debug-resolve` as unavailable (`crates/baley/src/mcp/operations.rs:191`) until Build 8 |
@@ -379,9 +425,9 @@ The binary parks the inherited engine for Build 9 to delete, and nothing in prod
 | SUP-R7 | Not built | Only the parked engine offers a consult: its policy (`crates/baley/src/debug_service.rs:474-563`) and the consult schema (`crates/baley/src/review/provider/consult.rs:12-130`). The session server answers `debug-consult` as unavailable (`crates/baley/src/mcp/operations.rs:190`) until Build 8 |
 | SUP-R8 | Not built | Only the parked spike service holds a spike (`crates/baley/src/spike/model.rs:13-428`, `crates/baley/src/spike_service.rs:49-95`). The session server answers the spike spellings as unavailable (`crates/baley/src/mcp/operations.rs:192-195`) until Build 8 |
 | SUP-R9 | Not built | Only the parked recall searches Markdown and git history (`crates/baley/src/recall/mod.rs:61-198, 396-531`). The session server answers `recall` as unavailable (`crates/baley/src/mcp/operations.rs:90`) until Build 8 |
-| SUP-R10 | Partly built | The baseline serves no code search (`crates/baley/src/mcp/operations.rs:88-128`), and `document` answers as unavailable naming Build 3 (`crates/baley/src/mcp/operations.rs:100`) until T8 builds it. The identity read is the parked engine's (`crates/baley/src/read/document.rs:1257-1316`) |
+| SUP-R10 | Partly built | The baseline serves no code search (`crates/baley/src/mcp/operations.rs:88-128`). `document` serves a capture by its identity from the current project: it finds the capture in the `capture` view by id and opens the body only while this project holds it (`crates/baley/src/mcp/document.rs:39-49, 185-290`, `crates/baley/src/mcp/operations.rs:100`). The other identity kinds, plan, phase, story, work order and run, are their builds'. The parked engine's identity read (`crates/baley/src/read/document.rs:1257-1316`) is reached by nothing in production |
 | SUP-R11 | Not built | Only the parked engine answers `why` over Markdown (`crates/baley/src/why/corpus.rs:742-1138`, `crates/baley/src/why_service.rs:22-160`). The session server answers `why` as unavailable (`crates/baley/src/mcp/operations.rs:99`) until Build 8 |
-| SUP-R12 | Built | `help` is served from the compiled table (`crates/baley/src/mcp/operations.rs:319-342`, `crates/baley/src/help/table.rs:15-248`). Each row carries whether its instruction is served and the build that owns it, read from the registry (`crates/baley/src/help/table.rs:130-153`, `crates/baley/src/instruction/mod.rs:64-222`). The answer carries what Baley does, the help instruction's identity, version and hash, and the request to send that identity on `baley_apply` calls (`crates/baley/src/help/table.rs:184-231`) |
+| SUP-R12 | Built | `help` is served from the compiled table (`crates/baley/src/mcp/operations.rs:335-358`, `crates/baley/src/help/table.rs:15-248`). Each row carries whether its instruction is served and the build that owns it, read from the registry (`crates/baley/src/help/table.rs:130-153`, `crates/baley/src/instruction/mod.rs:65-227`), so the `bal-capture` row is now available, described as a note or a story candidate (`crates/baley/src/help/table.rs:103-107`). The answer carries what Baley does, the help instruction's identity, version and hash, and the request to send that identity on `baley_apply` calls (`crates/baley/src/help/table.rs:184-231`) |
 
 ## 12. Open questions
 

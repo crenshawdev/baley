@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::envelope::Refusal;
 use crate::help::front_door;
 
+pub mod capture;
 pub mod read_contract;
 
 /// The served text of one instruction, pinned in source.
@@ -158,11 +159,15 @@ pub static ENTRIES: &[Entry] = &[
         build: 6,
         text: None,
     },
-    // The capture operation is Build 3's, so the capture text is served when it lands.
+    // Build 3 serves the capture text beside the `capture` operation it drives.
     Entry {
-        identity: "bal-capture",
+        identity: capture::IDENTITY,
         build: 3,
-        text: None,
+        text: Some(Text {
+            version: capture::VERSION,
+            hash: capture::HASH,
+            body: capture::TEXT,
+        }),
     },
     // Build 3 serves the help front door, whose words the help area owns.
     Entry {
@@ -225,9 +230,8 @@ pub fn lookup(identity: &str) -> Lookup {
 /// refusal a lookup gives. The version and hash come from the registry alone, so
 /// the ledger never records a claim the binary did not serve.
 ///
-/// Build 3 T8's `capture` is the first caller: it attaches the evidence to the
-/// server caller. `form_caller` and the gate are not changed here, because no
-/// call in this build records anything. That is the seam where T8 plugs in.
+/// `capture` attaches the evidence to the caller it prepares under, so every
+/// event of that call carries it. The gate's caller carries none.
 pub fn evidence(identity: &str) -> Result<InstructionEvidence, Value> {
     match lookup(identity) {
         Lookup::Served { entry, text } => Ok(InstructionEvidence::new(

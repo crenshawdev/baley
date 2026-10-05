@@ -5,13 +5,13 @@ use std::io::Read;
 
 #[derive(Debug, PartialEq, Eq)]
 /// Why a committed answer could not be displayed.
-pub(super) enum AnswerUnread {
+pub(crate) enum AnswerUnread {
     Gone(PayloadStatus),
     Malformed,
     Read(StoreError),
 }
 /// Loads one recorded answer without changing its outcome.
-pub(super) fn answer_value(
+pub(crate) fn answer_value(
     answer: &Answer,
     payloads: &dyn Payloads,
 ) -> Result<Value, AnswerUnread> {
