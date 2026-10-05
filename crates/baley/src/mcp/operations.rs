@@ -12,6 +12,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::envelope::Refusal;
+use crate::instruction;
+use crate::mcp::parts::{Cut, PART_BOUND, cut};
 
 /// One of the two tools that take an `operation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +47,7 @@ impl Tool {
 pub enum Status {
     /// Served by this server.
     Available {
-        /// Whether it needs a project. None does yet. T7's `document` and T8's `capture` set it.
+        /// Whether it needs a project. None does yet. T8's `capture` and `document` set it.
         needs_project: bool,
     },
     /// Not served here, and the build that replaces it.
@@ -122,6 +124,7 @@ pub const QUERY_OPERATIONS: &[Operation] = &[
     retired("review-deferred", 4),
     retired("review-consumer", 4),
     retired("review-select", 4),
+    available("instruction"),
 ];
 
 /// `baley_apply` spellings, in the order the tool has always listed them.
@@ -280,7 +283,13 @@ pub fn operation_unavailable(tool: Tool, spelling: &str, build: u32) -> Value {
 #[serde(tag = "operation", deny_unknown_fields)]
 enum RequestShape {
     #[serde(rename = "help")]
-    Help { name: Option<String> },
+    Help {
+        /// The command to show, with or without a leading slash or `bal-` prefix.
+        name: Option<String>,
+        /// One-based part for answers over 24,576 bytes; defaults to 1.
+        /// Concatenate the returned bodies in order.
+        part: Option<usize>,
+    },
     #[serde(rename = "schema")]
     Schema {
         /// The tool whose operation is requested: apply or query.
@@ -291,10 +300,15 @@ enum RequestShape {
         /// Concatenate the returned bodies in order, then parse the JSON.
         part: Option<usize>,
     },
+    #[serde(rename = "instruction")]
+    Instruction {
+        /// The identity of the instruction to read, such as `bal-help`.
+        identity: String,
+        /// One-based part for texts over 24,576 bytes; defaults to 1.
+        /// Concatenate the returned bodies in order.
+        part: Option<usize>,
+    },
 }
-
-/// The most bytes of one schema part, cut at a UTF-8 boundary.
-pub const SCHEMA_PART_BOUND: usize = 24_576;
 
 fn invalid_arguments(reason: impl Into<String>) -> Value {
     Refusal::new("invalid-arguments", reason)
@@ -302,12 +316,72 @@ fn invalid_arguments(reason: impl Into<String>) -> Value {
         .value()
 }
 
-/// Answers `help` for the optional `name`. An unknown field is refused.
+/// Answers `help` for the optional `name`, in parts when large. An unknown
+/// field is refused.
 pub fn help_answer(arguments: &Value) -> Value {
     match serde_json::from_value::<RequestShape>(arguments.clone()) {
-        Ok(RequestShape::Help { name }) => crate::help::table::answer(name.as_deref()),
+        Ok(RequestShape::Help { name, part }) => {
+            help_part(crate::help::table::answer(name.as_deref()), part)
+        }
         Ok(_) => invalid_arguments("these are not help arguments"),
         Err(error) => invalid_arguments(error.to_string()),
+    }
+}
+
+/// The help answer whole when it fits, or one numbered part of its JSON text.
+fn help_part(answer: Value, part: Option<usize>) -> Value {
+    let serialized = serde_json::to_string(&answer).expect("help answer JSON");
+    match cut(&serialized, part) {
+        Cut::Whole(_) => answer,
+        Cut::Part { body, part, next } => serde_json::json!({"status":"ok",
+        "bound":PART_BOUND,"part":part,"body":body,"next":next}),
+        Cut::Absent => Refusal::new("help-part-not-found", "the requested help part is absent")
+            .slot("part")
+            .value(),
+    }
+}
+
+/// Answers `instruction`: the compiled text of one served identity, in parts
+/// when large. It needs no project and reads only the registry, and the version
+/// and hash it serves are the registry's pinned values.
+pub fn instruction_answer(arguments: &Value) -> Value {
+    let (identity, part) = match serde_json::from_value::<RequestShape>(arguments.clone()) {
+        Ok(RequestShape::Instruction { identity, part }) => (identity, part),
+        Ok(_) => return invalid_arguments("these are not instruction arguments"),
+        Err(error) => return invalid_arguments(error.to_string()),
+    };
+    match instruction::lookup(&identity) {
+        instruction::Lookup::Served { entry, text } => {
+            instruction_part(entry.identity, text.version, text.hash, text.body, part)
+        }
+        instruction::Lookup::Unavailable { identity, build } => {
+            instruction::unavailable(identity, build)
+        }
+        instruction::Lookup::Unknown => instruction::unknown(),
+    }
+}
+
+/// One instruction whole when it fits, or one numbered part of its text. Every
+/// part carries the evidence of the whole text, since the hash covers all parts.
+fn instruction_part(
+    identity: &str,
+    version: &str,
+    hash: &str,
+    body: &str,
+    part: Option<usize>,
+) -> Value {
+    match cut(body, part) {
+        Cut::Whole(body) => serde_json::json!({"status":"ok","identity":identity,
+        "version":version,"hash":hash,"text":body}),
+        Cut::Part { body, part, next } => serde_json::json!({"status":"ok",
+        "identity":identity,"version":version,"hash":hash,
+        "bound":PART_BOUND,"part":part,"body":body,"next":next}),
+        Cut::Absent => Refusal::new(
+            "instruction-part-not-found",
+            "the requested instruction part is absent",
+        )
+        .slot("part")
+        .value(),
     }
 }
 
@@ -358,31 +432,21 @@ fn served_schema(operation: &str) -> Option<Value> {
 
 fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>) -> Value {
     let serialized = serde_json::to_string(schema).expect("operation schema JSON");
-    let mut remaining = serialized.as_str();
-    let mut parts = Vec::new();
-    while !remaining.is_empty() {
-        let mut end = remaining.len().min(SCHEMA_PART_BOUND);
-        while !remaining.is_char_boundary(end) {
-            end -= 1;
+    match cut(&serialized, part) {
+        Cut::Whole(_) => {
+            serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema})
         }
-        parts.push(&remaining[..end]);
-        remaining = &remaining[end..];
-    }
-    let part = part.unwrap_or(1);
-    let Some(body) = part.checked_sub(1).and_then(|index| parts.get(index)) else {
-        return Refusal::new(
+        Cut::Part { body, part, next } => {
+            serde_json::json!({"status":"ok","tool":tool,"operation":operation,
+            "bound":PART_BOUND,"part":part,"body":body,"next":next})
+        }
+        Cut::Absent => Refusal::new(
             "schema-part-not-found",
             "the requested schema part is absent",
         )
         .slot("part")
-        .value();
-    };
-    if serialized.len() <= SCHEMA_PART_BOUND {
-        return serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema});
+        .value(),
     }
-    let next = (part < parts.len()).then_some(part + 1);
-    serde_json::json!({"status":"ok","tool":tool,"operation":operation,
-        "bound":SCHEMA_PART_BOUND,"part":part,"body":body,"next":next})
 }
 
 /// Today's spellings written out again, independent of the data above, for the
@@ -429,6 +493,7 @@ pub(crate) mod expected {
         "review-deferred",
         "review-consumer",
         "review-select",
+        "instruction",
     ];
 
     /// `baley_apply` spellings in order.
@@ -514,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn the_baseline_lists_are_todays_spellings_in_todays_order() {
+    fn the_baseline_lists_keep_todays_order_with_instruction_appended_last() {
         assert_eq!(names(Tool::Query), QUERY);
         assert_eq!(names(Tool::Apply), APPLY);
     }
@@ -530,8 +595,8 @@ mod tests {
     }
 
     #[test]
-    fn help_and_schema_are_available_and_need_no_project() {
-        for name in ["help", "schema"] {
+    fn help_schema_and_instruction_are_available_and_need_no_project() {
+        for name in ["help", "schema", "instruction"] {
             assert_eq!(
                 lookup(Tool::Query, Some(name)),
                 Lookup::Available {
@@ -542,11 +607,11 @@ mod tests {
     }
 
     #[test]
-    fn every_other_recognized_spelling_is_unavailable() {
+    fn every_spelling_but_the_three_reads_is_unavailable() {
         for tool in [Tool::Query, Tool::Apply] {
             for name in names(tool)
                 .into_iter()
-                .filter(|n| !["help", "schema"].contains(n))
+                .filter(|n| !["help", "schema", "instruction"].contains(n))
             {
                 assert!(
                     matches!(lookup(tool, Some(name)), Lookup::Unavailable { .. }),
@@ -641,6 +706,17 @@ mod tests {
     }
 
     #[test]
+    fn help_part_1_is_the_whole_answer_and_part_2_of_a_fitting_answer_is_refused() {
+        let first = help_answer(&json!({"operation": "help", "part": 1}));
+        // The table's own answer, so a fitting answer wrapped as a part cannot equal it.
+        assert_eq!(first, crate::help::table::answer(None));
+        let second = help_answer(&json!({"operation": "help", "part": 2}));
+        assert_eq!(second["code"], "help-part-not-found", "{second}");
+        assert_eq!(second["slot"], "part");
+        assert_eq!(second["status"], "refused");
+    }
+
+    #[test]
     fn help_with_an_unknown_field_is_refused_in_slot_arguments() {
         let answer = help_answer(&json!({"operation": "help", "bogus": 1}));
         assert_eq!(answer["status"], "refused");
@@ -649,8 +725,8 @@ mod tests {
     }
 
     #[test]
-    fn schema_for_the_two_served_operations_is_an_ok_answer() {
-        for operation in ["help", "schema"] {
+    fn schema_for_the_three_served_operations_is_an_ok_answer() {
+        for operation in ["help", "schema", "instruction"] {
             let answer =
                 schema_answer(&json!({"operation": "schema", "tool": "query", "for": operation}));
             assert_eq!(answer["status"], "ok", "{operation}: {answer}");
@@ -661,6 +737,182 @@ mod tests {
                 operation
             );
         }
+    }
+
+    fn sha256_hex(text: &str) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn instruction_call(identity: &str) -> Value {
+        instruction_answer(&json!({"operation": "instruction", "identity": identity}))
+    }
+
+    #[test]
+    fn an_instruction_answers_its_registry_evidence_and_a_text_that_hashes_to_it() {
+        for (identity, version, hash) in [
+            (
+                "bal-help",
+                crate::help::front_door::VERSION,
+                crate::help::front_door::HASH,
+            ),
+            (
+                "bal-read-contract",
+                crate::instruction::read_contract::VERSION,
+                crate::instruction::read_contract::HASH,
+            ),
+        ] {
+            let answer = instruction_call(identity);
+            assert_eq!(answer["status"], "ok", "{identity}: {answer}");
+            assert_eq!(answer["identity"], identity);
+            assert_eq!(answer["version"], version);
+            assert_eq!(answer["hash"], hash);
+            let text = answer["text"].as_str().expect("a whole text");
+            assert_eq!(
+                sha256_hex(text),
+                hash,
+                "{identity} text must match its hash"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unavailable_instruction_is_refused_naming_its_build() {
+        let answer = instruction_call("bal-plan");
+        assert_eq!(answer["code"], "instruction-unavailable");
+        assert_eq!(answer["slot"], "identity");
+        assert_eq!(answer["details"], json!({"build": 4}));
+    }
+
+    #[test]
+    fn an_unknown_instruction_is_refused_in_slot_identity() {
+        let answer = instruction_call("no-such-instruction");
+        assert_eq!(answer["code"], "unknown-instruction");
+        assert_eq!(answer["slot"], "identity");
+    }
+
+    #[test]
+    fn part_2_of_a_one_part_instruction_is_refused_in_slot_part() {
+        let answer = instruction_answer(
+            &json!({"operation": "instruction", "identity": "bal-help", "part": 2}),
+        );
+        assert_eq!(answer["code"], "instruction-part-not-found");
+        assert_eq!(answer["slot"], "part");
+    }
+
+    #[test]
+    fn part_1_of_a_one_part_instruction_is_the_whole_answer() {
+        let whole = instruction_call("bal-help");
+        let first = instruction_answer(
+            &json!({"operation": "instruction", "identity": "bal-help", "part": 1}),
+        );
+        assert_eq!(first, whole);
+    }
+
+    /// Fetches part 1 with no part named, then follows `next` to the end,
+    /// checking the fields every paged answer carries. Returns each part.
+    fn every_part(fetch: impl Fn(Option<usize>) -> Value) -> Vec<Value> {
+        let mut parts = vec![fetch(None)];
+        loop {
+            let answer = parts.last().unwrap();
+            let number = parts.len();
+            assert_eq!(answer["status"], "ok", "{answer}");
+            assert_eq!(answer["bound"], PART_BOUND);
+            assert_eq!(answer["part"], number);
+            let body = answer["body"].as_str().expect("a part body");
+            assert!(!body.is_empty() && body.len() <= PART_BOUND);
+            if answer["next"].is_null() {
+                break;
+            }
+            assert_eq!(answer["next"], number + 1);
+            parts.push(fetch(Some(number + 1)));
+        }
+        assert!(parts.len() > 1, "the answer must be paged");
+        parts
+    }
+
+    fn joined(parts: &[Value]) -> String {
+        parts
+            .iter()
+            .map(|part| part["body"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_schema_part_that_drops_its_wire_fields_or_loses_bytes_is_caught() {
+        let schema = json!({"description":"é🦀\"\\".repeat(PART_BOUND)});
+        let parts = every_part(|part| schema_part("apply", "synthetic", &schema, part));
+        for part in &parts {
+            assert_eq!(part["tool"], "apply");
+            assert_eq!(part["operation"], "synthetic");
+            assert!(
+                part.get("schema").is_none(),
+                "a part carries no parsed schema"
+            );
+        }
+        let combined = joined(&parts);
+        assert_eq!(combined, serde_json::to_string(&schema).unwrap());
+        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), schema);
+    }
+
+    #[test]
+    fn a_schema_part_of_0_past_the_end_or_usize_max_served_instead_of_refused_is_caught() {
+        // Quoted, these serialize to exactly the bound and two bytes over it.
+        let fitting = json!("x".repeat(PART_BOUND - 2));
+        let paged = json!("x".repeat(PART_BOUND));
+        for (schema, past_end) in [(&fitting, 2), (&paged, 3)] {
+            for part in [0, past_end, usize::MAX] {
+                let refused = schema_part("query", "synthetic", schema, Some(part));
+                assert_eq!(refused["status"], "refused", "part {part}");
+                assert_eq!(refused["slot"], "part");
+                assert_eq!(refused["code"], "schema-part-not-found");
+            }
+        }
+    }
+
+    #[test]
+    fn a_help_part_that_drops_its_wire_fields_or_serves_a_missing_part_is_caught() {
+        let answer = json!({"status":"ok","about":"é🦀".repeat(PART_BOUND)});
+        let parts = every_part(|part| help_part(answer.clone(), part));
+        for part in &parts {
+            assert!(
+                part.get("about").is_none(),
+                "a part carries no answer field"
+            );
+        }
+        let combined = joined(&parts);
+        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), answer);
+        let past = help_part(answer, Some(parts.len() + 1));
+        assert_eq!(past["code"], "help-part-not-found");
+        assert_eq!(past["slot"], "part");
+    }
+
+    #[test]
+    fn an_instruction_part_that_drops_its_evidence_or_serves_a_missing_part_is_caught() {
+        let body = "é🦀".repeat(PART_BOUND);
+        let parts = every_part(|part| instruction_part("bal-synthetic", "7", "abc", &body, part));
+        for part in &parts {
+            assert_eq!(part["identity"], "bal-synthetic");
+            assert_eq!(part["version"], "7");
+            assert_eq!(part["hash"], "abc");
+            assert!(part.get("text").is_none(), "a part carries no whole text");
+        }
+        assert_eq!(joined(&parts), body);
+        let past = instruction_part("bal-synthetic", "7", "abc", &body, Some(parts.len() + 1));
+        assert_eq!(past["code"], "instruction-part-not-found");
+        assert_eq!(past["slot"], "part");
+    }
+
+    #[test]
+    fn an_instruction_with_a_version_field_is_refused_in_slot_arguments() {
+        let answer = instruction_answer(
+            &json!({"operation": "instruction", "identity": "bal-help", "version": "1"}),
+        );
+        assert_eq!(answer["code"], "invalid-arguments");
+        assert_eq!(answer["slot"], "arguments");
     }
 
     #[test]
@@ -683,66 +935,5 @@ mod tests {
         let answer = schema_answer(&json!({"operation": "schema", "tool": "other", "for": "help"}));
         assert_eq!(answer["code"], "unknown-tool");
         assert_eq!(answer["slot"], "tool");
-    }
-
-    #[test]
-    fn schema_parts_round_trip_utf8_and_escaped_json() {
-        let schema = json!({"description":"é🦀\"\\".repeat(SCHEMA_PART_BOUND)});
-        let mut combined = String::new();
-        let mut part = None;
-        let mut number = 1;
-        loop {
-            let answer = schema_part("apply", "synthetic", &schema, part);
-            assert_eq!(answer["status"], "ok");
-            assert_eq!(answer["tool"], "apply");
-            assert_eq!(answer["operation"], "synthetic");
-            assert_eq!(answer["part"], number);
-            assert_eq!(answer["bound"], SCHEMA_PART_BOUND);
-            assert!(answer.get("schema").is_none());
-            let body = answer["body"].as_str().unwrap();
-            assert!(!body.is_empty() && body.len() <= SCHEMA_PART_BOUND);
-            combined.push_str(body);
-            if answer["next"].is_null() {
-                break;
-            }
-            number += 1;
-            assert_eq!(answer["next"], number);
-            part = Some(number);
-        }
-        assert!(number > 1);
-        assert_eq!(combined, serde_json::to_string(&schema).unwrap());
-        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), schema);
-    }
-
-    #[test]
-    fn a_schema_at_the_bound_is_served_whole_and_one_byte_over_is_paged() {
-        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
-        assert_eq!(
-            serde_json::to_vec(&schema).unwrap().len(),
-            SCHEMA_PART_BOUND
-        );
-        assert_eq!(
-            schema_part("query", "synthetic", &schema, None),
-            json!({"status":"ok","tool":"query","operation":"synthetic","schema":schema})
-        );
-        let oversized = json!("x".repeat(SCHEMA_PART_BOUND - 1));
-        let first = schema_part("query", "synthetic", &oversized, None);
-        assert_eq!(first["part"], 1);
-        assert_eq!(first["next"], 2);
-        assert_eq!(first["body"].as_str().unwrap().len(), SCHEMA_PART_BOUND);
-        let last = schema_part("query", "synthetic", &oversized, Some(2));
-        assert_eq!(last["body"].as_str().unwrap().len(), 1);
-        assert!(last["next"].is_null());
-    }
-
-    #[test]
-    fn a_schema_part_of_0_past_the_end_or_usize_max_is_refused_as_not_found() {
-        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
-        for part in [0, 2, usize::MAX] {
-            let refused = schema_part("query", "synthetic", &schema, Some(part));
-            assert_eq!(refused["status"], "refused");
-            assert_eq!(refused["slot"], "part");
-            assert_eq!(refused["code"], "schema-part-not-found");
-        }
     }
 }

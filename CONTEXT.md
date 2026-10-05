@@ -236,7 +236,7 @@ Two notes on history:
 | Client info | What a host sends when it connects: its name and version ([0012](docs/design/0012-host-interface.md#2-terms)). | user agent |
 | Operation | One typed request under the `query` or `apply` tool, named by a string that is only ever added ([0012](docs/design/0012-host-interface.md#2-terms)). | endpoint, method |
 | Refusal | A typed answer that a request was not done, with a code and a place ([0012](docs/design/0012-host-interface.md#2-terms)). | error, failure, rejection |
-| Identity | The name by which a record or instruction is read: a kind plus keys, never a path ([0012](docs/design/0012-host-interface.md#2-terms)). | path, URL, file name |
+| Identity | The name by which a record or instruction is read: a record by a kind plus keys, an instruction by its short name such as `bal-help`, and neither ever a path ([0012](docs/design/0012-host-interface.md#2-terms)). | path, URL, file name |
 | Part | One bounded piece of a served record or instruction, at most 24,576 bytes ([0012](docs/design/0012-host-interface.md#2-terms)). | page, chunk |
 | Work order | The complete dispatch for one worker: identity, role, route, instructions, inputs and expected result, read by id ([0002 section 8](docs/design/0002-system-design.md#8-work-orders)). | prompt, brief, ticket |
 | Stub | A file a host needs on disk to list or launch something, rendered by Baley from its tables and pointing at Baley ([0012](docs/design/0012-host-interface.md#2-terms)). | template, prompt file |

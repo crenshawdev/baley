@@ -17,6 +17,9 @@ pub mod client;
 /// The literal operation baseline and the build that replaces each retired spelling.
 pub mod operations;
 
+/// Cuts a long read answer into numbered parts at one shared bound.
+pub mod parts;
+
 /// The three tools, what the server says about itself and what `baley_version` answers.
 pub mod tools;
 

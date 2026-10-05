@@ -7,10 +7,11 @@
 //! after the queue and then the operation. A call that needs a project reaches
 //! the operation with a [`Preparation`]: the caller the gate formed, the
 //! call's host, the session's ledger and the server's time. The first
-//! operations that prepare from it are `document` (T7) and `capture` (T8),
-//! which set `needs_project` and add their arms to [`operate`]. rmcp has
-//! already validated the request's metadata by the time any of this runs, so a
-//! protocol-required metadata error stays a protocol error and runs nothing.
+//! operations that prepare from it are T8's `capture` and `document` (the
+//! capture identity read), which set `needs_project` and add their arms to
+//! [`operate`]. rmcp has already validated the request's metadata by the time any
+//! of this runs, so a protocol-required metadata error stays a protocol error
+//! and runs nothing.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -30,7 +31,7 @@ use serde_json::Value;
 use super::client::{ClientIdentity, Selection, decode_2025, decode_2026, select};
 use super::context::{SessionContext, call_context};
 use super::gate::{Admitted, After, Called, after_queue, encode};
-use super::operations::{help_answer, schema_answer, unknown_operation};
+use super::operations::{help_answer, instruction_answer, schema_answer, unknown_operation};
 use super::tools::{info, supported_protocol_versions, tool_list, version_answer};
 use super::transport::RawFrameBytes;
 use super::worker::{Submission, Worker};
@@ -151,7 +152,7 @@ fn run_decision(
 /// The answer of an admitted operation. It matches the called operation and the
 /// project call's [`Preparation`] together, so an arm that needs a project
 /// names the input in its pattern and the arms that need none ignore it. The
-/// first arms that use it are T7's `document` and T8's `capture`.
+/// first arms that use it are T8's `capture` and `document`.
 fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
     match (called, project) {
@@ -159,6 +160,9 @@ fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparat
         (Called::Operation(_, spelling), _) if spelling == "help" => help_answer(arguments_or_null),
         (Called::Operation(_, spelling), _) if spelling == "schema" => {
             schema_answer(arguments_or_null)
+        }
+        (Called::Operation(_, spelling), _) if spelling == "instruction" => {
+            instruction_answer(arguments_or_null)
         }
         // The gate admits only the spellings above, so a baseline entry marked
         // served with nothing behind it answers as an unknown operation.
@@ -334,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn version_help_and_schema_each_run_their_own_operation() {
+    fn version_help_schema_and_instruction_each_run_their_own_operation() {
         let version = operate(&Called::Version, Some(&json!({})), None);
         assert_eq!(version["status"], "ok");
         assert!(version["version"].is_string());
@@ -354,5 +358,14 @@ mod tests {
         );
         assert_eq!(schema["status"], "ok", "{schema}");
         assert_eq!(schema["schema"]["properties"]["operation"]["const"], "help");
+        // Valid instruction arguments, which help and schema both refuse, so only
+        // the instruction arm can answer ok with the identity.
+        let instruction = operate(
+            &Called::Operation(Tool::Query, "instruction".into()),
+            Some(&json!({"operation": "instruction", "identity": "bal-help"})),
+            None,
+        );
+        assert_eq!(instruction["status"], "ok", "{instruction}");
+        assert_eq!(instruction["identity"], "bal-help");
     }
 }

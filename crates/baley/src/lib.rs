@@ -61,6 +61,8 @@ pub mod folders;
 pub mod hook_input;
 /// `baley init`: ties a repository to a ledger project.
 pub mod init;
+/// The compiled instruction registry: every instruction served to a model, by identity, with no disk loader and no override.
+pub mod instruction;
 /// The owner's provider keys, read from `keys.env`.
 pub mod keys;
 /// Owner commands over the evidence ledger.
