@@ -375,7 +375,7 @@ Every event has an envelope and a payload.
 | `request_id` | The command that recorded it. |
 | `git` | The git facts the event depends on: `commit`, `tree`, and the `checkout` it was observed in. Absent when the event depends on none. |
 | `policy_version` | The effective policy the command ran under. |
-| `payload` | The event's typed content, as canonical JSON. Every fact a projector or the search index needs is inline. Attachments (outputs, review material, prompts, plan and context text) are references `{ "payload": "<sha256>", "bytes": n, "class": "<retention class>" }`. |
+| `payload` | The event's typed content, as canonical JSON. Every fact a projector needs is inline. Attachments (outputs, review material, prompts, plan and context text, capture text over 4 KiB) are references `{ "payload": "<sha256>", "bytes": n, "class": "<retention class>" }`. Build 8's search rows derived from an attachment's body are keyed by the body's hash and are not held in the event (EVD-R10). |
 | `prev_hash`, `hash` | The hash chain. |
 
 Payloads are JSON so that the ledger stays readable with standard tools and queryable through SQLite's JSON functions. For hashing, the envelope (without `hash`) and the payload are serialized with the JSON Canonicalization Scheme (RFC 8785), so the same event always hashes the same way on any platform. The envelope includes the nested `caller` when the event has one and leaves the key out when it has none, as it does `git`, so an event with no caller hashes exactly as it did before the field existed.
@@ -1545,11 +1545,11 @@ Found unused in the current code and not carried forward: the store operations `
 
 ## Appendix B: Reads mapped to views
 
-The reads the inherited server served, with the view and key that will serve each. Every one but `help` and `schema`, which read no store, now answers operation-unavailable until the build that replaces it. All queries page with a cursor and are bounded; lists are ordered as stated.
+The reads the inherited server served, with the view and key that will serve each. `help` and `schema` read no store. `document` is served for a capture identity only, read through the `capture` view by capture id, and refuses any other identity kind as invalid arguments until the build that records it. Every other read answers operation-unavailable until the build that replaces it. All queries page with a cursor and are bounded; lists are ordered as stated.
 
 | Query operation | View and key | Order |
 |---|---|---|
-| `progress` | `roadmap` (project); `phase` by status; `dispatch` by state; `capture` by disposition; `review_queue` by state; `pause` (project) | Roadmap order |
+| `progress` | `roadmap` (project); `phase` by status; `dispatch` by state; `capture` by disposition, an index the built view lacks, which Builds 7 and 8 add with a projector version bump; `review_queue` by state; `pause` (project) | Roadmap order |
 | `execute-next` | `phase`, `plan`, `admission`, `dispatch` for (project, phase); evidence events for the phase | |
 | `verify-next` | `phase`, `plan`, `evidence_map`, `dispatch`, `verification` for (project, phase) | |
 | `verification-read` | `verification` (project, attempt id), or by phase index | Newest first |
@@ -1558,7 +1558,7 @@ The reads the inherited server served, with the view and key that will serve eac
 | `evidence-read` | `evidence_map` (project, phase, plan); evidence events for the plan | Sequence |
 | `plan-read` | `plan` by phase; `evidence_map` | Plan number |
 | `context-intake` | `phase` (project, phase); `roadmap` | |
-| `document` | By identity: `phase` for phase context; `plan` for a phase plan; `dispatch` for a dispatch; `verification` for an attempt; `run` for run output; `review` for a review entry; `roadmap` for a roadmap row; `task`, `debug`, `spike` by slug | |
+| `document` | By identity: `capture` by capture id for a note or story; `phase` for phase context; `plan` for a phase plan; `dispatch` for a dispatch; `verification` for an attempt; `run` for run output; `review` for a review entry; `roadmap` for a roadmap row; `task`, `debug`, `spike` by slug | |
 | `document-search` | `Search` scoped to (project, phase), returning identities and parts | Relevance |
 | `recall` | `Search` scoped to the project, optionally a phase | Relevance |
 | `why` | `event(project_id, git_commit)` index, then the events' streams | Sequence |
