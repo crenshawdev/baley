@@ -404,7 +404,6 @@ Streams used by the record families:
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.authorized`, `landing.claimed`, `landing.step`, `landing.reconciled`, `landing.confirmed`, `landing.completed`, `tracker.checked` ([0011](0011-milestones-landing-undo-pause.md)) |
 | `pause` | `pause.recorded`, `pause.resumed` |
 | `capture`, `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the support families' records ([0014](0014-support-families.md)) |
-| `capture` | `item.captured`, `item.resolved` |
 | `guard` | `guard.allowed`, `guard.asked`, `guard.refused`, `guard.policy_recorded` |
 | `command/<kind>` | `command.claimed`, `command.completed`, `command.reconciled` |
 | `retention` | `payload.reduced`, `payload.purged` |
@@ -753,7 +752,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `policy` | (project, checkout, host) | | The latest `policy.effective` per checkout and host, with its version |
 | `checkout` | (project, path) | path | Each checkout's latest `checkout.seen`, its root commit and remote URL, which checkout admission judges a fork against |
 | `guard_policy` | project | | The remembered denial policy |
-| `capture` | (project, item id) | phase, disposition | The capture queue |
+| `capture` | (project, recording sequence) | capture id | Each capture's kind, phase, size, time and short text, or a long text's body hash with its purge state |
 | `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
 | `claim_scope` | (project, scope token) | | The open claim holding each scope token, for the scope check |
 | `model_catalog` | (project, catalog) | | The model names each host and provider accepts, with their source, tier and placement, and the catalog version ([0003](0003-configuration-and-routing.md)) |
@@ -768,7 +767,7 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 
 | Class | Examples | Default retention |
 |---|---|---|
-| `record` | plan and context text, verdict detail | Kept for the life of the project |
+| `record` | plan and context text, verdict detail, capture text over 4 KiB | Kept for the life of the project |
 | `output` | test and command output | Kept until the milestone that produced it closes, then reduced |
 | `material` | review material, prompts sent to models | Kept for 90 days after its review closes |
 
@@ -778,7 +777,7 @@ A reference stops requiring its body when its project records `payload.reduced` 
 
 **Reduction** applies only to an `output` reference. It stores the first and last 64 KiB as a new `record` payload attached to `payload.reduced`, which names the original hash, excerpt hash and byte ranges kept. An output of 128 KiB or less is kept whole and records no event. The store checks the original body's hash and length before releasing the reference. The original body is tombstoned only when no other reference still requires it whole. Reduction after purge is refused. Verification checks the excerpt in full and the original as a commitment.
 
-**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it no longer requires. A trace entry derived from a body must name it. Search rows join this removal in Build 8. Events, request rows and view documents remain; they hold no body text.
+**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it no longer requires. A trace entry derived from a body must name it. Build 8's search rows derived from a body are removed by the same step, beside the trace rows, keyed to the body's hash. That step is `remove_derived` in `crates/baley-store-sqlite/src/retention.rs`, the derived-data seam the search slice extends. Events, request rows and view documents remain; they hold no body text.
 
 The `payload.purged` event lists each released reference as a `[source sequence, hash]` pair. Its `released` list and each `payload_ref.released_seq` can therefore be rebuilt from events alone. Trace removal covers a removed body's rows in every project and rows in the purging project only when that project has no other live reference to the hash. The report's `shared` list holds hashes released or requested whose body or excerpt is still required by another reference, in any project. This includes a requested original that stays reduced because another reduction requires its excerpt.
 
@@ -786,7 +785,7 @@ The standalone, idempotent scrub checks the compatibility epoch before any write
 
 Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
-**Invariant (EVD-R10).** Every fact a projector or the search index needs is inline in the event. Payloads are attachments only. So a purge never changes what a view knows, only whether an attachment's body can be shown, and a rebuild after any purge yields the same views, with tombstones in place of purged attachments. Replay after a reduction or purge reads the same inline facts: `payload.reduced` and `payload.purged` replay like any other event, the `request` view keeps each answer's reference, and replay never opens a payload body. So a rebuild or a view verification never reconstructs a purged body, an excerpt or a released reference. `payload_ref.released_seq` is not view data and a rebuild never touches it.
+**Invariant (EVD-R10).** Every fact a projector or the search index needs is inline in the event. Payloads are attachments only. So a purge changes no view except through the `payload.purged` event it records, as the `capture` view's purge state does, and otherwise changes only whether an attachment's body can be shown. A rebuild after any purge replays that event too, so it yields the same views, with tombstones in place of purged attachments. Replay after a reduction or purge reads the same inline facts: `payload.reduced` and `payload.purged` replay like any other event, the `request` view keeps each answer's reference, and replay never opens a payload body. So a rebuild or a view verification never reconstructs a purged body, an excerpt or a released reference. `payload_ref.released_seq` is not view data and a rebuild never touches it.
 
 ```mermaid
 stateDiagram-v2
@@ -823,7 +822,7 @@ sequenceDiagram
     L->>Q: view version fence, readability fence
     L->>Q: release this project's references to each hash and its own reductions' excerpts
     L->>Q: tombstone every body no unreleased reference requires
-    L->>Q: delete derived trace rows (search rows from Build 8)
+    L->>Q: delete derived trace rows, and from Build 8 search rows, by the hash of each released body
     L->>Q: read export_record for removed and shared hashes
     L->>Q: append payload.purged, set scrub_pending
     L->>Q: append command.completed, advance head, COMMIT
@@ -840,7 +839,7 @@ sequenceDiagram
   L-->>O: PurgeReport: purged, shared, recorded, unreachable, scrubbed
 ```
 
-*Figure 10. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
+*Figure 10. A purge: the logical removal in one transaction, then the scrub. The logical removal deletes, by body hash, the derived rows that name a released body: the trace rows, and from Build 8 the search rows, in the same step. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
 
 #### Physical schema (SQLite adapter)
 
