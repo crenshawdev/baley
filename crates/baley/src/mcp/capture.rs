@@ -2,20 +2,134 @@
 //! `capture.recorded` on the project's `capture` stream, under the command
 //! write preparation returned (design 0014 section 5, SUP-R1).
 
+use std::num::NonZeroU32;
+
 use baley_core::capture::{
-    CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION, CAPTURE_STREAM, CaptureKind, TextForm, capture_id,
-    inline_payload, judge_phase, stored_payload, text_form,
+    BLANK_TEXT, CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION, CAPTURE_STREAM, CaptureKind, TextForm,
+    UNKNOWN_KIND, UnknownKind, capture_id, inline_payload, is_blank, judge_kind, judge_phase,
+    stored_payload, text_form,
 };
 use baley_store::{
-    Command, Decision, Ledger, NewEvent, Observed, OutcomeKind, Recorded, RetentionClass,
-    StoreError, StreamName,
+    Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind, Recorded, RequestId,
+    RetentionClass, StoreError, StreamName, request_digest,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
+use crate::mcp::prepare::WriteRequest;
 
 /// The command kind every capture is recorded under.
 pub const CAPTURE_COMMAND: &str = "capture.record";
+
+/// The arguments `capture` takes beside its `operation`. Unknown fields are
+/// refused. `schema` serves this same declaration.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureShape {
+    /// A fresh UUID for this capture in lowercase hyphenated form. A retry of
+    /// the same capture sends the same id.
+    pub request_id: String,
+    /// `note` or `story`.
+    pub kind: String,
+    /// The text to keep. It must not be blank.
+    pub text: String,
+    /// The phase the capture is about, numbered from 1.
+    pub phase: Option<NonZeroU32>,
+    /// The identity of the instruction the session followed, such as
+    /// `bal-capture`.
+    pub instruction: Option<String>,
+}
+
+/// The tagged form a call's arguments arrive in, so `operation` is read and
+/// left out of the shape.
+#[derive(Deserialize)]
+#[serde(tag = "operation")]
+enum CaptureCall {
+    #[serde(rename = "capture")]
+    Capture(CaptureShape),
+}
+
+/// A capture whose arguments passed every check made before preparation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JudgedCapture {
+    /// The write preparation carries into the domain command.
+    pub request: WriteRequest,
+    /// The capture's kind.
+    pub kind: CaptureKind,
+    /// The text, as sent.
+    pub text: String,
+    /// The named phase, if any.
+    pub phase: Option<u32>,
+}
+
+/// Judges `capture`'s arguments before anything is prepared or recorded:
+/// the shape, then the request id, the kind and the text, in that order. A
+/// fault is the `refused` answer, which records nothing, so a fixed retry
+/// may reuse its request id.
+pub fn judge_arguments(arguments: &Value) -> Result<JudgedCapture, Value> {
+    let shape = match serde_json::from_value::<CaptureCall>(arguments.clone()) {
+        Ok(CaptureCall::Capture(shape)) => shape,
+        Err(error) => {
+            return Err(Refusal::new("invalid-arguments", error.to_string())
+                .slot("arguments")
+                .value());
+        }
+    };
+    // One spelling per id, so a retry cannot miss its replay by changing
+    // case or wrapping.
+    let canonical = uuid::Uuid::parse_str(&shape.request_id)
+        .map(|parsed| parsed.hyphenated().to_string())
+        .ok();
+    if canonical.as_deref() != Some(shape.request_id.as_str()) {
+        return Err(Refusal::new(
+            "invalid-arguments",
+            "request_id must be a UUID in lowercase hyphenated form, such as 9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f. A retry of the same capture sends the same id",
+        )
+        .slot("request_id")
+        .value());
+    }
+    let kind = match judge_kind(&shape.kind) {
+        Ok(kind) => kind,
+        Err(unknown) => {
+            let reason = match unknown {
+                UnknownKind::Obsolete(name) => format!(
+                    "`{name}` is no longer a capture kind. A capture is a `note` or a `story`"
+                ),
+                UnknownKind::Other => "a capture is a `note` or a `story`".to_string(),
+            };
+            return Err(Refusal::new(UNKNOWN_KIND, reason).slot("kind").value());
+        }
+    };
+    if is_blank(&shape.text) {
+        return Err(
+            Refusal::new(BLANK_TEXT, "the capture text is empty or only whitespace")
+                .slot("text")
+                .value(),
+        );
+    }
+    let phase = shape.phase.map(NonZeroU32::get);
+    let digest = request_digest(&json!({
+        "command": CAPTURE_COMMAND,
+        "kind": kind.as_str(),
+        "text": shape.text,
+        "phase": phase,
+        "instruction": shape.instruction,
+    }))
+    // Strings and a u32 always have a canonical form.
+    .expect("capture arguments are canonical");
+    Ok(JudgedCapture {
+        request: WriteRequest {
+            kind: CommandKind(CAPTURE_COMMAND.into()),
+            request_id: RequestId(shape.request_id),
+            digest,
+        },
+        kind,
+        text: shape.text,
+        phase,
+    })
+}
 
 /// Records one capture of `kind`, `text` and `phase` under `command`, the
 /// command preparation returned, in one domain transaction.
@@ -439,5 +553,123 @@ mod tests {
             "{again:?}"
         );
         assert_eq!(head(&store), before);
+    }
+
+    fn arguments(extra: Value) -> Value {
+        let mut base = json!({"operation": "capture", "request_id": REQUEST,
+            "kind": "note", "text": "keep this"});
+        for (name, value) in extra.as_object().unwrap() {
+            base[name] = value.clone();
+        }
+        base
+    }
+
+    fn refused(arguments: &Value) -> Value {
+        let refusal = judge_arguments(arguments).expect_err("refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        refusal
+    }
+
+    #[test]
+    fn a_request_id_in_any_spelling_but_lowercase_hyphenated_accepted_is_caught() {
+        for id in [
+            "not-a-uuid",
+            "9D0C1B7E-2F4A-4B6C-8D1E-3A5B7C9D0E2F",
+            "{9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f}",
+            "9d0c1b7e2f4a4b6c8d1e3a5b7c9d0e2f",
+        ] {
+            let refusal = refused(&arguments(json!({ "request_id": id })));
+            assert_eq!(refusal["code"], "invalid-arguments", "{id}");
+            assert_eq!(refusal["slot"], "request_id", "{id}");
+        }
+        let judged = judge_arguments(&arguments(json!({}))).unwrap();
+        assert_eq!(judged.request.request_id, RequestId(REQUEST.into()));
+        assert_eq!(judged.request.kind, CommandKind("capture.record".into()));
+    }
+
+    #[test]
+    fn an_obsolete_kind_answered_as_invalid_arguments_or_without_its_name_is_caught() {
+        for kind in ["todo", "seed"] {
+            let refusal = refused(&arguments(json!({ "kind": kind })));
+            assert_eq!(refusal["code"], "unknown-kind", "{kind}");
+            assert_eq!(refusal["slot"], "kind");
+            let reason = refusal["reason"].as_str().unwrap();
+            assert!(reason.contains(&format!("`{kind}`")), "{reason}");
+        }
+        let refusal = refused(&arguments(json!({"kind": "Note"})));
+        assert_eq!(refusal["code"], "unknown-kind");
+        assert!(!refusal["reason"].as_str().unwrap().contains("Note"));
+    }
+
+    #[test]
+    fn whitespace_only_text_accepted_is_caught() {
+        let refusal = refused(&arguments(json!({"text": " \t\n "})));
+        assert_eq!(refusal["code"], "blank-text");
+        assert_eq!(refusal["slot"], "text");
+    }
+
+    #[test]
+    fn a_by_field_or_phase_zero_accepted_is_caught() {
+        for extra in [
+            json!({"by": "someone"}),
+            json!({"phase": 0}),
+            json!({"phase": 1.5}),
+        ] {
+            let refusal = refused(&arguments(extra.clone()));
+            assert_eq!(refusal["code"], "invalid-arguments", "{extra}");
+            assert_eq!(refusal["slot"], "arguments", "{extra}");
+        }
+        let judged = judge_arguments(&arguments(json!({"phase": 2}))).unwrap();
+        assert_eq!(judged.phase, Some(2));
+    }
+
+    #[test]
+    fn a_digest_that_ignores_the_kind_text_phase_or_instruction_is_caught() {
+        let digest = |extra: Value| judge_arguments(&arguments(extra)).unwrap().request.digest;
+        let base = digest(json!({"instruction": "bal-capture"}));
+        assert_eq!(base, digest(json!({"instruction": "bal-capture"})));
+        for changed in [
+            json!({"instruction": "bal-capture", "kind": "story"}),
+            json!({"instruction": "bal-capture", "text": "keep that"}),
+            json!({"instruction": "bal-capture", "phase": 4}),
+            json!({"instruction": "bal-other"}),
+            json!({}),
+        ] {
+            assert_ne!(digest(changed.clone()), base, "{changed}");
+        }
+    }
+
+    /// Runs judged arguments through preparation's command and the
+    /// transaction, as the served operation does.
+    fn capture(store: &SqliteStore, arguments: &Value, at: &str) -> Result<Recorded, StoreError> {
+        let judged = judge_arguments(arguments).unwrap();
+        let command = prepared_command(&project(), &judged.request, 0, at, &caller());
+        record(store, &command, judged.kind, &judged.text, judged.phase)
+    }
+
+    #[test]
+    fn changed_text_accepted_under_one_request_id_through_its_arguments_is_caught() {
+        let (_dir, store) = store();
+        capture(&store, &arguments(json!({})), T1).unwrap();
+        let reused = capture(&store, &arguments(json!({"text": "keep that"})), T2);
+        assert!(
+            matches!(
+                reused,
+                Err(StoreError::Refused(
+                    StoreRefusal::RequestDigestMismatch { .. }
+                ))
+            ),
+            "{reused:?}"
+        );
+        assert_eq!(of_type(&history(&store), "capture.recorded").len(), 1);
+    }
+
+    #[test]
+    fn the_same_arguments_twice_recorded_as_two_captures_is_caught() {
+        let (_dir, store) = store();
+        capture(&store, &arguments(json!({})), T1).unwrap();
+        let again = capture(&store, &arguments(json!({})), T2).unwrap();
+        assert!(matches!(again, Recorded::Replayed { .. }), "{again:?}");
+        assert_eq!(of_type(&history(&store), "capture.recorded").len(), 1);
     }
 }
