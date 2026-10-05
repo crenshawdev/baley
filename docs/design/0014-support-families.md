@@ -88,9 +88,11 @@ No worker of its own is dispatched; the diagnosis review dispatches through 0008
 
 ### capture, capture decline, capture list
 
-- **Inputs:** `capture`: kind, text, optional phase; `decline`: the capture id; `list`: optional kind.
-- **Outputs:** the capture record and the open count against the bound; the declined record; the list.
-- **Refusals:** `blank-text`, `unknown-kind`, `no-such-phase`, `no-such-capture`, `already-promoted` (a `story` capture already declared as a story) (SUP-R1, SUP-R2).
+- **Inputs:** `capture`: a request id, which is a UUID in lowercase hyphenated form, the kind, the text, an optional phase numbered from 1, and an optional instruction identity; `decline`: the capture id; `list`: optional kind.
+- **Outputs:** `capture`: the receipt, which names the capture id, the kind, the phase, the text's byte count, whether the text is inline or a payload, and the time, and never carries the text. The receipt carries no open count against `planning.max_capture_bullets`, because progress reports that count (SUP-R3). A replay of the same request returns the same receipt. `decline`: the declined record; `list`: the list.
+- **Refusals:** `blank-text`; `unknown-kind`, which names `todo` or `seed` when one of them is sent, since a capture no longer takes those kinds; `no-such-phase`; and, for decline and promotion, `no-such-capture` and `already-promoted` (a `story` capture already declared as a story) (SUP-R1, SUP-R2). A capture of text over 4,096 bytes whose exact bytes were purged is answered `failed` with code `text-purged`, not retryable, because purged bytes cannot be stored again.
+
+A refusal judged from the call's own arguments (`blank-text`, `unknown-kind`, a request id that is not a UUID, arguments that do not fit the shape, or an instruction identity the registry does not serve) is answered before preparation and records nothing, so a corrected retry may reuse its request id. `no-such-phase` is judged against the ledger and is recorded with the command, as a refused `command.completed` with no `capture.recorded`. A `text-purged` answer records nothing.
 
 ### task open, task close
 
@@ -151,11 +153,12 @@ No worker of its own is dispatched; the diagnosis review dispatches through 0008
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | capture id | Digest of request, kind, text, phase |
+| `id` | capture id | Digest of the request id, kind, text and phase |
 | `kind` | `note`, `story` | |
-| `text` | text | |
-| `phase` | integer or absent | |
-| `by` | actor | Owner or session |
+| `text` or `body` | text, or payload reference | The text inline in `text` through 4,096 UTF-8 bytes; longer text is stored as a `record` payload, and `body` holds its reference in place of `text` |
+| `bytes` | integer | The text's length in UTF-8 bytes |
+| `phase` | integer, or `null` | The phase the capture is about, `null` when none is named |
+| `by` | caller | The event's caller in the envelope, hashed with the event, with Baley as the actor. It is not a payload field |
 | `story` | story id | The story it became (promoted) |
 | `owner`, `at` | actor, time | (promoted, declined) |
 
@@ -189,7 +192,7 @@ Every event carries the episode version. A reproduce whose run is not red writes
 
 | View | Key | Content |
 |---|---|---|
-| `capture` | project | Open, promoted and declined captures by kind |
+| `capture` | project, the sequence of the capture's `capture.recorded`; indexed by capture id | Each capture's id, kind, phase, byte count and recording time, with its text when that is 4,096 bytes or less. For longer text, the body's hash and its purge state: `present`, or `purged` with the purge's reason |
 | `task` | project, slug | State, commits, scan, review |
 | `debug` | project, slug | The episode as it stands: state (unreproduced, open, stuck, resolving, held on risk, resolved, closed unreproduced), reproduction with its files' digests and red run when recorded, runs, hypotheses, observations, attempts, the close reason when closed unreproduced, version |
 | `spike` | project, slug | Criteria, observations, verdict, close |
