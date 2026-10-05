@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T5 merged and T6 in progress, as of origin/main `dde1a08c`, on 2026-10-04, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T6 merged, as of origin/main `dde1a08c`, on 2026-10-04, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -214,11 +214,9 @@ flowchart LR
     T16 --> T17
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
-    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
     classDef held fill:#ffffff,stroke:#6e7781,stroke-dasharray:4 3,color:#57606a
-    class T1,T2,T3,T4,T5 done
-    class T6 progress
+    class T1,T2,T3,T4,T5,T6 done
     class T7,T8,T9,T10,T11,T12,T13 planned
     class Delivery,T14,T15,T16,T17 held
 ```
@@ -232,7 +230,7 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotte
 | T3 | Caller provenance in the ledger | [#183](https://github.com/crenshawdev/baley/pull/183) | Merged |
 | T4 | Per-session stdio server and store maintenance | [#189](https://github.com/crenshawdev/baley/pull/189) | Merged |
 | T5 | Per-request discovery, admission and policy | [#191](https://github.com/crenshawdev/baley/pull/191) | Merged |
-| T6 | Guard decisions and protected paths | | In progress |
+| T6 | Guard decisions and protected paths | [#196](https://github.com/crenshawdev/baley/pull/196) | Merged |
 | T7 | Compiled instructions, help, schemas and parts | | Planned |
 | T8 | Ledger captures and project identity reads | | Planned |
 | T9 | Bounded guard process and storage access | | Planned |
