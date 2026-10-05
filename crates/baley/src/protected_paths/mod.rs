@@ -1,7 +1,7 @@
 //! Which paths the guard protects, and the decisions that judge a tool call's
-//! paths against them (design 0010, GRD-R11). The filesystem is supplied
-//! through [`Lookup`], so every decision here runs over values and a table
-//! in tests.
+//! paths against them (design 0010, GRD-R11 for writes and GRD-R13 for
+//! reads). The filesystem is supplied through [`Lookup`], so every decision
+//! here runs over values and a table in tests.
 
 mod contain;
 mod read;

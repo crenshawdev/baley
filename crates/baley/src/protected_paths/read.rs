@@ -1,4 +1,4 @@
-//! The read decision for Read, Grep and Glob (design 0010, GRD-R11). A read
+//! The read decision for Read, Grep and Glob (design 0010, GRD-R13). A read
 //! is refused when what it reaches lies inside, or holds, Baley's home or
 //! config folder. Protected files such as `baley.toml` are not read-protected.
 
