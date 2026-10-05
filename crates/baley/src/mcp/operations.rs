@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::envelope::Refusal;
+use crate::instruction;
 use crate::mcp::parts::{Cut, PART_BOUND, cut};
 
 /// One of the two tools that take an `operation`.
@@ -123,6 +124,7 @@ pub const QUERY_OPERATIONS: &[Operation] = &[
     retired("review-deferred", 4),
     retired("review-consumer", 4),
     retired("review-select", 4),
+    available("instruction"),
 ];
 
 /// `baley_apply` spellings, in the order the tool has always listed them.
@@ -292,6 +294,14 @@ enum RequestShape {
         /// Concatenate the returned bodies in order, then parse the JSON.
         part: Option<usize>,
     },
+    #[serde(rename = "instruction")]
+    Instruction {
+        /// The identity of the instruction to read, such as `bal-help`.
+        identity: String,
+        /// One-based part for texts over 24,576 bytes; defaults to 1.
+        /// Concatenate the returned bodies in order.
+        part: Option<usize>,
+    },
 }
 
 fn invalid_arguments(reason: impl Into<String>) -> Value {
@@ -306,6 +316,36 @@ pub fn help_answer(arguments: &Value) -> Value {
         Ok(RequestShape::Help { name }) => crate::help::table::answer(name.as_deref()),
         Ok(_) => invalid_arguments("these are not help arguments"),
         Err(error) => invalid_arguments(error.to_string()),
+    }
+}
+
+/// Answers `instruction`: the compiled text of one served identity, in parts
+/// when large. It needs no project and reads only the registry, and the version
+/// and hash it serves are the registry's pinned values.
+pub fn instruction_answer(arguments: &Value) -> Value {
+    let (identity, part) = match serde_json::from_value::<RequestShape>(arguments.clone()) {
+        Ok(RequestShape::Instruction { identity, part }) => (identity, part),
+        Ok(_) => return invalid_arguments("these are not instruction arguments"),
+        Err(error) => return invalid_arguments(error.to_string()),
+    };
+    match instruction::lookup(&identity) {
+        instruction::Lookup::Served { entry, text } => match cut(text.body, part) {
+            Cut::Whole(body) => serde_json::json!({"status":"ok","identity":entry.identity,
+            "version":text.version,"hash":text.hash,"text":body}),
+            Cut::Part { body, part, next } => serde_json::json!({"status":"ok",
+            "identity":entry.identity,"version":text.version,"hash":text.hash,
+            "bound":PART_BOUND,"part":part,"body":body,"next":next}),
+            Cut::Absent => Refusal::new(
+                "instruction-part-not-found",
+                "the requested instruction part is absent",
+            )
+            .slot("part")
+            .value(),
+        },
+        instruction::Lookup::Unavailable { identity, build } => {
+            instruction::unavailable(identity, build)
+        }
+        instruction::Lookup::Unknown => instruction::unknown(),
     }
 }
 
@@ -417,6 +457,7 @@ pub(crate) mod expected {
         "review-deferred",
         "review-consumer",
         "review-select",
+        "instruction",
     ];
 
     /// `baley_apply` spellings in order.
@@ -502,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn the_baseline_lists_are_todays_spellings_in_todays_order() {
+    fn the_baseline_lists_keep_todays_order_with_instruction_appended_last() {
         assert_eq!(names(Tool::Query), QUERY);
         assert_eq!(names(Tool::Apply), APPLY);
     }
@@ -518,8 +559,8 @@ mod tests {
     }
 
     #[test]
-    fn help_and_schema_are_available_and_need_no_project() {
-        for name in ["help", "schema"] {
+    fn help_schema_and_instruction_are_available_and_need_no_project() {
+        for name in ["help", "schema", "instruction"] {
             assert_eq!(
                 lookup(Tool::Query, Some(name)),
                 Lookup::Available {
@@ -530,11 +571,11 @@ mod tests {
     }
 
     #[test]
-    fn every_other_recognized_spelling_is_unavailable() {
+    fn every_spelling_but_the_three_reads_is_unavailable() {
         for tool in [Tool::Query, Tool::Apply] {
             for name in names(tool)
                 .into_iter()
-                .filter(|n| !["help", "schema"].contains(n))
+                .filter(|n| !["help", "schema", "instruction"].contains(n))
             {
                 assert!(
                     matches!(lookup(tool, Some(name)), Lookup::Unavailable { .. }),
@@ -637,8 +678,8 @@ mod tests {
     }
 
     #[test]
-    fn schema_for_the_two_served_operations_is_an_ok_answer() {
-        for operation in ["help", "schema"] {
+    fn schema_for_the_three_served_operations_is_an_ok_answer() {
+        for operation in ["help", "schema", "instruction"] {
             let answer =
                 schema_answer(&json!({"operation": "schema", "tool": "query", "for": operation}));
             assert_eq!(answer["status"], "ok", "{operation}: {answer}");
@@ -649,6 +690,88 @@ mod tests {
                 operation
             );
         }
+    }
+
+    fn sha256_hex(text: &str) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn instruction_call(identity: &str) -> Value {
+        instruction_answer(&json!({"operation": "instruction", "identity": identity}))
+    }
+
+    #[test]
+    fn an_instruction_answers_its_registry_evidence_and_a_text_that_hashes_to_it() {
+        for (identity, version, hash) in [
+            (
+                "bal-help",
+                crate::help::front_door::VERSION,
+                crate::help::front_door::HASH,
+            ),
+            (
+                "bal-read-contract",
+                crate::instruction::read_contract::VERSION,
+                crate::instruction::read_contract::HASH,
+            ),
+        ] {
+            let answer = instruction_call(identity);
+            assert_eq!(answer["status"], "ok", "{identity}: {answer}");
+            assert_eq!(answer["identity"], identity);
+            assert_eq!(answer["version"], version);
+            assert_eq!(answer["hash"], hash);
+            let text = answer["text"].as_str().expect("a whole text");
+            assert_eq!(
+                sha256_hex(text),
+                hash,
+                "{identity} text must match its hash"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unavailable_instruction_is_refused_naming_its_build() {
+        let answer = instruction_call("bal-plan");
+        assert_eq!(answer["code"], "instruction-unavailable");
+        assert_eq!(answer["slot"], "identity");
+        assert_eq!(answer["details"], json!({"build": 4}));
+    }
+
+    #[test]
+    fn an_unknown_instruction_is_refused_in_slot_identity() {
+        let answer = instruction_call("no-such-instruction");
+        assert_eq!(answer["code"], "unknown-instruction");
+        assert_eq!(answer["slot"], "identity");
+    }
+
+    #[test]
+    fn part_2_of_a_one_part_instruction_is_refused_in_slot_part() {
+        let answer = instruction_answer(
+            &json!({"operation": "instruction", "identity": "bal-help", "part": 2}),
+        );
+        assert_eq!(answer["code"], "instruction-part-not-found");
+        assert_eq!(answer["slot"], "part");
+    }
+
+    #[test]
+    fn part_1_of_a_one_part_instruction_is_the_whole_answer() {
+        let whole = instruction_call("bal-help");
+        let first = instruction_answer(
+            &json!({"operation": "instruction", "identity": "bal-help", "part": 1}),
+        );
+        assert_eq!(first, whole);
+    }
+
+    #[test]
+    fn an_instruction_with_a_version_field_is_refused_in_slot_arguments() {
+        let answer = instruction_answer(
+            &json!({"operation": "instruction", "identity": "bal-help", "version": "1"}),
+        );
+        assert_eq!(answer["code"], "invalid-arguments");
+        assert_eq!(answer["slot"], "arguments");
     }
 
     #[test]
