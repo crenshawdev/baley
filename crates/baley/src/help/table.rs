@@ -335,7 +335,12 @@ mod tests {
     fn both_help_answers_ask_for_bal_help_as_instruction_on_baley_apply() {
         for answer in [answer(None), answer(Some("plan"))] {
             let request = answer["request"].as_str().expect("a request sentence");
-            for needle in ["`bal-help`", "`instruction`", "`baley_apply`"] {
+            for needle in [
+                "`bal-help`",
+                "`instruction`",
+                "`baley_apply`",
+                "on no `baley_query` call",
+            ] {
                 assert!(request.contains(needle), "the request lost {needle}");
             }
         }
