@@ -7,10 +7,11 @@
 //! after the queue and then the operation. A call that needs a project reaches
 //! the operation with a [`Preparation`]: the caller the gate formed, the
 //! call's host, the session's ledger and the server's time. The first
-//! operations that prepare from it are `document` (T7) and `capture` (T8),
-//! which set `needs_project` and add their arms to [`operate`]. rmcp has
-//! already validated the request's metadata by the time any of this runs, so a
-//! protocol-required metadata error stays a protocol error and runs nothing.
+//! operations that prepare from it are T8's `capture` and `document` (the
+//! capture identity read), which set `needs_project` and add their arms to
+//! [`operate`]. rmcp has already validated the request's metadata by the time any
+//! of this runs, so a protocol-required metadata error stays a protocol error
+//! and runs nothing.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -151,7 +152,7 @@ fn run_decision(
 /// The answer of an admitted operation. It matches the called operation and the
 /// project call's [`Preparation`] together, so an arm that needs a project
 /// names the input in its pattern and the arms that need none ignore it. The
-/// first arms that use it are T7's `document` and T8's `capture`.
+/// first arms that use it are T8's `capture` and `document`.
 fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
     match (called, project) {

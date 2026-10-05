@@ -47,7 +47,7 @@ impl Tool {
 pub enum Status {
     /// Served by this server.
     Available {
-        /// Whether it needs a project. None does yet. T7's `document` and T8's `capture` set it.
+        /// Whether it needs a project. None does yet. T8's `capture` and `document` set it.
         needs_project: bool,
     },
     /// Not served here, and the build that replaces it.
