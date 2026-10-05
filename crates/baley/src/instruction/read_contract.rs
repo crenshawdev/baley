@@ -7,11 +7,11 @@
 pub const IDENTITY: &str = "bal-read-contract";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "1";
+pub const VERSION: &str = "2";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the code
 /// so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "4feb8474b44d0f4b85290797064cc1e57a369f5b3afdc0ca866afe8ea7d6c217";
+pub const HASH: &str = "e20a4e61b36b0e0787a672c58558b04102a4357d428155ac3b618243b578ddd2";
 
 /// What Baley serves by identity, how long answers are paged, and where source
 /// is read.
@@ -20,6 +20,7 @@ pub const TEXT: &str = r#"Baley serves its help, its operation schemas and its i
 - `{"operation":"help"}` lists the commands, and `{"operation":"help","name":"<command name>"}` shows one.
 - `{"operation":"schema","tool":"query","for":"<operation>"}` gives the argument schema of a `baley_query` operation. Use `"apply"` for `tool` to ask about `baley_apply`.
 - `{"operation":"instruction","identity":"<identity>"}` gives the instruction with that identity, such as `bal-help`.
+- `{"operation":"document","identity":{"kind":"capture","id":"<capture id>"}}` gives a capture's text, or its tombstone when its body was purged. It reads the current project.
 
 An answer that fits in 24,576 bytes comes whole. A larger one comes in numbered parts: call again with `part` set to the value of `next` until `next` is null, and join the `body` values in order.
 

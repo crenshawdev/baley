@@ -364,8 +364,6 @@ mod tests {
     #[test]
     fn no_help_answer_names_a_read_build_3_does_not_serve_or_a_skills_path() {
         let forbidden = [
-            "`document`",
-            "\"document\"",
             "document-search",
             ".planning",
             "skills/",

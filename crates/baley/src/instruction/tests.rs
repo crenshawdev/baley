@@ -102,6 +102,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "1",
         "52867052fb5ae23a0962120f07e6fbfa3ba0010bf2e52c109351ff8a1e8b7c5e",
     ),
+    (
+        "bal-read-contract",
+        "2",
+        "e20a4e61b36b0e0787a672c58558b04102a4357d428155ac3b618243b578ddd2",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -150,8 +155,6 @@ fn one_identity_and_version_never_carry_two_hashes_in_the_served_ever_list() {
 #[test]
 fn no_served_text_carries_inherited_lifecycle_or_disk_skill_wording() {
     let forbidden = [
-        "`document`",
-        "\"document\"",
         "document-search",
         ".planning",
         "skills/",
@@ -186,6 +189,15 @@ fn a_capture_text_without_its_identity_request_or_either_kind_is_caught() {
     assert!(body.contains(r#""operation":"capture""#));
     assert!(body.contains(r#""instruction":"bal-capture""#));
     assert!(body.contains(r#""kind":"note""#) && body.contains(r#""kind":"story""#));
+}
+
+#[test]
+fn a_read_contract_that_never_says_how_to_read_a_capture_back_is_caught() {
+    let Lookup::Served { text, .. } = lookup("bal-read-contract") else {
+        panic!("bal-read-contract is served");
+    };
+    assert!(text.body.contains(r#""operation":"document""#));
+    assert!(text.body.contains(r#""kind":"capture""#));
 }
 
 #[test]
