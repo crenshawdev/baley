@@ -1,7 +1,10 @@
 //! Captures' decisions on supplied values. Expected payloads are written out
 //! from the event's documented shape, never from running this code.
 
-use baley_store::{EventSchema, Hash, PayloadRef, RetentionClass};
+use baley_store::{
+    Actor, Change, DocKey, Event, EventSchema, FieldKind, FieldSpec, Hash, IndexField, IndexSpec,
+    KeyValue, Order, PayloadRef, ProjectId, Projector, RequestId, RetentionClass, ViewSpec,
+};
 use serde_json::{Value, json};
 
 use super::*;
@@ -130,4 +133,116 @@ fn a_named_phase_accepted_when_observed_absent_is_caught() {
     assert_eq!(judge_phase(None, false), Ok(()));
     assert_eq!(judge_phase(Some(3), false), Err("no-such-phase"));
     assert_eq!(judge_phase(Some(3), true), Ok(()));
+}
+
+const PROJECT_ID: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+const AT: &str = "2026-10-05T09:00:00Z";
+
+fn event(type_name: &str, seq: u64, payload: Value) -> Event {
+    Event {
+        project_id: ProjectId(PROJECT_ID.into()),
+        seq,
+        stream: "capture".into(),
+        stream_version: 1,
+        type_name: type_name.into(),
+        type_version: 1,
+        actor: Actor::Baley,
+        caller: None,
+        recorded_at: AT.into(),
+        request_id: RequestId(REQUEST.into()),
+        git: None,
+        policy_version: 0,
+        payload,
+        prev_hash: None,
+        hash: Hash([0; 32]),
+    }
+}
+
+fn recorded(seq: u64, payload: Value) -> Event {
+    event("capture.recorded", seq, payload)
+}
+
+fn put(changes: Vec<Change>) -> (DocKey, Value) {
+    match <[Change; 1]>::try_from(changes) {
+        Ok([Change::Put { key, body }]) => (key, body),
+        other => panic!("expected one put, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_inline_capture_keyed_by_its_id_or_losing_its_text_is_caught() {
+    let payload = inline_payload("c1", CaptureKind::Note, None, "keep this");
+    let (key, body) = put(CaptureProjector::new()
+        .apply(&recorded(7, payload), &[])
+        .unwrap());
+    assert_eq!(key, DocKey(vec![KeyValue::Integer(7)]));
+    assert_eq!(
+        body,
+        json!({"seq": 7, "id": "c1", "kind": "note", "phase": null, "bytes": 9,
+            "recorded_at": AT, "text": "keep this"})
+    );
+}
+
+#[test]
+fn a_payload_capture_copying_text_or_missing_its_hash_and_state_is_caught() {
+    let payload = stored_payload("c2", CaptureKind::Story, None, &body());
+    let (key, document) = put(CaptureProjector::new()
+        .apply(&recorded(9, payload), &[])
+        .unwrap());
+    assert_eq!(key, DocKey(vec![KeyValue::Integer(9)]));
+    assert_eq!(
+        document,
+        json!({"seq": 9, "id": "c2", "kind": "story", "phase": null, "bytes": 4097,
+            "recorded_at": AT, "hash": "ab".repeat(32), "state": "present"})
+    );
+}
+
+#[test]
+fn a_capture_view_keyed_by_text_or_declaring_a_phase_index_is_caught() {
+    assert_eq!(
+        capture_spec(),
+        ViewSpec {
+            name: "capture".into(),
+            version: 1,
+            key: vec![FieldSpec {
+                name: "seq".into(),
+                kind: FieldKind::Integer,
+            }],
+            indexes: vec![IndexSpec {
+                name: "by_id".into(),
+                fields: vec![IndexField {
+                    name: "id".into(),
+                    kind: FieldKind::Text,
+                    order: Order::Ascending,
+                }],
+            }],
+            page_bound: 100,
+        }
+    );
+}
+
+#[test]
+fn a_malformed_capture_recorded_accepted_into_the_view_is_caught() {
+    let reference = body().to_value();
+    for payload in [
+        json!("not an object"),
+        json!({"kind": "note", "text": "x"}),
+        json!({"id": "c1", "text": "x"}),
+        json!({"id": "c1", "kind": "note"}),
+        json!({"id": "c1", "kind": "note", "text": "x", "body": reference}),
+        json!({"id": "c1", "kind": "note", "body": {"payload": "zz"}}),
+    ] {
+        let error = CaptureProjector::new()
+            .apply(&recorded(4, payload.clone()), &[])
+            .expect_err(&format!("{payload} must be refused"));
+        assert!(error.0.contains("capture.recorded at seq 4"), "{}", error.0);
+    }
+}
+
+#[test]
+fn a_capture_projector_handling_or_reading_anything_beyond_capture_recorded_is_caught() {
+    let projector = CaptureProjector::new();
+    assert_eq!(projector.handles(), ["capture.recorded"]);
+    let payload = inline_payload("c1", CaptureKind::Note, None, "x");
+    assert!(projector.keys(&recorded(3, payload)).is_empty());
 }
