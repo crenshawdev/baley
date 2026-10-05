@@ -193,3 +193,35 @@ fn the_read_contract_stays_within_a_description_and_keeps_its_paging_and_host_to
         assert!(body.contains(needle), "the read contract lost {needle}");
     }
 }
+
+#[test]
+fn the_help_evidence_takes_its_version_and_hash_from_the_registry_not_the_binary() {
+    let evidence = evidence("bal-help").unwrap();
+    let (_, version, hash) = SERVED_EVER
+        .iter()
+        .find(|(identity, _, _)| *identity == "bal-help")
+        .unwrap();
+    assert_eq!(evidence.identity(), "bal-help");
+    assert_eq!(evidence.version(), *version);
+    assert_eq!(evidence.hash(), *hash);
+    assert_ne!(evidence.version(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn every_served_entry_fits_the_caller_records_limits_as_evidence() {
+    for (identity, text) in served() {
+        let evidence = evidence(identity).unwrap_or_else(|_| panic!("{identity} is refused"));
+        assert_eq!(evidence.identity(), identity);
+        assert_eq!(evidence.version(), text.version);
+        assert_eq!(evidence.hash(), text.hash);
+    }
+}
+
+#[test]
+fn an_unavailable_or_unknown_identity_is_refused_and_given_no_evidence() {
+    assert_eq!(
+        evidence("bal-plan").unwrap_err(),
+        unavailable("bal-plan", 4)
+    );
+    assert_eq!(evidence("no-such-instruction").unwrap_err(), unknown());
+}

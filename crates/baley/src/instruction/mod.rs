@@ -8,6 +8,7 @@
 //! as unavailable with the build that owns it, so a caller learns where it
 //! went instead of reading a stand-in.
 
+use baley_store::InstructionEvidence;
 use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
@@ -217,6 +218,26 @@ pub fn lookup(identity: &str) -> Lookup {
             build: entry.build,
         },
         None => Lookup::Unknown,
+    }
+}
+
+/// Turns the identity a session sent into the evidence a write records, or the
+/// refusal a lookup gives. The version and hash come from the registry alone, so
+/// the ledger never records a claim the binary did not serve.
+///
+/// Build 3 T8's `capture` is the first caller: it attaches the evidence to the
+/// server caller. `form_caller` and the gate are not changed here, because no
+/// call in this build records anything. That is the seam where T8 plugs in.
+pub fn evidence(identity: &str) -> Result<InstructionEvidence, Value> {
+    match lookup(identity) {
+        Lookup::Served { entry, text } => Ok(InstructionEvidence::new(
+            entry.identity,
+            text.version,
+            text.hash,
+        )
+        .expect("a compiled entry fits the caller record's limits, and a test checks every one")),
+        Lookup::Unavailable { identity, build } => Err(unavailable(identity, build)),
+        Lookup::Unknown => Err(unknown()),
     }
 }
 
