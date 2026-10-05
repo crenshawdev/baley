@@ -4,6 +4,7 @@
 //! tombstone (design 0012 operations, design 0014 section 6).
 
 use std::io::Read;
+use std::path::Path;
 
 use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW};
 use baley_store::{
@@ -15,8 +16,9 @@ use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
+use crate::mcp::handler::Preparation;
 use crate::mcp::parts::{Cut, PART_BOUND, cut};
-use crate::mcp::prepare::LEDGER_UNAVAILABLE;
+use crate::mcp::prepare::{LEDGER_UNAVAILABLE, prepare};
 
 /// The code for a capture id the project's `capture` view does not hold.
 pub const NO_SUCH_CAPTURE: &str = "no-such-capture";
@@ -178,6 +180,41 @@ pub fn no_such_capture() -> Value {
     )
     .slot("identity")
     .value()
+}
+
+/// Serves one `document` call for the session's `preparation`: the
+/// arguments are judged first, and a shape fault is answered before anything
+/// is prepared. Then the read is prepared, which finds the project and
+/// checks the ledger knows it and records nothing, and the capture is read
+/// from that project. A `failed` preparation answer is returned as it is.
+pub fn serve(arguments: &Value, preparation: &Preparation) -> Value {
+    let shape = match judge_arguments(arguments) {
+        Ok(shape) => shape,
+        Err(refusal) => return refusal,
+    };
+    let ledger = preparation.ledger.as_deref();
+    // A read reads no settings, so the config folder is never opened.
+    let config = ledger.map_or(Path::new(""), |ledger| ledger.config.as_path());
+    let prepared = match prepare(
+        ledger.map(|ledger| &ledger.store),
+        &preparation.caller,
+        None,
+        config,
+        preparation.host,
+        &preparation.at,
+        &mut crate::process::System,
+    ) {
+        Ok(prepared) => prepared,
+        Err(failed) => return serde_json::to_value(*failed).expect("a failed answer serializes"),
+    };
+    let Some(ledger) = ledger else {
+        return failed(
+            LEDGER_UNAVAILABLE,
+            "the read was prepared without a ledger",
+            PLACE_LEDGER,
+        );
+    };
+    read(&ledger.store, &prepared.project, &shape)
 }
 
 /// A busy ledger's reason when a capture was not read.

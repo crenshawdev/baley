@@ -47,7 +47,7 @@ impl Tool {
 pub enum Status {
     /// Served by this server.
     Available {
-        /// Whether it needs a project, as `capture`, the one served write, does.
+        /// Whether it needs a project, as `capture` and `document` do.
         needs_project: bool,
     },
     /// Not served here, and the build that replaces it.
@@ -97,7 +97,7 @@ pub const QUERY_OPERATIONS: &[Operation] = &[
     retired("progress", 7),
     retired("suggest", 7),
     retired("why", 8),
-    retired("document", 3),
+    with_project("document"),
     retired("document-search", 8),
     retired("verify-next", 5),
     retired("verification-read", 5),
@@ -321,6 +321,9 @@ enum RequestShape {
     // `capture` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "capture")]
     Capture(#[allow(dead_code)] crate::mcp::capture::CaptureShape),
+    // `document` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "document")]
+    Document(#[allow(dead_code)] crate::mcp::document::DocumentShape),
 }
 
 fn invalid_arguments(reason: impl Into<String>) -> Value {
@@ -624,7 +627,7 @@ mod tests {
         for tool in [Tool::Query, Tool::Apply] {
             for name in names(tool)
                 .into_iter()
-                .filter(|n| !["help", "schema", "instruction", "capture"].contains(n))
+                .filter(|n| !["help", "schema", "instruction", "capture", "document"].contains(n))
             {
                 assert!(
                     matches!(lookup(tool, Some(name)), Lookup::Unavailable { .. }),
@@ -638,6 +641,12 @@ mod tests {
                 needs_project: true
             }
         );
+        assert_eq!(
+            lookup(Tool::Query, Some("document")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
     }
 
     #[test]
@@ -646,7 +655,6 @@ mod tests {
             Lookup::Unavailable { build } => build,
             other => panic!("{name} is {other:?}"),
         };
-        assert_eq!(build(Tool::Query, "document"), 3);
         assert_eq!(build(Tool::Query, "config-entry"), 2);
         assert_eq!(build(Tool::Apply, "config-apply"), 2);
         assert_eq!(build(Tool::Query, "plan-read"), 4);
@@ -704,12 +712,12 @@ mod tests {
 
     #[test]
     fn operation_unavailable_names_the_build_in_words_and_as_an_integer() {
-        let refusal = operation_unavailable(Tool::Query, "document", 3);
+        let refusal = operation_unavailable(Tool::Query, "document-search", 8);
         assert_eq!(refusal["status"], "refused");
         assert_eq!(refusal["code"], "operation-unavailable");
         assert_eq!(refusal["slot"], "operation");
-        assert_eq!(refusal["details"], json!({"build": 3}));
-        assert!(refusal["reason"].as_str().unwrap().contains("Build 3"));
+        assert_eq!(refusal["details"], json!({"build": 8}));
+        assert!(refusal["reason"].as_str().unwrap().contains("Build 8"));
     }
     #[test]
     fn help_answers_what_the_help_table_answers_for_the_same_name() {
@@ -776,6 +784,24 @@ mod tests {
         let query =
             schema_answer(&json!({"operation": "schema", "tool": "query", "for": "capture"}));
         assert_eq!(query["code"], "unknown-operation", "{query}");
+    }
+
+    #[test]
+    fn a_document_schema_left_out_of_the_request_shapes_is_caught() {
+        let answer =
+            schema_answer(&json!({"operation": "schema", "tool": "query", "for": "document"}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        assert_eq!(answer["tool"], "query");
+        assert_eq!(
+            answer["schema"]["properties"]["operation"]["const"],
+            "document"
+        );
+        for property in ["identity", "part"] {
+            assert!(
+                answer["schema"]["properties"].get(property).is_some(),
+                "{property} missing from {answer}"
+            );
+        }
     }
 
     fn sha256_hex(text: &str) -> String {

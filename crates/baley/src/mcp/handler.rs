@@ -6,8 +6,9 @@
 //! admission, and hands an accepted call to the worker, which runs the gate
 //! after the queue and then the operation. A call that needs a project reaches
 //! the operation with a [`Preparation`]: the caller the gate formed, the
-//! call's host, the session's ledger and the server's time. `capture` sets
-//! `needs_project` and prepares its write from it in its [`operate`] arm.
+//! call's host, the session's ledger and the server's time. `capture` and
+//! `document` set `needs_project`, and in their [`operate`] arms `capture`
+//! prepares a write from it and `document` a read.
 //! rmcp has already validated the request's metadata by the time any
 //! of this runs, so a protocol-required metadata error stays a protocol error
 //! and runs nothing.
@@ -30,6 +31,7 @@ use serde_json::Value;
 use super::capture;
 use super::client::{ClientIdentity, Selection, decode_2025, decode_2026, select};
 use super::context::{SessionContext, call_context};
+use super::document;
 use super::gate::{Admitted, After, Called, after_queue, encode};
 use super::operations::{help_answer, instruction_answer, schema_answer, unknown_operation};
 use super::tools::{info, supported_protocol_versions, tool_list, version_answer};
@@ -152,7 +154,7 @@ fn run_decision(
 /// The answer of an admitted operation. It matches the called operation and the
 /// project call's [`Preparation`] together, so an arm that needs a project
 /// names the input in its pattern and the arms that need none ignore it.
-/// `capture` prepares its write from the [`Preparation`].
+/// `capture` prepares a write from the [`Preparation`], and `document` a read.
 fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
     match (called, project) {
@@ -166,6 +168,9 @@ fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparat
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "capture" => {
             capture::serve(arguments_or_null, preparation)
+        }
+        (Called::Operation(_, spelling), Some(preparation)) if spelling == "document" => {
+            document::serve(arguments_or_null, preparation)
         }
         // The gate admits only the spellings above, so a baseline entry marked
         // served with nothing behind it answers as an unknown operation.
@@ -398,5 +403,33 @@ mod tests {
         );
         assert_eq!(answer["status"], "refused", "{answer}");
         assert_eq!(answer["code"], "unknown-kind", "{answer}");
+    }
+
+    #[test]
+    fn a_document_argument_refusal_answered_after_preparation_is_caught() {
+        let caller = ServerCaller::new(
+            "/real/r",
+            "/real/r",
+            "claude-code",
+            "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f",
+            &json!(7),
+        )
+        .unwrap();
+        // No ledger, so a preparation that ran first would answer `failed`.
+        let preparation = Preparation {
+            ledger: None,
+            host: Host::ClaudeCode,
+            caller,
+            at: "2026-10-05T09:00:00Z".into(),
+        };
+        let answer = operate(
+            &Called::Operation(Tool::Query, "document".into()),
+            Some(&json!({"operation": "document",
+                "identity": {"kind": "capture", "id": "c1"},
+                "instruction": "bal-capture"})),
+            Some(&preparation),
+        );
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert_eq!(answer["code"], "invalid-arguments", "{answer}");
     }
 }
