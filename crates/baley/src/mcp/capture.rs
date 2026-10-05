@@ -1,6 +1,8 @@
 //! `capture` on `baley_apply`: one note or story recorded in the ledger as
 //! `capture.recorded` on the project's `capture` stream, under the command
-//! write preparation returned (design 0014 section 5, SUP-R1).
+//! write preparation returned (design 0014 section 5, SUP-R1). Every event
+//! the call appends carries the registry's evidence for the instruction the
+//! session named.
 
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -11,8 +13,9 @@ use baley_core::capture::{
     stored_payload, text_form,
 };
 use baley_store::{
-    Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind, Payloads, Recorded,
-    Refusal as StoreRefusal, RequestId, RetentionClass, StoreError, StreamName, request_digest,
+    Command, CommandKind, Decision, InstructionEvidence, Ledger, NewEvent, Observed, OutcomeKind,
+    Payloads, Recorded, Refusal as StoreRefusal, RequestId, RetentionClass, ServerCaller,
+    StoreError, StreamName, request_digest,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -74,12 +77,14 @@ pub struct JudgedCapture {
     pub text: String,
     /// The named phase, if any.
     pub phase: Option<u32>,
+    /// The registry's evidence for the instruction the session named, if any.
+    pub instruction: Option<InstructionEvidence>,
 }
 
 /// Judges `capture`'s arguments before anything is prepared or recorded:
-/// the shape, then the request id, the kind and the text, in that order. A
-/// fault is the `refused` answer, which records nothing, so a fixed retry
-/// may reuse its request id.
+/// the shape, then the request id, the kind, the text and the instruction,
+/// in that order. A fault is the `refused` answer, which records nothing, so
+/// a fixed retry may reuse its request id.
 pub fn judge_arguments(arguments: &Value) -> Result<JudgedCapture, Value> {
     let shape = match serde_json::from_value::<CaptureCall>(arguments.clone()) {
         Ok(CaptureCall::Capture(shape)) => shape,
@@ -121,6 +126,20 @@ pub fn judge_arguments(arguments: &Value) -> Result<JudgedCapture, Value> {
                 .value(),
         );
     }
+    let instruction = match shape
+        .instruction
+        .as_deref()
+        .map(crate::instruction::evidence)
+    {
+        None => None,
+        Some(Ok(evidence)) => Some(evidence),
+        // The registry's refusal names its read's `identity` argument; here
+        // the session sent the identity as `instruction`.
+        Some(Err(mut refusal)) => {
+            refusal["slot"] = json!("instruction");
+            return Err(refusal);
+        }
+    };
     let phase = shape.phase.map(NonZeroU32::get);
     let digest = request_digest(&json!({
         "command": CAPTURE_COMMAND,
@@ -140,7 +159,23 @@ pub fn judge_arguments(arguments: &Value) -> Result<JudgedCapture, Value> {
         kind,
         text: shape.text,
         phase,
+        instruction,
     })
+}
+
+/// The caller a capture is prepared under: `caller` with `instruction`'s
+/// evidence attached, or `caller` as it is when the session named none.
+/// Preparation records checkout admission, the policy step and the command
+/// under this one caller, so every event of the call carries the evidence.
+fn evidenced(caller: &ServerCaller, instruction: Option<&InstructionEvidence>) -> ServerCaller {
+    match instruction {
+        None => caller.clone(),
+        // The gate's caller carries no evidence, so this is its only entry.
+        Some(evidence) => caller
+            .clone()
+            .with_instructions(vec![evidence.clone()])
+            .expect("one entry is within the caller's instruction limit"),
+    }
 }
 
 /// Records one capture of `kind`, `text` and `phase` under `command`, the
@@ -210,21 +245,23 @@ pub fn record<L: Ledger + ?Sized>(
 
 /// Serves one `capture` call for the session's `preparation`: the arguments
 /// are judged first, and a refusal is answered before anything is prepared
-/// or recorded. Then the write is prepared, which may record checkout
-/// admission and the policy step, and the capture runs in its own
-/// transaction. A `failed` preparation answer is returned as it is.
+/// or recorded. Then the write is prepared under the caller with the
+/// instruction evidence attached, which may record checkout admission and
+/// the policy step, and the capture runs in its own transaction. A `failed`
+/// preparation answer is returned as it is.
 pub fn serve(arguments: &Value, preparation: &Preparation) -> Value {
     let judged = match judge_arguments(arguments) {
         Ok(judged) => judged,
         Err(refusal) => return refusal,
     };
+    let caller = evidenced(&preparation.caller, judged.instruction.as_ref());
     let ledger = preparation.ledger.as_deref();
     // With no ledger, preparation fails at the project check, before any
     // settings are read from the config folder.
     let config = ledger.map_or(Path::new(""), |ledger| ledger.config.as_path());
     let prepared = match prepare(
         ledger.map(|ledger| &ledger.store),
-        &preparation.caller,
+        &caller,
         Some(&judged.request),
         config,
         preparation.host,
@@ -737,13 +774,13 @@ mod tests {
     #[test]
     fn a_digest_that_ignores_the_kind_text_phase_or_instruction_is_caught() {
         let digest = |extra: Value| judge_arguments(&arguments(extra)).unwrap().request.digest;
-        let base = digest(json!({"instruction": "bal-capture"}));
-        assert_eq!(base, digest(json!({"instruction": "bal-capture"})));
+        let base = digest(json!({"instruction": "bal-help"}));
+        assert_eq!(base, digest(json!({"instruction": "bal-help"})));
         for changed in [
-            json!({"instruction": "bal-capture", "kind": "story"}),
-            json!({"instruction": "bal-capture", "text": "keep that"}),
-            json!({"instruction": "bal-capture", "phase": 4}),
-            json!({"instruction": "bal-other"}),
+            json!({"instruction": "bal-help", "kind": "story"}),
+            json!({"instruction": "bal-help", "text": "keep that"}),
+            json!({"instruction": "bal-help", "phase": 4}),
+            json!({"instruction": "bal-read-contract"}),
             json!({}),
         ] {
             assert_ne!(digest(changed.clone()), base, "{changed}");
@@ -907,5 +944,79 @@ mod tests {
         let value = answer(Err(down), &BusyPayloads);
         assert_failed(&value, "ledger-unavailable", "ledger", false);
         assert!(value["reason"].as_str().unwrap().contains("disk full"));
+    }
+
+    #[test]
+    fn an_unknown_instruction_accepted_or_refused_in_the_identity_slot_is_caught() {
+        let refusal = refused(&arguments(json!({"instruction": "bal-nothing"})));
+        assert_eq!(refusal["code"], "unknown-instruction");
+        assert_eq!(refusal["slot"], "instruction");
+    }
+
+    #[test]
+    fn an_unserved_instruction_accepted_or_refused_without_its_build_is_caught() {
+        let refusal = refused(&arguments(json!({"instruction": "bal-plan"})));
+        assert_eq!(refusal["code"], "instruction-unavailable");
+        assert_eq!(refusal["slot"], "instruction");
+        assert_eq!(refusal["details"]["build"], 4);
+    }
+
+    /// The caller a capture with `arguments` is prepared under.
+    fn prepared_caller(arguments: &Value) -> ServerCaller {
+        let judged = judge_arguments(arguments).unwrap();
+        evidenced(&caller(), judged.instruction.as_ref())
+    }
+
+    #[test]
+    fn evidence_missing_from_the_caller_or_not_the_registrys_is_caught() {
+        let formed = prepared_caller(&arguments(json!({"instruction": "bal-help"})));
+        let crate::instruction::Lookup::Served { entry, text } =
+            crate::instruction::lookup("bal-help")
+        else {
+            panic!("bal-help is served");
+        };
+        let [evidence] = formed.instructions() else {
+            panic!("expected one entry, got {:?}", formed.instructions());
+        };
+        assert_eq!(
+            (evidence.identity(), evidence.version(), evidence.hash()),
+            (entry.identity, text.version, text.hash)
+        );
+        let base = caller();
+        assert_eq!(formed.project_directory(), base.project_directory());
+        assert_eq!(formed.working_directory(), base.working_directory());
+        assert_eq!(formed.host(), base.host());
+        assert_eq!(formed.baley_session(), base.baley_session());
+        assert_eq!(formed.call(), base.call());
+    }
+
+    #[test]
+    fn evidence_invented_for_a_capture_that_named_no_instruction_is_caught() {
+        let formed = prepared_caller(&arguments(json!({})));
+        assert!(formed.instructions().is_empty());
+        assert_eq!(formed, caller());
+    }
+
+    #[test]
+    fn a_capture_and_its_completion_recorded_without_the_evidence_is_caught() {
+        let (_dir, store) = store();
+        let judged = judge_arguments(&arguments(json!({"instruction": "bal-help"}))).unwrap();
+        let formed = evidenced(&caller(), judged.instruction.as_ref());
+        let command = prepared_command(&project(), &judged.request, 0, T1, &formed);
+        record(&store, &command, judged.kind, &judged.text, judged.phase).unwrap();
+        let expected = crate::instruction::evidence("bal-help").unwrap();
+        let events = history(&store);
+        for type_name in ["capture.recorded", "command.completed"] {
+            let found = of_type(&events, type_name);
+            assert_eq!(found.len(), 1, "{type_name}");
+            let Some(Caller::Server(recorded)) = &found[0].caller else {
+                panic!("{type_name} has no server caller");
+            };
+            assert_eq!(
+                recorded.instructions(),
+                std::slice::from_ref(&expected),
+                "{type_name}"
+            );
+        }
     }
 }

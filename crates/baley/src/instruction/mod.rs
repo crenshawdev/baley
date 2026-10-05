@@ -225,9 +225,8 @@ pub fn lookup(identity: &str) -> Lookup {
 /// refusal a lookup gives. The version and hash come from the registry alone, so
 /// the ledger never records a claim the binary did not serve.
 ///
-/// Build 3 T8's `capture` is the first caller: it attaches the evidence to the
-/// server caller. `form_caller` and the gate are not changed here, because no
-/// call in this build records anything. That is the seam where T8 plugs in.
+/// `capture` attaches the evidence to the caller it prepares under, so every
+/// event of that call carries it. The gate's caller carries none.
 pub fn evidence(identity: &str) -> Result<InstructionEvidence, Value> {
     match lookup(identity) {
         Lookup::Served { entry, text } => Ok(InstructionEvidence::new(
