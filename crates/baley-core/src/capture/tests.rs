@@ -100,3 +100,34 @@ fn capture_recorded_registered_at_any_version_but_1_is_caught() {
     assert!(!registry.reads("capture.recorded", 2));
     assert!(!registry.reads("capture.recorded", 0));
 }
+
+#[test]
+fn blank_judged_by_emptiness_alone_letting_whitespace_through_is_caught() {
+    for text in ["", "   ", "\t\n \r\n"] {
+        assert!(is_blank(text), "{text:?} is blank");
+    }
+}
+
+#[test]
+fn text_with_a_nul_or_other_control_character_refused_as_blank_is_caught() {
+    for text in ["a\0b", "bell\u{7}", "\u{1b}[31mred"] {
+        assert!(!is_blank(text), "{text:?} is not blank");
+    }
+}
+
+#[test]
+fn an_obsolete_kind_accepted_or_a_near_spelling_taken_for_a_kind_is_caught() {
+    assert_eq!(judge_kind("note"), Ok(CaptureKind::Note));
+    assert_eq!(judge_kind("story"), Ok(CaptureKind::Story));
+    assert_eq!(judge_kind("todo"), Err(UnknownKind::Obsolete("todo")));
+    assert_eq!(judge_kind("seed"), Err(UnknownKind::Obsolete("seed")));
+    assert_eq!(judge_kind("Note"), Err(UnknownKind::Other));
+    assert_eq!(judge_kind(""), Err(UnknownKind::Other));
+}
+
+#[test]
+fn a_named_phase_accepted_when_observed_absent_is_caught() {
+    assert_eq!(judge_phase(None, false), Ok(()));
+    assert_eq!(judge_phase(Some(3), false), Err("no-such-phase"));
+    assert_eq!(judge_phase(Some(3), true), Ok(()));
+}
