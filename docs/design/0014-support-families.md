@@ -209,7 +209,7 @@ stateDiagram-v2
   Declined --> [*]
 ```
 
-*Figure 1. States of a capture. A `note` stays Open; it is a record, not a queue item.*
+*Figure 1. States of a capture. A `note` stays Open; it is a record, not a queue item. A purge of a long capture's body leaves the capture's state and identity in place, and a read of it by identity answers a tombstone with the purge's reason.*
 
 ```mermaid
 stateDiagram-v2
@@ -343,6 +343,49 @@ sequenceDiagram
 ```
 
 *Figure 5. A debug episode. The reproduction comes first: Baley runs it until one run fails with the symptom signature, and refuses any hypothesis before then. The owner may instead close an episode whose symptom never reproduced, with a reason; it then leaves the open debug list. At resolve the owner names no command; Baley first compares the reproduction files with their digests at the red run and refuses the resolve if any changed, then reruns the reproduction recorded at the red run and scans the change the passing run saw. A second reproduce after the red run is refused (`reproduction-fixed`), and so is a close (`episode-reproduced`).*
+
+```mermaid
+sequenceDiagram
+  participant H as Host session
+  participant S as Baley server
+  participant L as Ledger
+  H->>S: baley_apply capture with a request id, kind, text and optional instruction identity
+  alt the arguments are refused
+    S-->>H: refused at once, nothing recorded
+  else the arguments pass
+    S->>S: prepare the write as in 0012 Figure 4
+    S->>L: the capture transaction
+    alt the ledger already holds the request
+      L-->>S: the stored answer
+      S-->>H: the same answer again, nothing new recorded
+    else a phase is named
+      L->>L: command.completed, refused no-such-phase
+      S-->>H: refused no-such-phase, recorded
+    else the text is over 4,096 bytes and those exact bytes were purged
+      L-->>S: the bytes cannot be stored again, nothing recorded
+      S-->>H: failed text-purged, not retryable
+    else
+      opt the text is over 4,096 bytes
+        L->>L: store the text as a record payload
+      end
+      L->>L: capture.recorded on the capture stream
+      L->>L: command.completed with the receipt
+      S-->>H: the receipt, without the text
+    end
+  end
+  H->>S: later, baley_query document with the capture id
+  S->>S: prepare the read, the project found and known
+  S->>L: find the capture in the capture view by its id
+  alt no capture has that id
+    S-->>H: refused no-such-capture
+  else this project released the body
+    S-->>H: a tombstone with the purge's reason
+  else
+    S-->>H: the text, whole or in parts
+  end
+```
+
+*Figure 6. A capture and a later read of it. The server judges the call's arguments first, and a refusal there is answered at once and records nothing. Preparation then runs as in [0012](0012-host-interface.md) Figure 4. In the capture's own transaction, a request the ledger already holds is answered with its stored answer. A named phase is refused `no-such-phase` and recorded as a refused `command.completed` with no `capture.recorded`. Text over 4,096 bytes is stored as a `record` payload, and bytes that were purged before are answered `failed` `text-purged` with nothing recorded. Otherwise `capture.recorded` goes on the `capture` stream, followed by `command.completed` holding the receipt, which never carries the text. A later `document` read by the capture id finds it in the `capture` view and answers the text, whole or in parts, or a tombstone with the purge's reason when this project released the body.*
 
 ## 9. Settings
 
