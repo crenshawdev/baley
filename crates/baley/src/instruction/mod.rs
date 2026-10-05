@@ -11,6 +11,7 @@
 use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
+use crate::help::front_door;
 
 /// The served text of one instruction, pinned in source.
 #[derive(Debug, PartialEq, Eq)]
@@ -159,6 +160,16 @@ pub static ENTRIES: &[Entry] = &[
         identity: "bal-capture",
         build: 3,
         text: None,
+    },
+    // Build 3 serves the help front door, whose words the help area owns.
+    Entry {
+        identity: front_door::IDENTITY,
+        build: 3,
+        text: Some(Text {
+            version: front_door::VERSION,
+            hash: front_door::HASH,
+            body: front_door::TEXT,
+        }),
     },
     // Build 8 adds this text beside its operations.
     Entry {
