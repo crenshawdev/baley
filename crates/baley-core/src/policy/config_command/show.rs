@@ -154,6 +154,8 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::Rung => "rung",
         Kind::ModelName => "model name",
         Kind::RemoteName => "remote name",
+        Kind::OnProtected => "one of ask, refuse or allow",
+        Kind::BranchList => "list of branch names",
     }
 }
 
@@ -170,6 +172,10 @@ fn default_text(default: Builtin) -> String {
         Builtin::Absent => "absent".to_owned(),
         Builtin::Bool(value) => value_text(&Value::Bool(value)),
         Builtin::Rung(rung) => value_text(&Value::Rung(rung)),
+        Builtin::OnProtected(on) => value_text(&Value::OnProtected(on)),
+        Builtin::BranchList(names) => value_text(&Value::BranchList(
+            names.iter().map(|name| (*name).to_owned()).collect(),
+        )),
     }
 }
 

@@ -1621,3 +1621,182 @@ fn the_standard_schema_showing_git_remote_outside_a_project_is_caught() {
         }
     );
 }
+
+fn judge_standard(layer: FileLayer, pairs: &[(&str, &str)]) -> Result<Vec<TypedPair>, SetRefusal> {
+    judge_pairs(Schema::standard(), layer, true, None, pairs)
+}
+
+#[test]
+fn an_on_protected_name_that_is_not_taken_as_its_typed_value_is_caught() {
+    let typed = judge_standard(FileLayer::Project, &[("git.on_protected", "refuse")]).unwrap();
+    assert_eq!(
+        typed,
+        vec![pair(
+            "git.on_protected",
+            None,
+            Value::OnProtected(crate::policy::OnProtected::Refuse)
+        )]
+    );
+}
+
+#[test]
+fn an_on_protected_name_with_other_case_taken_as_a_value_is_caught() {
+    let refusal = judge_standard(FileLayer::Project, &[("git.on_protected", "Allow")])
+        .expect_err("Allow is not a name");
+    assert_eq!(refusal.code(), "invalid-value");
+    assert_eq!(
+        refusal.to_string(),
+        "invalid-value: git.on_protected is \"Allow\", which is not one of ask, refuse, allow"
+    );
+}
+
+#[test]
+fn the_guard_hard_fail_text_that_is_not_a_boolean_taken_as_one_is_caught() {
+    let typed = judge_standard(FileLayer::Project, &[("git.guard_hard_fail", "true")]).unwrap();
+    assert_eq!(
+        typed,
+        vec![pair("git.guard_hard_fail", None, Value::Bool(true))]
+    );
+    let refusal = judge_standard(FileLayer::Project, &[("git.guard_hard_fail", "yes")])
+        .expect_err("yes is not a boolean");
+    assert_eq!(refusal.code(), "invalid-value");
+}
+
+#[test]
+fn an_on_protected_name_rendered_as_anything_but_a_toml_string_is_caught() {
+    let pairs = [pair(
+        "git.on_protected",
+        None,
+        Value::OnProtected(crate::policy::OnProtected::Refuse),
+    )];
+    let bytes = render_file(Schema::standard(), FileLayer::Project, None, &pairs).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[git]\non_protected = \"refuse\"\n"
+    );
+}
+
+#[test]
+fn a_report_of_the_guard_settings_missing_their_kind_default_or_project_scope_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = render_show(&ShowRequest {
+        schema: Schema::standard(),
+        host: None,
+        names: &[
+            "git.protected_branches",
+            "git.on_protected",
+            "git.guard_hard_fail",
+        ],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(
+        lines,
+        vec![
+            "git.protected_branches: kind list of branch names, default [\"main\", \"master\"], scope project",
+            "  global: not set",
+            "  project: not set",
+            "  effective: [\"main\", \"master\"] from default",
+            "git.on_protected: kind one of ask, refuse or allow, default \"ask\", scope project",
+            "  global: not set",
+            "  project: not set",
+            "  effective: \"ask\" from default",
+            "git.guard_hard_fail: kind boolean, default false, scope project",
+            "  global: not set",
+            "  project: not set",
+            "  effective: false from default",
+            "global file: /c/config.toml",
+        ]
+    );
+}
+
+#[test]
+fn a_branch_list_shown_without_quotes_or_in_file_order_is_caught() {
+    let file = settings_file(
+        "/r/baley.toml",
+        "git.protected_branches = [\"release/1\", \"ma\\\"in\"]\n",
+    );
+    let parsed = parse_layer(&file, FileLayer::Project, Schema::standard()).unwrap();
+    let layers = ShowLayers {
+        global: None,
+        working: Some(parsed.clone()),
+        head: Some(parsed),
+    };
+    let lines = render_show(&ShowRequest {
+        schema: Schema::standard(),
+        host: None,
+        names: &["git.protected_branches"],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(lines[2], "  project: [\"release/1\", \"ma\\\"in\"]");
+}
+
+#[test]
+fn a_branch_list_set_taken_as_a_string_or_pointed_at_the_wrong_file_is_caught() {
+    for layer in [FileLayer::Project, FileLayer::Global] {
+        let refusal = judge_standard(layer, &[("git.protected_branches", "main")])
+            .expect_err("a list is never set from the command line");
+        assert_eq!(
+            refusal,
+            SetRefusal::ListNotSettable {
+                name: "git.protected_branches".into()
+            },
+            "{layer:?}"
+        );
+        assert_eq!(refusal.code(), "list-not-settable");
+        let text = refusal.to_string();
+        assert!(text.starts_with("list-not-settable: "), "{text}");
+        assert!(text.contains("git.protected_branches"), "{text}");
+        assert!(text.contains("does not write lists"), "{text}");
+        assert!(text.contains("baley.toml"), "{text}");
+        assert!(!text.contains("--project"), "{text}");
+    }
+}
+
+#[test]
+fn an_unknown_name_beside_a_branch_list_not_refused_as_unknown_first_is_caught() {
+    let refusal = judge_standard(
+        FileLayer::Project,
+        &[("git.protected_branches", "main"), ("git.nonsense", "1")],
+    )
+    .expect_err("refused");
+    assert_eq!(
+        refusal,
+        SetRefusal::UnknownSetting {
+            name: "git.nonsense".into()
+        }
+    );
+}
+
+#[test]
+fn a_branch_list_beside_a_wrong_layer_pair_not_refused_as_the_list_is_caught() {
+    // `git.remote` is project-scoped, so --global would be wrong-layer for it.
+    let refusal = judge_standard(
+        FileLayer::Global,
+        &[("git.remote", "origin"), ("git.protected_branches", "main")],
+    )
+    .expect_err("refused");
+    assert_eq!(refusal.code(), "list-not-settable");
+}
+
+#[test]
+fn a_branch_list_set_outside_a_project_not_refused_as_not_a_project_first_is_caught() {
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Project,
+        false,
+        None,
+        &[("git.protected_branches", "main")],
+    )
+    .expect_err("refused");
+    assert_eq!(refusal, SetRefusal::NotAProject);
+}

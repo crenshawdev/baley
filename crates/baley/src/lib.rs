@@ -57,6 +57,8 @@ pub mod discovery;
 pub mod exec;
 /// Platform configuration and ledger folders.
 pub mod folders;
+/// Classifies one hook call's input for the guard: which tool it is and what it carries.
+pub mod hook_input;
 /// `baley init`: ties a repository to a ledger project.
 pub mod init;
 /// The owner's provider keys, read from `keys.env`.
@@ -69,6 +71,8 @@ pub mod mcp;
 pub mod models;
 /// The policy step: records the effective policy a command ran under when it changed.
 pub mod policy_step;
+/// Which paths the guard protects, and the decisions that judge a tool call's paths against them.
+pub mod protected_paths;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
 /// The two settings files as bytes: the global file's path and one reader.

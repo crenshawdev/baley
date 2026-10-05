@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::{INVALID_VALUE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
+use super::{INVALID_VALUE, LIST_NOT_SETTABLE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
 use crate::policy::{
-    AcceptedNames, FileLayer, Host, Kind, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
+    AcceptedNames, FileLayer, Host, Kind, OnProtected, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
 };
 
 /// One pair of a set after its name and value are judged.
@@ -27,6 +27,11 @@ pub enum SetRefusal {
     NotAProject,
     /// The schema has no setting of this name.
     UnknownSetting {
+        /// The name as given.
+        name: String,
+    },
+    /// The setting is a list, which `config set` does not write.
+    ListNotSettable {
         /// The name as given.
         name: String,
     },
@@ -66,6 +71,7 @@ impl SetRefusal {
         match self {
             SetRefusal::NotAProject => NOT_A_PROJECT,
             SetRefusal::UnknownSetting { .. } => UNKNOWN_SETTING,
+            SetRefusal::ListNotSettable { .. } => LIST_NOT_SETTABLE,
             SetRefusal::WrongLayer { .. } => WRONG_LAYER,
             SetRefusal::InvalidValue { .. } => INVALID_VALUE,
             SetRefusal::UnknownModel { .. } => UNKNOWN_MODEL,
@@ -83,6 +89,11 @@ impl fmt::Display for SetRefusal {
             SetRefusal::UnknownSetting { name } => {
                 write!(f, "{} is not a setting Baley reads", name.escape_debug())
             }
+            SetRefusal::ListNotSettable { name } => write!(
+                f,
+                "{} is a list, and config set does not write lists; edit the list in baley.toml",
+                name.escape_debug()
+            ),
             SetRefusal::WrongLayer { name, scope, layer } => {
                 let (scope, file, flag) = match (scope, layer) {
                     (Scope::Project, _) => ("project", "global", "--project"),
@@ -105,6 +116,14 @@ impl fmt::Display for SetRefusal {
                     }
                     Kind::ModelName => "a model name (any non-empty text)".to_owned(),
                     Kind::RemoteName => "a git remote name (any non-empty text)".to_owned(),
+                    Kind::OnProtected => {
+                        let names: Vec<&str> = OnProtected::ALL
+                            .into_iter()
+                            .map(OnProtected::name)
+                            .collect();
+                        format!("one of {}", names.join(", "))
+                    }
+                    Kind::BranchList => "a list of branch names".to_owned(),
                 };
                 write!(
                     f,
@@ -163,6 +182,9 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::Rung => Rung::parse(text).map(Value::Rung),
         Kind::ModelName => (!text.is_empty()).then(|| Value::ModelName(text.to_owned())),
         Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
+        Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
+        // A list is edited in `baley.toml`, so no command-line text is one.
+        Kind::BranchList => None,
     }
 }
 
@@ -171,7 +193,9 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
 ///
 /// Each check runs over every pair before the next begins, so the refusal is
 /// the earliest check any pair fails, naming the first pair that fails it:
-/// `not-a-project`, `unknown-setting`, `wrong-layer`, then `invalid-value`.
+/// `not-a-project`, `unknown-setting`, `list-not-settable`, `wrong-layer`, then
+/// `invalid-value`. A list is refused before its layer is judged, so both files
+/// get the same answer, to edit `baley.toml`.
 /// A host comes only from `host`, so a name written with a `host.<name>.`
 /// prefix is unknown. A setting given twice comes back twice, so each value
 /// given can still be checked against the catalog.
@@ -192,6 +216,13 @@ pub fn judge_pairs(
             return Err(SetRefusal::UnknownSetting { name });
         };
         entries.push(entry);
+    }
+    for ((name, _), entry) in pairs.iter().zip(&entries) {
+        if entry.kind == Kind::BranchList {
+            return Err(SetRefusal::ListNotSettable {
+                name: (*name).to_owned(),
+            });
+        }
     }
     for ((name, _), entry) in pairs.iter().zip(&entries) {
         if excludes(entry.scope, layer) {

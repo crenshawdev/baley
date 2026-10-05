@@ -32,3 +32,7 @@ pub const WRONG_LAYER: &str = "wrong-layer";
 
 /// The code of a project-file action outside a project.
 pub const NOT_A_PROJECT: &str = "not-a-project";
+
+/// The code of a set that names a list setting, which `config set` does not
+/// write: the owner edits the list in `baley.toml`.
+pub const LIST_NOT_SETTABLE: &str = "list-not-settable";

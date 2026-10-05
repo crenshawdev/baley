@@ -594,3 +594,37 @@ fn the_standard_schemas_recorded_values_dropping_git_remote_is_caught() {
     let values = payload(&unset, 0)["values"].clone();
     assert_eq!(values.get("git.remote"), Some(&json!(null)));
 }
+
+fn standard_values(text: Option<&str>) -> Value {
+    let project = text.map(|text| file(PROJECT, text, "p1"));
+    let policy = effective_policy(Schema::standard(), None, None, project.as_ref()).unwrap();
+    payload(&policy, 0)["values"].clone()
+}
+
+#[test]
+fn the_guard_settings_dropped_from_or_garbled_in_the_recorded_policy_are_caught() {
+    let unset = standard_values(None);
+    assert_eq!(unset["git.on_protected"], json!("ask"));
+    assert_eq!(unset["git.guard_hard_fail"], json!(false));
+    let set = standard_values(Some(
+        "[git]\non_protected = \"refuse\"\nguard_hard_fail = true\n",
+    ));
+    assert_eq!(set["git.on_protected"], json!("refuse"));
+    assert_eq!(set["git.guard_hard_fail"], json!(true));
+}
+
+#[test]
+fn the_branch_list_recorded_as_a_string_or_dropped_is_caught() {
+    assert_eq!(
+        standard_values(None)["git.protected_branches"],
+        json!(["main", "master"])
+    );
+    assert_eq!(
+        standard_values(Some("git.protected_branches = [\"trunk\"]\n"))["git.protected_branches"],
+        json!(["trunk"])
+    );
+    assert_eq!(
+        standard_values(Some("git.protected_branches = []\n"))["git.protected_branches"],
+        json!([])
+    );
+}

@@ -109,6 +109,8 @@ fn value_json(value: Option<&Value>) -> Json {
         Some(Value::Rung(rung)) => rung.name().into(),
         Some(Value::ModelName(name)) => name.clone().into(),
         Some(Value::RemoteName(name)) => name.clone().into(),
+        Some(Value::OnProtected(on)) => on.name().into(),
+        Some(Value::BranchList(names)) => names.clone().into(),
     }
 }
 

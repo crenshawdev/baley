@@ -94,6 +94,38 @@ impl Rung {
     }
 }
 
+/// What the guard does with a commit on a protected branch, the value of
+/// `git.on_protected` (design 0010, GRD-R5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OnProtected {
+    /// Ask the owner each time.
+    Ask,
+    /// Deny the commit.
+    Refuse,
+    /// Let the commit through.
+    Allow,
+}
+impl OnProtected {
+    /// Every value, in the order the design lists them.
+    pub const ALL: [OnProtected; 3] = [OnProtected::Ask, OnProtected::Refuse, OnProtected::Allow];
+
+    /// The name a settings file writes.
+    pub fn name(self) -> &'static str {
+        match self {
+            OnProtected::Ask => "ask",
+            OnProtected::Refuse => "refuse",
+            OnProtected::Allow => "allow",
+        }
+    }
+
+    /// The value with exactly this name, if any; case is not folded.
+    pub fn parse(name: &str) -> Option<OnProtected> {
+        OnProtected::ALL
+            .into_iter()
+            .find(|value| value.name() == name)
+    }
+}
+
 /// A host whose section a settings file may hold (design 0012 section 6).
 ///
 /// The type stays generic on purpose. A host is added here, with its adapter,
@@ -143,6 +175,10 @@ pub enum Kind {
     /// A non-empty string naming a git remote. Whether the repository has that
     /// remote is the forge's exact-name check, not the schema's.
     RemoteName,
+    /// One of `ask`, `refuse` or `allow`.
+    OnProtected,
+    /// A list of branch names, possibly empty. Each is a non-blank string.
+    BranchList,
 }
 
 /// A setting's built-in value.
@@ -154,12 +190,20 @@ pub enum Default {
     Bool(bool),
     /// A rung.
     Rung(Rung),
+    /// An `on_protected` value.
+    OnProtected(OnProtected),
+    /// A static list of branch names.
+    BranchList(&'static [&'static str]),
 }
 impl Default {
     fn fits(self, kind: Kind) -> bool {
         matches!(
             (self, kind),
-            (Default::Absent, _) | (Default::Bool(_), Kind::Bool) | (Default::Rung(_), Kind::Rung)
+            (Default::Absent, _)
+                | (Default::Bool(_), Kind::Bool)
+                | (Default::Rung(_), Kind::Rung)
+                | (Default::OnProtected(_), Kind::OnProtected)
+                | (Default::BranchList(_), Kind::BranchList)
         )
     }
 }
@@ -208,8 +252,8 @@ impl Schema {
         Schema { entries }
     }
 
-    /// Build 2's schema: each role's model and effort, `escalate_on_failure`
-    /// and `git.remote`.
+    /// The schema: each role's model and effort, `escalate_on_failure`,
+    /// `git.remote` and the guard's settings under `git`.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -248,6 +292,27 @@ impl Schema {
                 default: Default::Absent,
                 scope: Scope::Project,
                 owner: "0001",
+            });
+            entries.push(Entry {
+                name: "git.protected_branches".into(),
+                kind: Kind::BranchList,
+                default: Default::BranchList(&["main", "master"]),
+                scope: Scope::Project,
+                owner: "0010",
+            });
+            entries.push(Entry {
+                name: "git.on_protected".into(),
+                kind: Kind::OnProtected,
+                default: Default::OnProtected(OnProtected::Ask),
+                scope: Scope::Project,
+                owner: "0010",
+            });
+            entries.push(Entry {
+                name: "git.guard_hard_fail".into(),
+                kind: Kind::Bool,
+                default: Default::Bool(false),
+                scope: Scope::Project,
+                owner: "0010",
             });
             Schema::new(entries)
         })

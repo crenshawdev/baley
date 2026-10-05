@@ -3,6 +3,7 @@ use baley::process::Process;
 use baley::rail::branch::{self, Permission};
 use baley::store::model::digest;
 use baley::store::writer::audit::{self, Audit, Outcome, PolicyEvidence, Verb};
+use baley_core::guard::{GitVerb, git_verb, reason};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,111 +44,13 @@ fn project(cwd: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Linear bounded scan. Unsupported shell structure declines the entire input.
-fn verb(command: &str) -> Option<Verb> {
-    let mut quote = None;
-    let mut word = String::new();
-    let mut started = false;
-    let mut words = Vec::new();
-    let mut push = false;
-    let mut commit = false;
-    let mut chars = command.chars();
-    let finish_word = |word: &mut String, started: &mut bool, words: &mut Vec<String>| {
-        if *started {
-            words.push(std::mem::take(word));
-            *started = false;
-        }
-    };
-    let segment = |words: &mut Vec<String>, push: &mut bool, commit: &mut bool| {
-        if words
-            .first()
-            .is_some_and(|head| head == "git" || head.ends_with("/git"))
-        {
-            let mut i = 1;
-            while i < words.len() {
-                let word = &words[i];
-                if matches!(
-                    word.as_str(),
-                    "-C" | "-c"
-                        | "--git-dir"
-                        | "--work-tree"
-                        | "--namespace"
-                        | "--exec-path"
-                        | "--config-env"
-                ) {
-                    i += 2;
-                } else if word.starts_with('-') {
-                    i += 1;
-                } else {
-                    *push |= word == "push";
-                    *commit |= word == "commit";
-                    break;
-                }
-            }
-        }
-        words.clear();
-    };
-    while let Some(ch) = chars.next() {
-        if ch == '\0' {
-            return None;
-        }
-        if quote == Some('\'') {
-            if ch == '\'' {
-                quote = None;
-            } else {
-                word.push(ch);
-            }
-            continue;
-        }
-        if ch == '\\' {
-            let escaped = chars.next()?;
-            if escaped != '\n' {
-                word.push(escaped);
-                started = true;
-            }
-            continue;
-        }
-        if matches!(ch, '$' | '`') {
-            return None;
-        }
-        if quote == Some('"') {
-            if ch == '"' {
-                quote = None;
-            } else {
-                word.push(ch);
-            }
-            continue;
-        }
-        match ch {
-            '\'' | '"' => {
-                quote = Some(ch);
-                started = true;
-            }
-            ';' | '|' | '&' | '\n' => {
-                finish_word(&mut word, &mut started, &mut words);
-                segment(&mut words, &mut push, &mut commit);
-            }
-            '(' | ')' | '{' | '}' | '<' | '>' => return None,
-            '#' if !started => return None,
-            ch if ch.is_ascii_whitespace() => finish_word(&mut word, &mut started, &mut words),
-            ch => {
-                word.push(ch);
-                started = true;
-            }
-        }
-    }
-    if quote.is_some() {
-        return None;
-    }
-    finish_word(&mut word, &mut started, &mut words);
-    segment(&mut words, &mut push, &mut commit);
-    if push {
-        Some(Verb::Push)
-    } else if commit {
-        Some(Verb::Commit)
-    } else {
-        None
-    }
+/// The failures as one line of text for a reason.
+fn describe(failures: &[audit::Unavailable]) -> String {
+    failures
+        .iter()
+        .map(|failure| format!("{}: {}", failure.input, failure.reason))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn unavailable(input: impl Into<String>, reason: impl Into<String>) -> audit::Unavailable {
@@ -374,6 +277,7 @@ fn commit_decision(
     process: &mut dyn Process,
 ) -> bool {
     let torn = !failures.is_empty();
+    let torn_text = describe(&failures);
     let (branch, observation_failures) = branch_observation(&audit.cwd, process);
     let observed = observation_failures.is_empty();
     failures.extend(observation_failures);
@@ -405,22 +309,21 @@ fn commit_decision(
     } else {
         Outcome::Pass
     };
-    audit.reason = match audit.outcome {
-        Outcome::Deny if failure_denies => format!("Baley rail: git.guard_hard_fail=true denies a commit on provably protected branch {:?} while guard inputs are unavailable.", branch),
-        Outcome::Deny => format!("Baley rail: git.on_protected=refuse denies a commit on protected branch {:?}.", branch),
-        Outcome::Ask => format!("Baley rail: permission is required before this commit on branch {:?}.", branch),
-        Outcome::FailurePass => "Baley guard failure: command proceeds without a Baley permission veto; this is not policy approval.".into(),
-        Outcome::Pass => "Baley protected-branch policy supplies no permission veto.".into(),
+    let unread = format!("Baley could not read an input ({})", describe(&failures));
+    audit.reason = match (&audit.outcome, branch.as_deref()) {
+        (Outcome::Deny, Some(name)) if failure_denies => {
+            if policy.hard_fail && policy.protected.iter().any(|p| p == name) {
+                reason::hard_fail_deny(name, &unread)
+            } else {
+                reason::remembered_hard_fail_deny(&torn_text, &unread, name)
+            }
+        }
+        (Outcome::Deny, Some(name)) => reason::refuse_deny(name),
+        (Outcome::Ask, _) if torn => reason::torn_ask(&torn_text, branch.as_deref()),
+        (Outcome::Ask, Some(name)) => reason::protected_ask(name),
+        (Outcome::FailurePass, _) => reason::failure_pass(&unread),
+        _ => "Baley protected-branch policy supplies no permission veto.".into(),
     };
-    if torn {
-        audit.reason.push_str(" The protected-branch list or controlling settings are unavailable: the branch rails are deciding with defaults rather than the user's settings. Fix the named layer or approve deliberately.");
-    }
-    for failure in &failures {
-        audit.reason.push_str(&format!(
-            " Unavailable {}: {}.",
-            failure.input, failure.reason
-        ));
-    }
     if !failures.is_empty() {
         eprintln!("{}", audit.reason);
     }
@@ -465,7 +368,10 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
     {
         return ExitCode::SUCCESS;
     }
-    let Some(verb) = verb(&event.tool_input.command) else {
+    let Some(verb) = git_verb(&event.tool_input.command).map(|verb| match verb {
+        GitVerb::Commit => Verb::Commit,
+        GitVerb::Push => Verb::Push,
+    }) else {
         return ExitCode::SUCCESS;
     };
     let Some(project) = project(&event.cwd) else {
@@ -480,9 +386,15 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
         crate::session::SessionFactory::new(global.clone(), std::sync::Arc::new(|_, _| Ok(())));
     let mut audit = Audit {
         event_id: audit::event_identity(event.session_id.as_deref(), event.tool_use_id.as_deref()),
-        command_digest: digest(event.tool_input.command.as_bytes()), cwd: event.cwd,
-        project: project.clone(), verb, branch: None, policy: None, outcome: Outcome::Ask,
-        unavailable: vec![], reason: "Baley rail: every Bash git push requires permission. Approve only if you are deliberately publishing.".into(),
+        command_digest: digest(event.tool_input.command.as_bytes()),
+        cwd: event.cwd,
+        project: project.clone(),
+        verb,
+        branch: None,
+        policy: None,
+        outcome: Outcome::Ask,
+        unavailable: vec![],
+        reason: reason::push_ask(),
     };
     let runtime = match tokio::runtime::Builder::new_current_thread().build() {
         Ok(runtime) => runtime,
@@ -538,21 +450,5 @@ mod tests {
             failures[0].reason,
             "git symbolic-ref --quiet --short HEAD exceeded git deadline of 9 seconds"
         );
-    }
-
-    use super::{Verb, verb};
-
-    // The Bash guard decides on a Git push or commit, never on the files a
-    // command names: an owned output named without one is no decision.
-    #[test]
-    fn a_command_naming_an_owned_file_is_judged_by_its_git_verb_alone() {
-        for command in [
-            "cat .planning/state.json",
-            "rm .planning/decisions.jsonl",
-            "cp draft.md .planning/phases/6/SUMMARY.md",
-        ] {
-            assert_eq!(verb(command), None, "{command}");
-        }
-        assert_eq!(verb("git commit .planning/state.json"), Some(Verb::Commit));
     }
 }
