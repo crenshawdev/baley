@@ -2,6 +2,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::help::front_door;
 use crate::instruction::{self, Lookup};
 
 #[derive(Serialize)]
@@ -179,13 +180,30 @@ pub fn render_description(name: &str, markdown: &str) -> Option<String> {
     ))
 }
 
+/// What Baley does, in plain words, for a session that asks for help.
+const ABOUT: &str = "Baley keeps AI coding agents accountable to the person who answers for their work. It records what the agents did, and the proof that it works, in a hash-chained ledger the owner controls, and it refuses to let work move on an unproven claim. Claude Code is the host it serves.";
+
+/// The request a session follows so the ledger can say which instruction guided a write.
+const REQUEST: &str = "Send `bal-help` as `instruction` on every `baley_apply` call you make while following help, and on no `baley_query` call.";
+
+/// The help instruction's identity, version and hash, as the registry serves them.
+fn help_instruction() -> Value {
+    match instruction::lookup(front_door::IDENTITY) {
+        Lookup::Served { entry, text } => {
+            json!({"identity":entry.identity, "version":text.version, "hash":text.hash})
+        }
+        _ => panic!("the help instruction is served, and a test checks it"),
+    }
+}
+
 pub fn answer(name: Option<&str>) -> Value {
     let Some(name) = name else {
         let clusters: Vec<_> = CLUSTERS.iter().map(|cluster| json!({
             "name": cluster,
             "commands": COMMANDS.iter().filter(|row| row.cluster == *cluster).map(row).collect::<Vec<_>>(),
         })).collect();
-        return json!({"status":"ok", "clusters":clusters});
+        return json!({"status":"ok", "clusters":clusters, "about":ABOUT,
+            "instruction":help_instruction(), "request":REQUEST});
     };
     let name = name.strip_prefix('/').unwrap_or(name);
     let name = name.strip_prefix("bal-").unwrap_or(name);
@@ -208,7 +226,8 @@ pub fn answer(name: Option<&str>) -> Value {
         ranked.sort_unstable();
         closest.extend(ranked.into_iter().take(3).map(|(_, name)| name));
     }
-    json!({"status":"ok", "rows":rows, "closest":closest})
+    json!({"status":"ok", "rows":rows, "closest":closest, "about":ABOUT,
+        "instruction":help_instruction(), "request":REQUEST})
 }
 
 fn edit_distance(left: &str, right: &str) -> usize {
@@ -297,5 +316,55 @@ mod tests {
             triple(&help["rows"].as_array().unwrap()[0]),
             ("bal-help".to_owned(), true, 3)
         );
+    }
+
+    #[test]
+    fn both_help_answers_carry_the_registrys_help_identity_version_and_hash() {
+        let Lookup::Served { entry, text } = instruction::lookup("bal-help") else {
+            panic!("bal-help is served");
+        };
+        for answer in [answer(None), answer(Some("plan"))] {
+            let carried = &answer["instruction"];
+            assert_eq!(carried["identity"], entry.identity);
+            assert_eq!(carried["version"], text.version);
+            assert_eq!(carried["hash"], text.hash);
+        }
+    }
+
+    #[test]
+    fn both_help_answers_ask_for_bal_help_as_instruction_on_baley_apply() {
+        for answer in [answer(None), answer(Some("plan"))] {
+            let request = answer["request"].as_str().expect("a request sentence");
+            for needle in ["`bal-help`", "`instruction`", "`baley_apply`"] {
+                assert!(request.contains(needle), "the request lost {needle}");
+            }
+        }
+    }
+
+    #[test]
+    fn both_help_answers_say_what_baley_does_and_name_claude_code() {
+        for answer in [answer(None), answer(Some("plan"))] {
+            let about = answer["about"].as_str().expect("an about sentence");
+            assert!(about.contains("ledger") && about.contains("Claude Code"));
+        }
+    }
+
+    #[test]
+    fn no_help_answer_names_a_read_build_3_does_not_serve_or_a_skills_path() {
+        let forbidden = [
+            "`document`",
+            "\"document\"",
+            "document-search",
+            ".planning",
+            "skills/",
+            "SKILL.md",
+            "CLAUDE_PLUGIN_ROOT",
+        ];
+        for answer in [answer(None), answer(Some("plan"))] {
+            let text = answer.to_string();
+            for word in forbidden {
+                assert!(!text.contains(word), "a help answer contains {word}");
+            }
+        }
     }
 }
