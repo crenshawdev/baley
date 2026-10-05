@@ -197,9 +197,10 @@ fn the_read_contract_stays_within_a_description_and_keeps_its_paging_and_host_to
 #[test]
 fn the_help_evidence_takes_its_version_and_hash_from_the_registry_not_the_binary() {
     let evidence = evidence("bal-help").unwrap();
+    // The list is append-only, so the newest row is the last one for the identity.
     let (_, version, hash) = SERVED_EVER
         .iter()
-        .find(|(identity, _, _)| *identity == "bal-help")
+        .rfind(|(identity, _, _)| *identity == "bal-help")
         .unwrap();
     assert_eq!(evidence.identity(), "bal-help");
     assert_eq!(evidence.version(), *version);
