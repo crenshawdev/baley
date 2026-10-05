@@ -283,7 +283,13 @@ pub fn operation_unavailable(tool: Tool, spelling: &str, build: u32) -> Value {
 #[serde(tag = "operation", deny_unknown_fields)]
 enum RequestShape {
     #[serde(rename = "help")]
-    Help { name: Option<String> },
+    Help {
+        /// The command to show, with or without a leading slash or `bal-` prefix.
+        name: Option<String>,
+        /// One-based part for answers over 24,576 bytes; defaults to 1.
+        /// Concatenate the returned bodies in order.
+        part: Option<usize>,
+    },
     #[serde(rename = "schema")]
     Schema {
         /// The tool whose operation is requested: apply or query.
@@ -310,12 +316,28 @@ fn invalid_arguments(reason: impl Into<String>) -> Value {
         .value()
 }
 
-/// Answers `help` for the optional `name`. An unknown field is refused.
+/// Answers `help` for the optional `name`, in parts when large. An unknown
+/// field is refused.
 pub fn help_answer(arguments: &Value) -> Value {
     match serde_json::from_value::<RequestShape>(arguments.clone()) {
-        Ok(RequestShape::Help { name }) => crate::help::table::answer(name.as_deref()),
+        Ok(RequestShape::Help { name, part }) => {
+            help_part(crate::help::table::answer(name.as_deref()), part)
+        }
         Ok(_) => invalid_arguments("these are not help arguments"),
         Err(error) => invalid_arguments(error.to_string()),
+    }
+}
+
+/// The help answer whole when it fits, or one numbered part of its JSON text.
+fn help_part(answer: Value, part: Option<usize>) -> Value {
+    let serialized = serde_json::to_string(&answer).expect("help answer JSON");
+    match cut(&serialized, part) {
+        Cut::Whole(_) => answer,
+        Cut::Part { body, part, next } => serde_json::json!({"status":"ok",
+        "bound":PART_BOUND,"part":part,"body":body,"next":next}),
+        Cut::Absent => Refusal::new("help-part-not-found", "the requested help part is absent")
+            .slot("part")
+            .value(),
     }
 }
 
@@ -667,6 +689,17 @@ mod tests {
             help_answer(&json!({"operation": "help", "name": "baley_query"})),
             crate::help::table::answer(Some("baley_query"))
         );
+    }
+
+    #[test]
+    fn help_part_1_is_the_whole_answer_and_part_2_of_a_fitting_answer_is_refused() {
+        let first = help_answer(&json!({"operation": "help", "part": 1}));
+        // The table's own answer, so a fitting answer wrapped as a part cannot equal it.
+        assert_eq!(first, crate::help::table::answer(None));
+        let second = help_answer(&json!({"operation": "help", "part": 2}));
+        assert_eq!(second["code"], "help-part-not-found", "{second}");
+        assert_eq!(second["slot"], "part");
+        assert_eq!(second["status"], "refused");
     }
 
     #[test]
