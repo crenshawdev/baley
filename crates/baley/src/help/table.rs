@@ -103,7 +103,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "bal-capture",
         cluster: "Support",
-        description: "Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item.",
+        description: "Record a note, or a story candidate for the backlog, in the ledger.",
     },
     Command {
         name: "bal-help",
@@ -352,6 +352,13 @@ mod tests {
             let about = answer["about"].as_str().expect("an about sentence");
             assert!(about.contains("ledger") && about.contains("Claude Code"));
         }
+    }
+
+    #[test]
+    fn a_capture_row_still_offering_todos_or_seeds_or_missing_a_kind_is_caught() {
+        let described = description("bal-capture");
+        assert!(described.contains("note") && described.contains("story"));
+        assert!(!described.contains("todo") && !described.contains("seed"));
     }
 
     #[test]
