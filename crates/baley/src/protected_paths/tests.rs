@@ -659,6 +659,21 @@ fn a_wildcard_inside_a_protected_folders_name_still_checks_the_folder_above_it()
 }
 
 #[test]
+fn a_relative_pattern_joined_to_the_cwd_instead_of_the_calls_path_is_caught() {
+    let fs = read_tree();
+    assert!(is_deny(&read(
+        "/p",
+        Some("/u/.claude"),
+        Some("../.config/baley/*"),
+        &fs
+    )));
+    assert_eq!(
+        read("/u/.config", Some("/p"), Some("baley/*"), &fs),
+        Answer::Pass
+    );
+}
+
+#[test]
 fn a_parent_step_after_a_wildcard_refuses_the_call() {
     let fs = read_tree();
     assert!(is_deny(&read("/p", None, Some("src/*/../../.."), &fs)));
