@@ -105,7 +105,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "bal-help",
         cluster: "Support",
-        description: "List Baley commands shipped under skills/ by cluster, or show one command and its compiled description.",
+        description: "List Baley commands by cluster, or show one command and its compiled description.",
     },
     Command {
         name: "bal-spike",
