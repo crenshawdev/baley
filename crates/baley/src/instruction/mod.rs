@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use crate::envelope::Refusal;
 use crate::help::front_door;
 
+pub mod read_contract;
+
 /// The served text of one instruction, pinned in source.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Text {
@@ -188,6 +190,16 @@ pub static ENTRIES: &[Entry] = &[
         identity: "bal-why",
         build: 8,
         text: None,
+    },
+    // Build 3 serves the read contract, which belongs to the host interface.
+    Entry {
+        identity: read_contract::IDENTITY,
+        build: 3,
+        text: Some(Text {
+            version: read_contract::VERSION,
+            hash: read_contract::HASH,
+            body: read_contract::TEXT,
+        }),
     },
 ];
 

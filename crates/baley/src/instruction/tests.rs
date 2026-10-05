@@ -87,11 +87,18 @@ fn a_loose_spelling_of_a_registered_identity_is_unknown() {
 /// Every (identity, version, hash) this registry has served, written out by
 /// hand. Rows are only ever added: a changed text gets a new version and a new
 /// row, and the old row stays so the old pair is never reused.
-const SERVED_EVER: &[(&str, &str, &str)] = &[(
-    "bal-help",
-    "1",
-    "6a546a62197f3070cdfa4725732e5f8e3c00d21addf3b77696459c0dcb469cad",
-)];
+const SERVED_EVER: &[(&str, &str, &str)] = &[
+    (
+        "bal-help",
+        "1",
+        "6a546a62197f3070cdfa4725732e5f8e3c00d21addf3b77696459c0dcb469cad",
+    ),
+    (
+        "bal-read-contract",
+        "1",
+        "4feb8474b44d0f4b85290797064cc1e57a369f5b3afdc0ca866afe8ea7d6c217",
+    ),
+];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
     ENTRIES
@@ -163,4 +170,26 @@ fn the_help_text_asks_for_its_identity_on_apply_calls_only() {
     assert!(body.contains("`bal-help`") && body.contains("`instruction`"));
     assert!(body.contains("on every `baley_apply` call"));
     assert!(body.contains("Never send it on a `baley_query` call"));
+}
+
+#[test]
+fn the_read_contract_stays_within_a_description_and_keeps_its_paging_and_host_tools_rules() {
+    let Lookup::Served { text, .. } = lookup("bal-read-contract") else {
+        panic!("bal-read-contract is served");
+    };
+    let body = text.body;
+    assert!(
+        body.chars().count() <= 2048,
+        "{} characters",
+        body.chars().count()
+    );
+    for needle in [
+        "\"operation\":\"instruction\"",
+        "\"identity\"",
+        "part",
+        "next",
+        "host's own",
+    ] {
+        assert!(body.contains(needle), "the read contract lost {needle}");
+    }
 }
