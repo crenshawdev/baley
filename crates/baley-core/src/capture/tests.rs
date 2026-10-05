@@ -113,7 +113,7 @@ fn blank_judged_by_emptiness_alone_letting_whitespace_through_is_caught() {
 
 #[test]
 fn text_with_a_nul_or_other_control_character_refused_as_blank_is_caught() {
-    for text in ["a\0b", "bell\u{7}", "\u{1b}[31mred"] {
+    for text in ["a\0b", "bell\u{7}", "\u{1b}[31mred", "\0", "\u{7}\u{1b}"] {
         assert!(!is_blank(text), "{text:?} is not blank");
     }
 }
@@ -319,13 +319,49 @@ fn a_malformed_purge_payload_accepted_into_the_view_is_caught() {
 
 #[test]
 fn a_capture_and_its_purge_folding_differently_on_a_rebuild_is_caught() {
-    let fold = || {
-        let projector = CaptureProjector::new();
-        let payload = stored_payload("c2", CaptureKind::Story, None, &body());
-        let recorded = put(projector.apply(&recorded(9, payload), &[]).unwrap());
-        put(projector
-            .apply(&purge(12, json!([[9, "ab".repeat(32)]])), &[recorded])
-            .unwrap())
-    };
-    assert_eq!(fold(), fold());
+    // A rebuild starts from no documents and hands the projector only the
+    // documents its keys name, as the store does on a replay.
+    let projector = CaptureProjector::new();
+    let events = [
+        recorded(
+            7,
+            inline_payload("c1", CaptureKind::Note, None, "keep this"),
+        ),
+        recorded(9, stored_payload("c2", CaptureKind::Story, None, &body())),
+        purge(12, json!([[9, "ab".repeat(32)]])),
+    ];
+    let mut view = std::collections::BTreeMap::new();
+    for event in &events {
+        let read: Vec<(DocKey, Value)> = projector
+            .keys(event)
+            .into_iter()
+            .filter_map(|key| view.get(&key).cloned().map(|body| (key, body)))
+            .collect();
+        for change in projector.apply(event, &read).unwrap() {
+            match change {
+                Change::Put { key, body } => {
+                    view.insert(key, body);
+                }
+                Change::Delete { key } => {
+                    view.remove(&key);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        view.into_iter().collect::<Vec<_>>(),
+        [
+            (
+                DocKey(vec![KeyValue::Integer(7)]),
+                json!({"seq": 7, "id": "c1", "kind": "note", "phase": null, "bytes": 9,
+                    "recorded_at": AT, "text": "keep this"})
+            ),
+            (
+                DocKey(vec![KeyValue::Integer(9)]),
+                json!({"seq": 9, "id": "c2", "kind": "story", "phase": null, "bytes": 4097,
+                    "recorded_at": AT, "hash": "ab".repeat(32), "state": "purged",
+                    "reason": REASON})
+            ),
+        ]
+    );
 }
