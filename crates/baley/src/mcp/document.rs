@@ -3,13 +3,20 @@
 //! or from its body by hash, and a body this project purged answers a
 //! tombstone (design 0012 operations, design 0014 section 6).
 
-use baley_store::{Hash, PayloadStatus};
+use std::io::Read;
+
+use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW};
+use baley_store::{
+    Hash, IndexQuery, KeyValue, PageRequest, PayloadBody, PayloadStatus, Payloads, ProjectId, Views,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
+use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::{Cut, PART_BOUND, cut};
+use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 
 /// The code for a capture id the project's `capture` view does not hold.
 pub const NO_SUCH_CAPTURE: &str = "no-such-capture";
@@ -173,6 +180,78 @@ pub fn no_such_capture() -> Value {
     .value()
 }
 
+/// A busy ledger's reason when a capture was not read.
+const NOT_READ_BUSY: &str = "the ledger is busy, so the capture was not read. Try it again";
+
+/// Reads the capture `shape` names from `project` in `store`: its view
+/// document by id, then its body only when the view says this project still
+/// holds it. Nothing is appended.
+pub fn read<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    shape: &DocumentShape,
+) -> Value {
+    let Identity::Capture { id } = &shape.identity;
+    let query = IndexQuery {
+        index: CAPTURE_ID_INDEX.into(),
+        equals: vec![KeyValue::Text(id.clone())],
+        page: PageRequest {
+            limit: 1,
+            after: None,
+        },
+    };
+    let found = match store.find(project, CAPTURE_VIEW, &query) {
+        Ok(page) => page.items.into_iter().next(),
+        Err(error) => return store_failed(&error, NOT_READ_BUSY),
+    };
+    let Some(found) = found else {
+        return no_such_capture();
+    };
+    let unreadable = || {
+        failed(
+            LEDGER_UNAVAILABLE,
+            "the capture is recorded, but its view document cannot be read",
+            PLACE_LEDGER,
+        )
+    };
+    let Some(document) = CaptureDocument::from_value(&found.body) else {
+        return unreadable();
+    };
+    let hash = match document.source() {
+        Some(Source::Ready(content)) => {
+            return answer(&shape.identity, &document, content, shape.part);
+        }
+        Some(Source::Open(hash)) => hash,
+        None => return unreadable(),
+    };
+    match store.open(&hash) {
+        Err(error) => store_failed(&error, NOT_READ_BUSY),
+        Ok(PayloadBody::Gone(status)) => match Content::gone(&status) {
+            Some(content) => answer(&shape.identity, &document, content, shape.part),
+            None => failed(
+                LEDGER_UNAVAILABLE,
+                "the capture is recorded, but its body is not held whole",
+                PLACE_LEDGER,
+            ),
+        },
+        Ok(PayloadBody::Present(mut reader)) => {
+            let mut bytes = Vec::new();
+            if let Err(error) = reader.read_to_end(&mut bytes) {
+                return failed(LEDGER_UNAVAILABLE, error.to_string(), PLACE_LEDGER);
+            }
+            // The body was stored from the capture's UTF-8 text.
+            match String::from_utf8(bytes) {
+                Ok(text) => answer(&shape.identity, &document, Content::Text(&text), shape.part),
+                Err(_) => failed(
+                    LEDGER_UNAVAILABLE,
+                    "the capture is recorded, but its body is not UTF-8 text",
+                    PLACE_LEDGER,
+                ),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +362,178 @@ mod tests {
             assert_eq!(refusal["status"], "refused", "{arguments}");
             assert_eq!(refusal["code"], "invalid-arguments", "{arguments}");
             assert_eq!(refusal["slot"], "arguments", "{arguments}");
+        }
+    }
+
+    mod reads {
+        use baley_core::capture::{CaptureKind, capture_id};
+        use baley_store::{
+            Actor, Admin, Command, CommandKind, HistoryFilter, Ledger, PayloadRef, RequestId,
+            ServerCaller,
+        };
+        use baley_store_sqlite::SqliteStore;
+
+        use super::super::*;
+        use crate::mcp::capture::{CAPTURE_COMMAND, record};
+        use crate::mcp::prepare::{WriteRequest, prepared_command};
+
+        const T0: &str = "2026-10-05T09:00:00Z";
+        const T1: &str = "2026-10-05T09:00:01Z";
+        const A: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+        const B: &str = "7a2d3b5f-9c0e-4f1a-8b2c-3d4e5f6a7b8c";
+        const SESSION: &str = "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f";
+        const REQUEST: &str = "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f";
+        const PURGE: &str = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";
+
+        fn project(id: &str) -> ProjectId {
+            ProjectId(id.into())
+        }
+
+        /// A real store in a fresh temporary directory, holding A and B.
+        fn store() -> (tempfile::TempDir, SqliteStore) {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let store =
+                crate::ledger::open::store(&home, T0, crate::ledger::open::options()).unwrap();
+            store.create_project(&project(A), "a", T0).unwrap();
+            store.create_project(&project(B), "b", T0).unwrap();
+            (dir, store)
+        }
+
+        /// Records `text` as a note in `id`'s project and gives its capture id.
+        fn capture(store: &SqliteStore, id: &str, text: &str) -> String {
+            let request = WriteRequest {
+                kind: CommandKind(CAPTURE_COMMAND.into()),
+                request_id: RequestId(REQUEST.into()),
+                digest: Hash([1; 32]),
+            };
+            let caller =
+                ServerCaller::new("/real/r", "/real/r", "claude-code", SESSION, &json!(7)).unwrap();
+            let command = prepared_command(&project(id), &request, 0, T1, &caller);
+            record(store, &command, CaptureKind::Note, text, None).unwrap();
+            capture_id(REQUEST, CaptureKind::Note, text, None)
+        }
+
+        /// The body hash of the one long capture in `id`'s project.
+        fn body_hash(store: &SqliteStore, id: &str) -> Hash {
+            let page = PageRequest {
+                limit: 100,
+                after: None,
+            };
+            let events = store
+                .history(&project(id), 1..=1000, &HistoryFilter::default(), page)
+                .unwrap()
+                .items;
+            let captured = events
+                .iter()
+                .find(|event| event.type_name == "capture.recorded")
+                .expect("a capture");
+            PayloadRef::from_value(&captured.payload["body"])
+                .expect("a body")
+                .hash
+        }
+
+        fn purge(store: &SqliteStore, id: &str, hash: Hash, reason: &str) {
+            let command = Command {
+                project: project(id),
+                kind: CommandKind("payload.purge".into()),
+                request_id: RequestId(PURGE.into()),
+                digest: Hash([9; 32]),
+                scope: vec![],
+                policy_version: 0,
+                recorded_at: T1.into(),
+                actor: Actor::Owner,
+                caller: None,
+            };
+            store.purge(&command, &[hash], reason).unwrap();
+        }
+
+        fn head(store: &SqliteStore, id: &str) -> u64 {
+            store.head(&project(id)).unwrap().map_or(0, |head| head.seq)
+        }
+
+        fn shape(id: &str) -> DocumentShape {
+            DocumentShape {
+                identity: Identity::Capture { id: id.into() },
+                part: None,
+            }
+        }
+
+        /// 4,097 bytes: one over the inline limit, so stored as a payload.
+        fn long() -> String {
+            format!("{}x", "🦀".repeat(1024))
+        }
+
+        #[test]
+        fn a_short_capture_not_read_back_or_its_read_appending_is_caught() {
+            let (_dir, store) = store();
+            let id = capture(&store, A, "keep this");
+            let before = head(&store, A);
+            let value = read(&store, &project(A), &shape(&id));
+            assert_eq!(
+                value,
+                json!({"status": "ok", "identity": {"kind": "capture", "id": id},
+                    "kind": "note", "phase": null, "bytes": 9, "recorded_at": T1,
+                    "text": "keep this"})
+            );
+            assert_eq!(head(&store, A), before);
+        }
+
+        #[test]
+        fn a_purged_long_capture_served_or_its_tombstone_lost_on_rebuild_is_caught() {
+            let (_dir, store) = store();
+            let id = capture(&store, A, &long());
+            purge(&store, A, body_hash(&store, A), "pasted a secret");
+            let value = read(&store, &project(A), &shape(&id));
+            assert_eq!(
+                value["tombstone"],
+                json!({"state": "purged", "reason": "pasted a secret"}),
+                "{value}"
+            );
+            assert!(value.get("text").is_none() && value.get("body").is_none());
+            store.rebuild(&project(A)).unwrap();
+            assert_eq!(read(&store, &project(A), &shape(&id)), value);
+        }
+
+        #[test]
+        fn a_purged_body_resurrected_from_another_projects_copy_is_caught() {
+            let (_dir, store) = store();
+            let text = long();
+            let in_a = capture(&store, A, &text);
+            let in_b = capture(&store, B, &text);
+            let hash = body_hash(&store, A);
+            purge(&store, A, hash, "pasted a secret");
+            // B still requires the body, so the store would hand it over: only
+            // A's view can say A released it.
+            let PayloadBody::Present(mut reader) = store.open(&hash).unwrap() else {
+                panic!("B keeps the body");
+            };
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, text.as_bytes());
+
+            let from_a = read(&store, &project(A), &shape(&in_a));
+            assert_eq!(
+                from_a["tombstone"],
+                json!({"state": "purged", "reason": "pasted a secret"}),
+                "{from_a}"
+            );
+            assert!(from_a.get("text").is_none(), "{from_a}");
+            let from_b = read(&store, &project(B), &shape(&in_b));
+            assert_eq!(from_b["text"], json!(text), "{from_b}");
+            assert!(from_b.get("tombstone").is_none(), "{from_b}");
+        }
+
+        #[test]
+        fn an_unknown_id_answered_as_anything_but_no_such_capture_or_appending_is_caught() {
+            let (_dir, store) = store();
+            capture(&store, A, "keep this");
+            let before = head(&store, A);
+            let value = read(&store, &project(A), &shape(&"0".repeat(64)));
+            assert_eq!(value["status"], "refused", "{value}");
+            assert_eq!(value["code"], "no-such-capture");
+            assert_eq!(value["slot"], "identity");
+            assert_eq!(head(&store, A), before);
         }
     }
 

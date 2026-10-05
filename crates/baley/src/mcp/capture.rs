@@ -35,7 +35,8 @@ pub const TEXT_PURGED: &str = "text-purged";
 /// The code for a request id already used for a different capture.
 pub const REQUEST_ID_REUSE: &str = "request-id-reuse";
 
-const PLACE_LEDGER: &str = "ledger";
+/// The place a ledger fault names.
+pub(crate) const PLACE_LEDGER: &str = "ledger";
 
 // `schema` serves this same declaration, so its doc comments are wire text.
 /// The arguments `capture` takes beside its `operation`. Unknown fields are
@@ -299,7 +300,7 @@ pub fn answer(result: Result<Recorded, StoreError>, payloads: &dyn Payloads) -> 
         Ok(Recorded::New { outcome, .. } | Recorded::Replayed { outcome }) => {
             match answer_value(&outcome.answer, payloads) {
                 Ok(value) => value,
-                Err(AnswerUnread::Read(error)) => store_failed(&error),
+                Err(AnswerUnread::Read(error)) => store_failed(&error, NOT_RECORDED_BUSY),
                 Err(AnswerUnread::Gone(_)) => failed(
                     LEDGER_UNAVAILABLE,
                     "the capture is recorded, but its stored answer is no longer held",
@@ -323,23 +324,25 @@ pub fn answer(result: Result<Recorded, StoreError>, payloads: &dyn Payloads) -> 
             "this exact text was purged from the ledger and cannot be stored again, so nothing was recorded",
             "text",
         ),
-        Err(error) => store_failed(&error),
+        Err(error) => store_failed(&error, NOT_RECORDED_BUSY),
     }
 }
 
-/// A store fault's answer: only a busy ledger may be retried unchanged.
-fn store_failed(error: &StoreError) -> Value {
+/// A busy ledger's reason when a capture was not recorded.
+const NOT_RECORDED_BUSY: &str = "the ledger is busy, so the capture was not recorded. Try it again";
+
+/// A store fault's answer, with `busy` as a busy ledger's reason: only a
+/// busy ledger may be retried unchanged. `document` maps its read faults
+/// here too.
+pub(crate) fn store_failed(error: &StoreError, busy: &str) -> Value {
     match error {
-        StoreError::Busy => failed(
-            LEDGER_BUSY,
-            "the ledger is busy, so the capture was not recorded. Try it again",
-            PLACE_LEDGER,
-        ),
+        StoreError::Busy => failed(LEDGER_BUSY, busy, PLACE_LEDGER),
         error => failed(LEDGER_UNAVAILABLE, error.to_string(), PLACE_LEDGER),
     }
 }
 
-fn failed(code: &str, reason: impl Into<String>, place: &str) -> Value {
+/// A `failed` answer, which is never recorded.
+pub(crate) fn failed(code: &str, reason: impl Into<String>, place: &str) -> Value {
     serde_json::to_value(Envelope::<Value>::failed(code, reason.into(), place))
         .expect("a failed answer serializes")
 }
