@@ -2,8 +2,8 @@
 //! operations exist and in what order a call's faults are answered, then the
 //! queue, the worker and the transports that carry the calls. The judging is
 //! pure and tested with supplied values. The stdio, the worker thread and the
-//! store are reached only by the gathering in `serve`, `transport`, `worker`
-//! and `prepare`.
+//! store are reached only by the gathering in `serve`, `transport`, `worker`,
+//! `prepare` and `capture`.
 
 /// The session's project, working directory and ids, gathered once and judged.
 pub mod context;
@@ -49,3 +49,6 @@ pub mod serve;
 
 /// Prepares a session's project read or write from its own project directory.
 pub mod prepare;
+
+/// Records a note or story as one `capture.recorded` in its own domain transaction.
+pub mod capture;
