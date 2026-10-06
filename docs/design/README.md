@@ -49,7 +49,7 @@ Each design document states its requirements with stable identifiers: the docume
 
 Build issues, pull requests, tests and the instructions Baley serves cite the identifiers they satisfy, so any rule in the code traces back to its requirement.
 
-A reference to something not written yet is written `[TARGET]`, so it is visible and searchable (`grep -rn "\[TARGET\]" docs/`). A document is finished when no unresolved `[TARGET]` remains.
+A reference to something not written yet uses `TARGET` enclosed in square brackets, so it is visible and searchable. A document is finished when no unresolved placeholder remains.
 
 ## Diagrams
 

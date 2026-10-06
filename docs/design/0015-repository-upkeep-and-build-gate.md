@@ -8,11 +8,15 @@
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | [0001: Evidence ledger](0001-evidence-ledger.md), [0012: Host interface](0012-host-interface.md), [ADR 0009: Served instructions](../adr/0009-served-instructions.md), [ADR 0027: Vendor folders and plain keys](../adr/0027-vendor-folders-and-plain-keys.md), [ADR 0033: Host security bar](../adr/0033-host-security-bar.md), [ADR 0034: One server per session](../adr/0034-one-server-per-session.md) |
 
+The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
+
 ## 1. Purpose and scope
 
 Baley uses one public name, describes its built state accurately, and requires a reproducible set of checks before changes reach `main`. This area defines those names, the treatment of project history, repository metadata and labels, the formatting gate, and the evidence used to assess the test suite's cost.
 
-The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. Its HST-R17 and the delivery design own how an existing registration is replaced. The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
+The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. How Baley is delivered, who writes the host files and how an existing registration is replaced wait on the owner's delivery decision under [HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [roadmap's held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
+
+Cadence is Baley's predecessor project, a separately maintained tool that can still be registered in the same host.
 
 This design changes no runtime architecture, dependency, port or adapter. It produces no new ADR and changes no accepted ADR body.
 
@@ -24,7 +28,7 @@ This area uses the existing [glossary](../../CONTEXT.md) terms without changing 
 |---|---|
 | Host | Claude Code, the program whose session connects to Baley over MCP ([0012](0012-host-interface.md#2-terms)) |
 | Server | The Baley process one host session starts over stdio ([0012](0012-host-interface.md#2-terms)) |
-| Stub | A file the host needs to list or launch an instruction, rendered from Baley's tables ([0012](0012-host-interface.md#2-terms)) |
+| Stub | A file a host needs on disk to list or launch something, rendered by Baley from its tables and pointing at Baley ([0012](0012-host-interface.md#2-terms)) |
 | Build | A slice of Baley's own development in the [roadmap](../roadmap.md), separate from a managed project's phase |
 | Requirement | A numbered design rule with a stable identifier, reason and status |
 
@@ -33,16 +37,16 @@ This area uses the existing [glossary](../../CONTEXT.md) terms without changing 
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
 | UPK-R1 | The executable and MCP server are `baley`; the tools are `baley_version`, `baley_query` and `baley_apply`; instruction and agent identities use `bal-`. | Host configuration, advertised tools and instructions must agree. | HST-R5, HST-R12 | Active |
-| UPK-R2 | Installation never replaces a separately owned Cadence registration by name alone; registration replacement is specified by the delivery design and HST-R17. | An occupied name does not establish ownership. | HST-R16, HST-R17 | Active |
-| UPK-R3 | Existing Baley spellings in inherited configuration, records and renderers remain consistent until their consumers are removed; upkeep does not rewrite stored bytes. | Record markers and hash inputs are contracts, not display text. | Design 0001, section 6 | Active |
-| UPK-R4 | The historical mentions listed in section 6 remain, without becoming aliases; baseline performance material describes the replaced store without its project name. | Product history is separate from a supported interface. | Section 6 | Active |
-| UPK-R5 | `main` requires `cargo-test`, `clippy`, `cargo-deny` and `fmt`, with strict up-to-date checks and the expected check producer preserved; `fmt` becomes required only after its job exists and passes. | The gate includes formatting without requiring a result no workflow can produce. | Section 8 | Active |
+| UPK-R2 | Installation never replaces a separately owned Cadence registration by name alone; registration replacement waits on the owner's delivery decision under [HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). | An occupied name does not establish ownership. | HST-R16, HST-R17 | Active |
+| UPK-R3 | Existing Baley spellings in inherited configuration, records and renderers remain consistent until their consumers are removed; upkeep does not rewrite stored bytes. | Record markers and hash inputs are contracts, not display text. | [0001: Compatibility and migration](0001-evidence-ledger.md#compatibility-and-migration) | Active |
+| UPK-R4 | The historical mentions listed in section 6 remain, without becoming aliases; baseline performance material describes the replaced store without its project name. | Product history is separate from a supported interface. | | Active |
+| UPK-R5 | `main` requires `cargo-test`, `clippy`, `cargo-deny` and `fmt`, with strict up-to-date checks and the expected check producer preserved; `fmt` becomes required only after its job exists and passes. | The gate includes formatting without requiring a result no workflow can produce. | | Active |
 | UPK-R6 | Formatting uses the exact toolchain in `rust-toolchain.toml`, explicitly installs that toolchain's `rustfmt`, and runs `cargo fmt --all --check`. | A minimal toolchain installation does not supply every optional component. | UPK-R5 | Active |
 | UPK-R7 | Repository metadata and README status describe the built product and supported host, using section 9's values. | Public entry points must describe the same project. | ADR 0033 | Active |
-| UPK-R8 | New work uses `design`, `bug`, `question`, `dependencies` and `rust` as applicable; `enhancement` keeps its existing assignments and is not used for new work; only the seven unused labels in section 9 are removed. | Removing a used label erases classification. | Section 9 | Active |
-| UPK-R9 | The bug form requires one of section 9's three impact choices, independently of project priority. | Only the reporter knows what the problem costs them. | Section 9 | Active |
-| UPK-R10 | Suite cost is measured at the implementation commit without a competing build, with six build jobs and six test threads, full per-file executed counts, the twenty slowest cases plus ties, and an assessment of every represented file. | Elapsed time and source counts do not establish test value. | Sections 5, 6 and 8 | Active |
-| UPK-R11 | The repository build default is six jobs, nextest commands explicitly set six build jobs and six test threads, and clippy explicitly uses `-j 6`. | Compilation and test execution have separate concurrency limits. | Section 5 | Active |
+| UPK-R8 | New work uses `design`, `bug`, `question`, `dependencies` and `rust` as applicable; `enhancement` keeps its assignments on 53 closed issues and is not used for new work; only the seven unused labels in section 9 are removed. | Removing a used label erases classification. | | Active |
+| UPK-R9 | The bug form requires one of section 9's three impact choices, independently of project priority. | Only the reporter knows what the problem costs them. | | Active |
+| UPK-R10 | Suite cost is measured at the implementation commit without a competing build, with six build jobs and six test threads, full per-file executed counts, the twenty slowest cases plus ties, and an assessment of every represented file. | Elapsed time and source counts do not establish test value. | UPK-R11 | Active |
+| UPK-R11 | The repository build default is six jobs, nextest commands explicitly set six build jobs and six test threads, and clippy explicitly uses `-j 6`. | Compilation and test execution have separate concurrency limits. | | Active |
 | UPK-Q1 | Every old-name match is classified, and no active Baley interface uses an old name. | A zero-match rule would erase intentional history. | UPK-R1, UPK-R4 | Active |
 | UPK-Q2 | The format gate rejects a formatting defect and accepts its correction without modifying source, and the applied branch rules require its exact context. | A local formatter or an optional job alone does not enforce the gate. | UPK-R5, UPK-R6 | Active |
 | UPK-Q3 | The suite report reconciles discovered, executed, passed, failed, ignored and filtered cases with its retained output and source mapping; no unit test asserts on timing. | Measurement must be reproducible without making tests depend on machine speed. | UPK-R10 | Active |
@@ -172,7 +176,7 @@ The isolated formatting revision is already recorded at [.git-blame-ignore-revs:
 
 Claude Code is the only supported host ([ADR 0033](../adr/0033-host-security-bar.md)). It starts `baley serve` once per session, as specified by [0012, HST-R16](0012-host-interface.md#3-requirements). The owner does not start the server. This command is the session server, with no temporary launch compatibility or Build 9 removal.
 
-The canonical server and tool names remain those in UPK-R1. An installation preserves a separately owned registration rather than inferring ownership from its name. How an existing Baley registration is replaced, and how the installation writes host configuration, are owned by the delivery design and [0012, HST-R17](0012-host-interface.md#3-requirements). This area specifies neither a replacement algorithm nor a second set of tool aliases.
+The canonical server and tool names remain those in UPK-R1. An installation preserves a separately owned registration rather than inferring ownership from its name. How Baley is delivered, who writes the host files and how an existing Baley registration is replaced wait on the owner's delivery decision under [0012, HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). This area specifies neither a replacement algorithm nor a second set of tool aliases.
 
 ### Test assessment
 
@@ -234,22 +238,22 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 
 | Requirement | Status | Where |
 |---|---|---|
-| UPK-R1 | Built names | Package, executable and session server: [Cargo.toml:2](../../crates/baley/Cargo.toml#L2), [main.rs:18](../../crates/baley/src/main.rs#L18), [mcp/tools.rs:58-120](../../crates/baley/src/mcp/tools.rs#L58). Instruction registry: [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). Installed stubs are not established by these definitions |
-| UPK-R2 | Not built as an installation | The CLI has no installer ([main.rs:24-95](../../crates/baley/src/main.rs#L24)); installation and delivery remain owned by [0012, HST-R17](0012-host-interface.md#3-requirements) |
-| UPK-R3 | Built retained spellings | The definitions in section 6 remain; services are parked at [inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1), and the guard still reads the inherited path at [guard/mod.rs:123](../../crates/baley/src/guard/mod.rs#L123) |
+| UPK-R1 | Built | Package, executable and session server: [Cargo.toml:2](../../crates/baley/Cargo.toml#L2), [main.rs:18](../../crates/baley/src/main.rs#L18), [mcp/tools.rs:58-120](../../crates/baley/src/mcp/tools.rs#L58). Instruction registry: [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). Installed stubs are not established by these definitions |
+| UPK-R2 | Not built | The CLI has no installer ([main.rs:24-95](../../crates/baley/src/main.rs#L24)); registration replacement under [0012, HST-R17](0012-host-interface.md#3-requirements) waits on the owner's delivery decision, carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) |
+| UPK-R3 | Built | The definitions in section 6 remain; services are parked at [inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1), and the guard still reads the inherited path at [guard/mod.rs:123](../../crates/baley/src/guard/mod.rs#L123) |
 | UPK-R4 | Built | The six retained passages and unnamed benchmark material are cited in section 6 |
 | UPK-R5, UPK-Q2 | Not built | [test.yml:15-119](../../.github/workflows/test.yml#L15) defines three jobs and no `fmt`; applied rules require only those three contexts |
-| UPK-R6 | Partly built | Exact toolchain at [rust-toolchain.toml:11](../../rust-toolchain.toml#L11), formatting revision at [.git-blame-ignore-revs:2](../../.git-blame-ignore-revs#L2); no format job in [test.yml](../../.github/workflows/test.yml) |
-| UPK-R7 | Partly built | [README:5,23,25,33](../../README.md#L5) describes the status, host, design and three existing checks; GitHub's topics still include `codex`, outside section 9's supported-host set |
-| UPK-R8 | Not built | The live assignment inventory in section 9 still has thirteen labels |
+| UPK-R6 | Not built | Exact toolchain at [rust-toolchain.toml:11](../../rust-toolchain.toml#L11); [test.yml](../../.github/workflows/test.yml) has no format job that installs its `rustfmt` component and runs the check |
+| UPK-R7 | Built | README describes the [status:5](../../README.md#L5), [host:23](../../README.md#L23), [three required checks:33](../../README.md#L33) and [contribution policy:37](../../README.md#L37). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
+| UPK-R8 | Not built | Section 9's inventory has thirteen labels; [#50](https://github.com/crenshawdev/baley/issues/50) owns removal of the seven unused labels, preserving `enhancement` on its 53 closed issues without using it for new work |
 | UPK-R9 | Not built | [bug.yml:1-25](../../.github/ISSUE_TEMPLATE/bug.yml#L1) has no impact field |
-| UPK-R10, UPK-Q3 | Not measured | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) remains open |
-| UPK-R11 | Partly built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets eight build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) sets six test threads; [test.yml:60,89](../../.github/workflows/test.yml#L60) omits explicit build and test limits |
-| UPK-Q1 | Source inventory passes | Section 6 classifies every retained match; no active source uses an old name |
+| UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
+| UPK-R11 | Partly built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets eight build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) sets six test threads; [test.yml:60,89](../../.github/workflows/test.yml#L60) omits explicit build and test limits. [#49](https://github.com/crenshawdev/baley/issues/49) owns the six-job build default and the explicit nextest and clippy limits |
+| UPK-Q1 | Built | Section 6 classifies every retained match; no active source uses an old name |
 
 The applied `main` rules, read on 2026-10-06, come from ruleset `23995653`. They require `cargo-test`, `clippy` and `cargo-deny`, each from integration `15368`, with `strict_required_status_checks_policy: true` and `do_not_enforce_on_create: false`. The endpoint also reports deletion and non-fast-forward protection, required signatures, and a pull-request rule with resolved review threads, dismissed stale approvals, zero required approving reviews, and merge or squash. It does not establish bypass configuration.
 
-The workflow pins nextest 0.9.144 at [test.yml:55](../../.github/workflows/test.yml#L55) and cargo-deny 0.20.2 at [test.yml:115](../../.github/workflows/test.yml#L115). [#52](https://github.com/crenshawdev/baley/issues/52) and [#53](https://github.com/crenshawdev/baley/issues/53) are closed; the rename and isolated formatting landed in [PR #133](https://github.com/crenshawdev/baley/pull/133). [#49](https://github.com/crenshawdev/baley/issues/49), [#50](https://github.com/crenshawdev/baley/issues/50) and [#54](https://github.com/crenshawdev/baley/issues/54) remain open. Their implementation status is separate from this design's acceptance.
+The workflow pins nextest 0.9.144 at [test.yml:55](../../.github/workflows/test.yml#L55) and cargo-deny 0.20.2 at [test.yml:115](../../.github/workflows/test.yml#L115).
 
 ### Static test counts
 
@@ -270,4 +274,4 @@ The count does not expand macros or resolve binary membership. For example, [led
 
 | Question | Decided by |
 |---|---|
-| How does installation replace an existing Baley registration while preserving separately owned entries? | The delivery design, at the installation boundary owned by [0012, HST-R17](0012-host-interface.md#3-requirements) |
+| How does installation replace an existing Baley registration while preserving separately owned entries? | The owner's delivery decision under [0012, HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [roadmap's held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) |
