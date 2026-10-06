@@ -95,6 +95,7 @@ Work is tracked on GitHub.
 - **Milestones** take their names from Asimov's Robot and Foundation stories, and each one's description states its theme in plain words. Never a version number: versions are assigned when a release ships. Working branches take names from the same stories.
 - **Design issues** are labelled `design`. Their pull requests carry the design documents.
 - **Build issues** are opened from an accepted design, one per slice of work, each citing the requirements it delivers.
+- **Phases** carry a build's work, and each is accepted against truths. A phase states its acceptance criteria as truths in the form [0005](0005-context-plans-and-acceptance.md) gives (PLN-R2: one trigger, one observer, one outcome). The phase's plan binds every truth it serves to exactly one named check in an evidence map, naming the test file and function (or, for a truth about the documents, the command and its expected output), the unit it exercises, the seam it uses, the expected result taken from the truth, and the break the check must fail under. The check is run red before the behaviour is built and green after, and both runs are recorded. Verification names the check beside each truth, and a truth whose check is missing is not met.
 - **Pull requests** link their issue and cite requirement identifiers. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) and are signed.
 
 ## What these documents are not
