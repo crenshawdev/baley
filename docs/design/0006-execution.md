@@ -92,7 +92,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 
 ## 5. Commands and operations
 
-Operations are typed operations on the host interface; the owner-only ones are also command-line commands under `baley exec`. Every request carries a request id and is answered once (EVD-R26).
+Operations are typed operations on the host interface; the owner-only ones also have command-line entries. Their command-group spelling is left to Build 5. The credential-injection command is removed by [ADR 0039](../adr/0039-session-owned-provider-credentials.md), so execution does not reuse its contract. Every request carries a request id and is answered once (EVD-R26).
 
 ### execution admit, execution extend
 
@@ -416,3 +416,4 @@ The binary parks the inherited engine for Build 9 to delete, and nothing in prod
 | Question | Decided by |
 |---|---|
 | The exact report formats Baley reads beside the exit code, per language | [0012: Host interface](0012-host-interface.md) with the process port |
+| What command-group spelling exposes the owner execution operations after removal of the credential-injection command? | Build 5, at the execution command-line entry. This does not assign removal of the built key wrapper, which remains unassigned under ADR 0039. |
