@@ -33,8 +33,8 @@ pub enum Event {
     InputEnded,
     /// The process was told to terminate.
     Terminate,
-    /// No decision is running and none waits. The caller sends it as soon as
-    /// the worker says so, which for an empty queue is at once.
+    /// No decision is running or waiting, and no answer remains unsent. The
+    /// caller sends it as soon as the worker reports that state.
     QueueDrained,
     /// This long has passed since the first end event.
     Elapsed(Duration),

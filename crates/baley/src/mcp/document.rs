@@ -122,17 +122,6 @@ pub enum Content<'a> {
     Purged(&'a str),
 }
 
-impl<'a> Content<'a> {
-    /// The content a gone body stands for: a purge's tombstone. None for any
-    /// other status, since a capture's body is a `record`, never reduced.
-    pub fn gone(status: &'a PayloadStatus) -> Option<Self> {
-        match status {
-            PayloadStatus::Purged { reason } => Some(Self::Purged(reason)),
-            _ => None,
-        }
-    }
-}
-
 /// The answer for `identity`'s `document` with `content` and the requested
 /// `part`. Every answer, and every part of a long text, carries the
 /// identity, the capture's kind, phase, byte count and recording time. A
@@ -228,6 +217,17 @@ pub fn read<S: Views + Payloads + ?Sized>(
     project: &ProjectId,
     shape: &DocumentShape,
 ) -> Value {
+    match find_capture(store, project, shape) {
+        Ok(document) => read_document(store, project, shape, &document),
+        Err(answer) => answer,
+    }
+}
+
+fn find_capture<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    shape: &DocumentShape,
+) -> Result<CaptureDocument, Value> {
     let Identity::Capture { id } = &shape.identity;
     let query = IndexQuery {
         index: CAPTURE_ID_INDEX.into(),
@@ -239,38 +239,52 @@ pub fn read<S: Views + Payloads + ?Sized>(
     };
     let found = match store.find(project, CAPTURE_VIEW, &query) {
         Ok(page) => page.items.into_iter().next(),
-        Err(error) => return store_failed(&error, NOT_READ_BUSY),
+        Err(error) => return Err(store_failed(&error, NOT_READ_BUSY)),
     };
     let Some(found) = found else {
-        return no_such_capture();
+        return Err(no_such_capture());
     };
-    let unreadable = || {
-        failed(
-            LEDGER_UNAVAILABLE,
-            "the capture is recorded, but its view document cannot be read",
-            PLACE_LEDGER,
-        )
-    };
-    let Some(document) = CaptureDocument::from_value(&found.body) else {
-        return unreadable();
-    };
+    CaptureDocument::from_value(&found.body).ok_or_else(unreadable)
+}
+
+fn unreadable() -> Value {
+    failed(
+        LEDGER_UNAVAILABLE,
+        "the capture is recorded, but its view document cannot be read",
+        PLACE_LEDGER,
+    )
+}
+
+/// Resolves a view observation's content. A purge after that observation
+/// needs the project's current view, since a body's status is global.
+fn read_document<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    shape: &DocumentShape,
+    document: &CaptureDocument,
+) -> Value {
     let hash = match document.source() {
         Some(Source::Ready(content)) => {
-            return answer(&shape.identity, &document, content, shape.part);
+            return answer(&shape.identity, document, content, shape.part);
         }
         Some(Source::Open(hash)) => hash,
         None => return unreadable(),
     };
     match store.open(&hash) {
         Err(error) => store_failed(&error, NOT_READ_BUSY),
-        Ok(PayloadBody::Gone(status)) => match Content::gone(&status) {
-            Some(content) => answer(&shape.identity, &document, content, shape.part),
-            None => failed(
-                LEDGER_UNAVAILABLE,
-                "the capture is recorded, but its body is not held whole",
-                PLACE_LEDGER,
-            ),
-        },
+        Ok(PayloadBody::Gone(status)) => {
+            let current;
+            let document = if matches!(status, PayloadStatus::Purged { .. }) {
+                current = match find_capture(store, project, shape) {
+                    Ok(document) => document,
+                    Err(answer) => return answer,
+                };
+                &current
+            } else {
+                document
+            };
+            gone_answer(shape, document, &status)
+        }
         Ok(PayloadBody::Present(mut reader)) => {
             let mut bytes = Vec::new();
             if let Err(error) = reader.read_to_end(&mut bytes) {
@@ -278,7 +292,7 @@ pub fn read<S: Views + Payloads + ?Sized>(
             }
             // The body was stored from the capture's UTF-8 text.
             match String::from_utf8(bytes) {
-                Ok(text) => answer(&shape.identity, &document, Content::Text(&text), shape.part),
+                Ok(text) => answer(&shape.identity, document, Content::Text(&text), shape.part),
                 Err(_) => failed(
                     LEDGER_UNAVAILABLE,
                     "the capture is recorded, but its body is not UTF-8 text",
@@ -287,6 +301,25 @@ pub fn read<S: Views + Payloads + ?Sized>(
             }
         }
     }
+}
+
+/// A global tombstone needs this project's view to confirm its purge reason.
+fn gone_answer(shape: &DocumentShape, document: &CaptureDocument, status: &PayloadStatus) -> Value {
+    if let (PayloadStatus::Purged { .. }, Some(Source::Ready(Content::Purged(reason)))) =
+        (status, document.source())
+    {
+        return answer(
+            &shape.identity,
+            document,
+            Content::Purged(reason),
+            shape.part,
+        );
+    }
+    failed(
+        LEDGER_UNAVAILABLE,
+        "the capture is recorded, but its body is not held whole",
+        PLACE_LEDGER,
+    )
 }
 
 #[cfg(test)]
@@ -329,6 +362,50 @@ mod tests {
         );
         let present = document(json!({"hash": "ab".repeat(32), "state": "present"}));
         assert_eq!(present.source(), Some(Source::Open(Hash([0xab; 32]))));
+    }
+
+    #[test]
+    fn a_confirmed_purge_answered_with_the_global_reason_is_caught() {
+        let current = document(json!({"hash": "ab".repeat(32), "state": "purged",
+            "reason": "this project removed it"}));
+        let shape = DocumentShape {
+            identity: identity(),
+            part: None,
+        };
+        let status = PayloadStatus::Purged {
+            reason: "another project removed it".into(),
+        };
+        let value = gone_answer(&shape, &current, &status);
+        metadata(&value, 4097);
+        assert_eq!(
+            value["tombstone"],
+            json!({"state": "purged", "reason": "this project removed it"})
+        );
+        assert!(value.get("text").is_none(), "{value}");
+    }
+
+    #[test]
+    fn an_unconfirmed_purge_answered_with_the_global_reason_is_caught() {
+        let shape = DocumentShape {
+            identity: identity(),
+            part: None,
+        };
+        let status = PayloadStatus::Purged {
+            reason: "another project removed it".into(),
+        };
+        for body in [
+            json!({"hash": "ab".repeat(32), "state": "present"}),
+            json!({"text": "still inline"}),
+            json!({}),
+        ] {
+            let current = document(body);
+            let value = gone_answer(&shape, &current, &status);
+            assert_eq!(value["status"], "failed", "{value}");
+            assert_eq!(value["code"], "ledger-unavailable");
+            assert_eq!(value["place"], "ledger");
+            assert!(value.get("tombstone").is_none(), "{value}");
+            assert!(value.get("text").is_none(), "{value}");
+        }
     }
 
     #[test]
@@ -564,6 +641,36 @@ mod tests {
         }
 
         #[test]
+        fn concurrent_project_purges_answer_with_another_projects_reason() {
+            let (_dir, store) = store();
+            let text = long();
+            let in_a = shape(&capture(&store, A, &text));
+            let in_b = shape(&capture(&store, B, &text));
+            let seen_a = find_capture(&store, &project(A), &in_a).unwrap();
+            let seen_b = find_capture(&store, &project(B), &in_b).unwrap();
+            let hash = body_hash(&store, A);
+            assert_eq!(seen_a.source(), Some(Source::Open(hash)));
+            assert_eq!(seen_b.source(), Some(Source::Open(hash)));
+
+            purge(&store, A, hash, "A removed it");
+            purge(&store, B, hash, "B removed it");
+            // Resume both reads from their observations before either purge.
+            for (id, shape, seen, reason) in [
+                (A, &in_a, &seen_a, "A removed it"),
+                (B, &in_b, &seen_b, "B removed it"),
+            ] {
+                let value = read_document(&store, &project(id), shape, seen);
+                assert_eq!(value["status"], "ok", "{value}");
+                assert_eq!(
+                    value["tombstone"],
+                    json!({"state": "purged", "reason": reason}),
+                    "{id}: {value}"
+                );
+                assert!(value.get("text").is_none(), "{value}");
+            }
+        }
+
+        #[test]
         fn an_unknown_id_answered_as_anything_but_no_such_capture_or_appending_is_caught() {
             let (_dir, store) = store();
             capture(&store, A, "keep this");
@@ -579,10 +686,7 @@ mod tests {
     #[test]
     fn a_gone_body_answered_as_text_or_without_its_reason_is_caught() {
         let held = document(json!({"hash": "ab".repeat(32), "state": "present"}));
-        let status = PayloadStatus::Purged {
-            reason: "pasted a secret".into(),
-        };
-        let content = Content::gone(&status).expect("a purge is a tombstone");
+        let content = Content::Purged("pasted a secret");
         let value = answer(&identity(), &held, content, None);
         metadata(&value, 4097);
         assert!(value.get("text").is_none(), "{value}");
