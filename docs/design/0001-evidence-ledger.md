@@ -160,7 +160,7 @@ flowchart TB
   guard -->|records its answers in the per-user project user| db
   cli --> db
   server -.->|finds project file from CLAUDE_PROJECT_DIR, runs git for a write| checkout
-  guard -.->|finds project file from CLAUDE_PROJECT_DIR, runs bounded git for the cwd's branch and HEAD's baley.toml| checkout
+  guard -.->|finds project file from CLAUDE_PROJECT_DIR, runs bounded git for the commit target's branch and the session project's baley.toml at HEAD| checkout
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef container fill:#438dd5,stroke:#2e6295,color:#fff
   classDef external fill:#6b6b6b,stroke:#4d4d4d,color:#fff
