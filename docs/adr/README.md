@@ -43,5 +43,6 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0033](0033-host-security-bar.md) | Support only hosts whose sandboxing and execution controls meet Baley's requirements | Accepted, supersedes 0008, 0018, 0020, 0027 and 0029 in part |
 | [0034](0034-one-server-per-session.md) | Run one Baley server per session over stdio | Accepted, supersedes 0011, and 0028 in part |
 | [0035](0035-restore-purge-uncertainty.md) | Report purge uncertainty after restoring a store | Accepted, supersedes 0022 in part |
-| [0036](0036-per-user-guard-records.md) | Keep guard records per user and bound the guard's access | Accepted |
+| [0036](0036-per-user-guard-records.md) | Keep guard records per user and bound the guard's access | Accepted, superseded in part by 0040 |
 | [0037](0037-plan-recheck-scope.md) | Choose plan re-check scope explicitly | Accepted |
+| [0040](0040-guard-commit-checkout.md) | Judge and remember a commit at its target checkout | Accepted, supersedes 0036 in part |
