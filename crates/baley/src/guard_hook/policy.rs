@@ -202,6 +202,16 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_global_file_is_not_read_as_an_absent_layer() {
+        let refused = unreadable("/c/config.toml", "it is a link to a missing file");
+        let seen = Seen {
+            global: Ok(Err(refused.clone())),
+            ..at_head("")
+        };
+        assert_eq!(settings(seen), (SettingsInput::Torn(refused), None));
+    }
+
+    #[test]
     fn a_project_file_gone_after_the_walk_read_as_a_policy_is_caught() {
         let seen = Seen {
             working: Ok(None),

@@ -1,7 +1,7 @@
 //! `baley config interview` (design 0003 section 5). It gathers both settings
 //! files and HEAD's copy as `show` does, asks for each role's model and effort
 //! and for `escalate_on_failure` in the terminal, and writes the answers
-//! through one `set::set`. It opens no store and runs no policy step itself.
+//! through one `set::apply`. It opens no store and runs no policy step itself.
 
 use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
@@ -87,7 +87,15 @@ fn attempt(
         Outcome::Unchanged => {
             Render::line("Nothing changed: every answer kept the value in force.", 0)
         }
-        Outcome::Send(request) => set::set(request.layer, request.host, &request.pairs),
+        Outcome::Send(request) => set::apply(
+            request.layer,
+            request.host,
+            &request.pairs,
+            Some(&set::Expected {
+                path: start.target,
+                digest: start.digest,
+            }),
+        ),
     })
 }
 
@@ -111,6 +119,8 @@ struct Start {
     layer: FileLayer,
     /// That file's path, which the owner confirms.
     target: PathBuf,
+    /// The target's own read, bound before the first question.
+    digest: Option<String>,
     /// The pending note, set when the target is the project file and the
     /// working-tree file holds changes HEAD's copy does not.
     note: Option<String>,
@@ -149,8 +159,8 @@ fn begin(
         schema,
         &[],
         project_file.is_some(),
-        seen.reads.global,
-        seen.working,
+        seen.reads.global.clone(),
+        seen.working.clone(),
         head,
     )
     .map_err(|refusal| Render::refusal(refusal.to_string()))?;
@@ -160,10 +170,18 @@ fn begin(
         (FileLayer::Project, None) => return Err(not_a_project()),
         (FileLayer::Global, _) => seen.global_path,
     };
+    let target_read = match layer {
+        FileLayer::Global => seen.reads.global,
+        FileLayer::Project => seen.working,
+    };
+    let digest = target_read
+        .map_err(|refusal| Render::refusal(refusal.to_string()))?
+        .map(|file| file.digest);
     Ok(Start {
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
         layer,
         target,
+        digest,
         note: pending.filter(|_| layer == FileLayer::Project),
     })
 }
@@ -679,6 +697,50 @@ mod tests {
     fn refusal_text(seen: Seen) -> (u8, String) {
         let render = begin(Schema::standard(), None, None, seen).err().unwrap();
         (render.code, render.lines.join("\n"))
+    }
+
+    #[test]
+    fn the_interview_binds_the_targets_own_read_not_head_or_the_other_layer() {
+        for (layer, path, digest) in [
+            (FileLayer::Project, PROJECT, "working-digest"),
+            (FileLayer::Global, GLOBAL, "global-digest"),
+        ] {
+            let mut seen = seen("", None, Some("escalate_on_failure = true\n"));
+            seen.working.as_mut().unwrap().as_mut().unwrap().digest = "working-digest".into();
+            seen.reads.global.as_mut().unwrap().as_mut().unwrap().digest = "global-digest".into();
+            seen.reads
+                .head
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .layer
+                .as_mut()
+                .unwrap()
+                .digest = "head-digest".into();
+
+            let start = begin(Schema::standard(), Some(layer), None, seen)
+                .ok()
+                .unwrap();
+
+            assert_eq!(start.target, Path::new(path));
+            assert_eq!(start.digest.as_deref(), Some(digest), "{layer:?}");
+        }
+    }
+
+    #[test]
+    fn an_interview_without_a_global_file_does_not_bind_another_files_digest() {
+        let start = begin(
+            Schema::standard(),
+            Some(FileLayer::Global),
+            None,
+            without_global(seen("", None, Some(""))),
+        )
+        .ok()
+        .unwrap();
+
+        assert_eq!(start.target, Path::new(GLOBAL));
+        assert_eq!(start.digest, None);
     }
 
     #[test]

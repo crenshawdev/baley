@@ -15,9 +15,9 @@ pub const PROJECT_FILE: &str = "baley.toml";
 pub struct Ancestor {
     /// The folder.
     pub path: PathBuf,
-    /// Whether the folder holds a regular `baley.toml`.
+    /// Whether `baley.toml` is present or its presence cannot be determined.
     pub has_project_file: bool,
-    /// Whether the folder holds a `.git` entry of any kind.
+    /// Whether `.git` is present, of any kind, or its presence cannot be determined.
     pub has_git: bool,
 }
 
@@ -26,7 +26,8 @@ pub struct Ancestor {
 pub enum Discovery {
     /// A project: the folder of the nearest `baley.toml` and the repository root.
     Managed {
-        /// The folder holding the project file.
+        /// The folder holding the nearest `baley.toml` entry, even when it
+        /// cannot be read as a settings file.
         folder: PathBuf,
         /// The repository root.
         root: PathBuf,
@@ -68,26 +69,101 @@ pub fn discover(ancestors: &[Ancestor]) -> Discovery {
 /// of a project call.
 ///
 /// The directory is canonicalized first, so the root is the checkout's
-/// canonical path. `baley.toml` is followed through a link, as settings reads
-/// are; `.git` is only checked for presence, never followed or read, so a
-/// linked worktree's `.git` file marks a root as a directory does. A directory
+/// canonical path. Both names are checked without following links. Any entry
+/// or error other than not-found counts as present, so an unusable settings
+/// file cannot hand the project to an outer file. A directory
 /// that cannot be canonicalized is an error, not evidence of no repository.
 pub fn ancestors(cwd: &Path) -> io::Result<Vec<Ancestor>> {
     let cwd = fs::canonicalize(cwd)?;
-    Ok(cwd
-        .ancestors()
-        .map(|path| Ancestor {
-            path: path.into(),
-            has_project_file: fs::metadata(path.join(PROJECT_FILE))
-                .is_ok_and(|meta| meta.is_file()),
-            has_git: fs::symlink_metadata(path.join(".git")).is_ok(),
-        })
-        .collect())
+    Ok(cwd.ancestors().map(observe).collect())
+}
+
+/// Observes just this folder, so the walk's inputs can be gathered separately.
+fn observe(path: &Path) -> Ancestor {
+    Ancestor {
+        path: path.into(),
+        has_project_file: entry_present(
+            fs::symlink_metadata(path.join(PROJECT_FILE)).map_err(|error| error.kind()),
+        ),
+        has_git: entry_present(
+            fs::symlink_metadata(path.join(".git")).map_err(|error| error.kind()),
+        ),
+    }
+}
+
+/// Only not-found proves absence. The entry's kind never changes discovery.
+fn entry_present<T>(observed: Result<T, io::ErrorKind>) -> bool {
+    !matches!(observed, Err(io::ErrorKind::NotFound))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_entry_is_not_read_as_absent() {
+        assert!(!entry_present::<()>(Err(io::ErrorKind::NotFound)));
+        assert!(entry_present(Ok(())));
+        for error in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            assert!(entry_present::<()>(Err(error)), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_directory_named_baley_toml_does_not_fall_back_to_the_outer_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(PROJECT_FILE), b"outer").unwrap();
+        fs::create_dir_all(root.join("a/baley.toml")).unwrap();
+
+        assert_eq!(
+            discover(&[observe(&root.join("a")), observe(&root)]),
+            Discovery::Managed {
+                folder: root.join("a"),
+                root,
+            }
+        );
+    }
+
+    #[test]
+    fn a_dangling_project_link_does_not_fall_back_to_the_outer_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(
+            root.join(PROJECT_FILE),
+            b"[project]\nid = \"6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f\"\nname = \"outer\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("a")).unwrap();
+        std::os::unix::fs::symlink("missing.toml", root.join("a/baley.toml")).unwrap();
+
+        assert_eq!(
+            discover(&[observe(&root.join("a")), observe(&root)]),
+            Discovery::Managed {
+                folder: root.join("a"),
+                root,
+            }
+        );
+    }
+
+    #[test]
+    fn a_symlink_to_a_regular_project_file_still_binds() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join("settings.toml"), b"project").unwrap();
+        std::os::unix::fs::symlink("settings.toml", root.join(PROJECT_FILE)).unwrap();
+
+        assert_eq!(
+            discover(&[observe(&root)]),
+            Discovery::Managed {
+                folder: root.clone(),
+                root,
+            }
+        );
+    }
 
     fn at(path: &str, has_project_file: bool, has_git: bool) -> Ancestor {
         Ancestor {
