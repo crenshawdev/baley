@@ -1,10 +1,10 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T8 merged, as of origin/main `60b8f2c7`, on 2026-10-05, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T8 merged and T9 in progress, as of origin/main `a76182be`, on 2026-10-05, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except [#134](https://github.com/crenshawdev/baley/issues/134), which blocks Build 4, and the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190) and [#194](https://github.com/crenshawdev/baley/issues/194), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except [#134](https://github.com/crenshawdev/baley/issues/134), which blocks Build 4, and the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190), [#194](https://github.com/crenshawdev/baley/issues/194), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201) and [#203](https://github.com/crenshawdev/baley/issues/203), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -214,10 +214,12 @@ flowchart LR
     T16 --> T17
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
+    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
     classDef held fill:#ffffff,stroke:#6e7781,stroke-dasharray:4 3,color:#57606a
     class T1,T2,T3,T4,T5,T6,T7,T8 done
-    class T9,T10,T11,T12,T13 planned
+    class T9 progress
+    class T10,T11,T12,T13 planned
     class Delivery,T14,T15,T16,T17 held
 ```
 
@@ -233,7 +235,7 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotte
 | T6 | Guard decisions and protected paths | [#196](https://github.com/crenshawdev/baley/pull/196) | Merged |
 | T7 | Compiled instructions, help, schemas and parts | [#199](https://github.com/crenshawdev/baley/pull/199) | Merged |
 | T8 | Ledger captures and project identity reads | [#202](https://github.com/crenshawdev/baley/pull/202) | Merged |
-| T9 | Bounded guard process and storage access | | Planned |
+| T9 | Bounded guard process and storage access | | In progress |
 | T10 | Per-user guard records and Claude hook answers | | Planned |
 | T11 | Claude artifact content and logical stubs | | Planned |
 | T12 | Live Claude qualification and concurrent sessions | | Planned |
@@ -317,7 +319,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. Installation on Claude Code: MCP registration, instruction stubs and the sandbox rule. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except #134 and the Build 3 findings #184, #186, #190, #194, #200 and #201.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except #134 and the Build 3 findings #184, #186, #190, #194, #200, #201 and #203.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -329,7 +331,7 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 ## Other open issues
 
-Every issue here except #134 and the Build 3 findings blocks the release design #14. #134 blocks Build 4, which blocks #14. GitHub links none of the six Build 3 findings to #14. "Carried by" means that build does the fix.
+Every issue here except #134 and the Build 3 findings blocks the release design #14. #134 blocks Build 4, which blocks #14. GitHub links none of the seven Build 3 findings to #14. "Carried by" means that build does the fix.
 
 ### Designs
 
@@ -366,8 +368,9 @@ Every issue here except #134 and the Build 3 findings blocks the release design 
 | [#186](https://github.com/crenshawdev/baley/issues/186) | The cancelled-receiver capacity test can fail while slot release is correct | Evidence | Its text names no build |
 | [#190](https://github.com/crenshawdev/baley/issues/190) | `baley serve` drops calls it already read when input closes in the same burst | Evidence | Its text says T12 runs the live shutdown checks and fixes a confirmed defect in its own bug pull request |
 | [#194](https://github.com/crenshawdev/baley/issues/194) | Missing protected files can be created through case-variant spellings on case-insensitive filesystems | Evidence | Its text names no build |
-| [#200](https://github.com/crenshawdev/baley/issues/200) | No unit test sees a capture's instruction evidence on the caller handed to preparation | None | Its text names no build |
-| [#201](https://github.com/crenshawdev/baley/issues/201) | Two projects purging the same bytes during a `document` read can each get the other's tombstone reason | None | Its text names no build |
+| [#200](https://github.com/crenshawdev/baley/issues/200) | No unit test sees a capture's instruction evidence on the caller handed to preparation | Evidence | Its text names no build |
+| [#201](https://github.com/crenshawdev/baley/issues/201) | Two projects purging the same bytes during a `document` read can each get the other's tombstone reason | Evidence | Its text names no build |
+| [#203](https://github.com/crenshawdev/baley/issues/203) | An export through a store opened for the guard waits without limit for the new copy's writer queue | None | Its text names no build |
 
 ## Milestones
 
@@ -375,7 +378,7 @@ Counts as of 2026-10-05.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
-| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 32 | 13 | Builds 3 to 9, bug #40, #44 and findings #184, #186, #190 and #194 | Open |
+| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 32 | 15 | Builds 3 to 9, bug #40, #44 and findings #184, #186, #190, #194, #200 and #201 | Open |
 | [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 2 | 5 | #134, #47, #49, #50, #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
 | [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
