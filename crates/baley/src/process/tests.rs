@@ -103,11 +103,70 @@ fn git_launches_require_registered_deadlines() {
     let guard = git_process::launch(Caller::GuardBranch);
     assert_eq!(
         validate_launch(&guard).unwrap().descriptor().timeout,
-        Some(Duration::from_secs(9))
+        Some(Duration::from_secs(5))
     );
     for program in ["sh", "gpg", "gh"] {
         let launch = Launch::new(program);
         assert_eq!(validate_launch(&launch).unwrap().descriptor(), &launch);
+    }
+}
+
+#[test]
+fn a_guard_launch_at_zero_past_five_seconds_or_sharing_a_group_is_refused() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    use std::{io::ErrorKind, time::Duration};
+
+    for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        let at = |timeout: Option<Duration>, own_group: bool| {
+            let mut launch = git_process::launch(caller);
+            launch.timeout = timeout;
+            launch.own_group = own_group;
+            launch
+        };
+        for (timeout, own_group) in [
+            (None, true),
+            (Some(Duration::ZERO), true),
+            (Some(Duration::from_millis(5_001)), true),
+            (Some(Duration::from_millis(2_400)), false),
+        ] {
+            let error = validate_launch(&at(timeout, own_group)).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidInput);
+            assert_eq!(
+                error.to_string(),
+                "registered git launch requires its caller deadline and owned process group",
+                "{caller:?} {timeout:?} own group {own_group}"
+            );
+        }
+        for timeout in [Duration::from_millis(2_400), Duration::from_secs(5)] {
+            assert!(
+                validate_launch(&at(Some(timeout), true)).is_ok(),
+                "{caller:?} {timeout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_non_guard_launch_shortened_or_lengthened_is_refused() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    use std::time::Duration;
+
+    for (caller, seconds) in [
+        (Caller::ProjectHead, 5),
+        (Caller::ProjectHead, 59),
+        (Caller::CheckoutFacts, 5),
+        (Caller::CheckoutFacts, 59),
+        (Caller::PauseRead, 61),
+    ] {
+        let mut launch = git_process::launch(caller);
+        launch.timeout = Some(Duration::from_secs(seconds));
+        assert_eq!(
+            validate_launch(&launch).unwrap_err().to_string(),
+            "registered git launch requires its caller deadline and owned process group",
+            "{caller:?} {seconds} s"
+        );
     }
 }
 

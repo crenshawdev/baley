@@ -1,4 +1,5 @@
-use super::{Caller, Error, deadline, finish, launch};
+use super::{Caller, Deadline, Error, deadline, finish, guard_launch, launch};
+use crate::guard_budget::Budget;
 use crate::process::Output;
 use std::{ffi::OsString, io, time::Duration};
 
@@ -10,7 +11,13 @@ fn git_subprocesses_run_under_a_deadline() {
             Caller::GuardBranch,
             &["symbolic-ref", "--quiet", "--short", "HEAD"],
             "git symbolic-ref --quiet --short HEAD",
-            9,
+            5,
+        ),
+        (
+            Caller::GuardProjectHead,
+            &["rev-parse", "--verify", "-q", "HEAD"],
+            "git rev-parse --verify -q HEAD",
+            5,
         ),
         (
             Caller::ExecutionOutput,
@@ -136,44 +143,56 @@ fn git_subprocesses_run_under_a_deadline() {
 
 #[test]
 fn registered_callers_select_their_deadlines() {
-    for (caller, nominal, work) in [
-        (Caller::GuardBranch, 10, 9),
-        (Caller::ExecutionOutput, 60, 60),
-        (Caller::ExecutionStatus, 60, 60),
-        (Caller::PauseRead, 60, 60),
-        (Caller::PauseIndex, 60, 60),
-        (Caller::WhyRead, 60, 60),
-        (Caller::WhyInput, 60, 60),
-        (Caller::ExecutionRunner, 60, 60),
-        (Caller::PauseMergeBase, 60, 60),
-        (Caller::RailRead, 60, 60),
-        (Caller::RailCommitInput, 60, 60),
-        (Caller::RailConfig, 60, 60),
-        (Caller::RecallHistory, 60, 60),
-        (Caller::ReadDocumentHead, 60, 60),
-        (Caller::LandingGit, 60, 60),
-        (Caller::ProjectHead, 60, 60),
-        (Caller::CheckoutFacts, 60, 60),
+    for caller in [
+        Caller::ExecutionOutput,
+        Caller::ExecutionStatus,
+        Caller::PauseRead,
+        Caller::PauseIndex,
+        Caller::WhyRead,
+        Caller::WhyInput,
+        Caller::ExecutionRunner,
+        Caller::PauseMergeBase,
+        Caller::RailRead,
+        Caller::RailCommitInput,
+        Caller::RailConfig,
+        Caller::RecallHistory,
+        Caller::ReadDocumentHead,
+        Caller::LandingGit,
+        Caller::AnchorForge,
+        Caller::ProjectHead,
+        Caller::CheckoutFacts,
     ] {
         assert_eq!(
-            deadline(caller).nominal,
-            Duration::from_secs(nominal),
-            "{caller:?}"
-        );
-        assert_eq!(
-            deadline(caller).work,
-            Duration::from_secs(work),
+            deadline(caller),
+            Deadline::Exact(Duration::from_secs(60)),
             "{caller:?}"
         );
         let launch = launch(caller);
+        assert_eq!(launch.timeout, Some(Duration::from_secs(60)), "{caller:?}");
+        assert!(launch.own_group);
+        assert!(!launch.inherit);
+        assert!(!launch.die_with_parent);
+        assert_eq!(launch.limit, usize::MAX);
+    }
+    for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        assert_eq!(
+            deadline(caller),
+            Deadline::Guard(Duration::from_secs(5)),
+            "{caller:?}"
+        );
+        // 5.6 s in, the work time left is 2.4 s, under git's 5 s.
+        let grant = Budget::with_clock(|| Duration::from_millis(5_600))
+            .git()
+            .expect("time is left");
+        let launch = guard_launch(caller, &grant);
+        assert_eq!(launch.git_caller(), Some(caller));
         assert_eq!(
             launch.timeout,
-            Some(Duration::from_secs(work)),
+            Some(Duration::from_millis(2_400)),
             "{caller:?}"
         );
         assert!(launch.own_group);
         assert!(!launch.inherit);
         assert!(!launch.die_with_parent);
-        assert_eq!(launch.limit, usize::MAX);
     }
 }

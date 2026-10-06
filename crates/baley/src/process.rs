@@ -222,9 +222,15 @@ pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> 
     let is_git = Path::new(&launch.program).file_name() == Some(OsStr::new("git"));
     match (is_git, launch.git_caller()) {
         (true, Some(caller)) => {
-            if launch.timeout != Some(crate::git_process::deadline(caller).work)
-                || !launch.own_group
-            {
+            use crate::git_process::Deadline;
+            let timed = match crate::git_process::deadline(caller) {
+                Deadline::Exact(deadline) => launch.timeout == Some(deadline),
+                // A zero timeout would still start git, only to kill it.
+                Deadline::Guard(cap) => launch
+                    .timeout
+                    .is_some_and(|timeout| !timeout.is_zero() && timeout <= cap),
+            };
+            if !timed || !launch.own_group {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "registered git launch requires its caller deadline and owned process group",

@@ -1,11 +1,11 @@
 //! Registered git deadlines and interpretation of process observations.
 
+use crate::guard_budget::GitGrant;
 use crate::process::{Launch, Output, Process};
 use std::{ffi::OsString, fmt, io, time::Duration};
 
-pub const GUARD_GIT_DEADLINE: Duration = Duration::from_secs(10);
+/// The deadline of every caller that is not the guard's.
 pub const OTHER_GIT_DEADLINE: Duration = Duration::from_secs(60);
-pub const GUARD_REAP_RESERVE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Caller {
@@ -18,7 +18,12 @@ pub enum Caller {
     ExecutionRunner,
     PauseMergeBase,
     RailRead,
+    /// The current branch, read by the guard on its budget.
     GuardBranch,
+    /// HEAD's copy of the project file, read only by the guard on its budget.
+    /// The guard never reads through `ProjectHead`, so that caller keeps its
+    /// exact deadline.
+    GuardProjectHead,
     RailCommitInput,
     RailConfig,
     RecallHistory,
@@ -41,18 +46,19 @@ impl Registration {
     }
 }
 
+/// How long one registered caller's git may run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Deadline {
-    pub nominal: Duration,
-    pub work: Duration,
+pub enum Deadline {
+    /// Exactly this long, every launch.
+    Exact(Duration),
+    /// A guard caller: above zero and at most this cap. The guard's budget
+    /// picks each launch's time from what is left, so only the cap is fixed.
+    Guard(Duration),
 }
 
 pub fn deadline(caller: Caller) -> Deadline {
     match caller {
-        Caller::GuardBranch => Deadline {
-            nominal: GUARD_GIT_DEADLINE,
-            work: GUARD_GIT_DEADLINE - GUARD_REAP_RESERVE,
-        },
+        Caller::GuardBranch | Caller::GuardProjectHead => Deadline::Guard(crate::guard_budget::GIT),
         Caller::ExecutionOutput
         | Caller::ExecutionStatus
         | Caller::PauseRead
@@ -69,16 +75,23 @@ pub fn deadline(caller: Caller) -> Deadline {
         | Caller::LandingGit
         | Caller::AnchorForge
         | Caller::ProjectHead
-        | Caller::CheckoutFacts => Deadline {
-            nominal: OTHER_GIT_DEADLINE,
-            work: OTHER_GIT_DEADLINE,
-        },
+        | Caller::CheckoutFacts => Deadline::Exact(OTHER_GIT_DEADLINE),
     }
 }
 
+/// A registered launch for `caller` at its deadline. A guard caller's runs to
+/// its cap.
 pub fn launch(caller: Caller) -> Launch {
+    let (Deadline::Exact(timeout) | Deadline::Guard(timeout)) = deadline(caller);
     Launch::registered_git(Registration(caller))
-        .timeout(deadline(caller).work)
+        .timeout(timeout)
+        .own_group()
+}
+
+/// A guard caller's launch on the time `grant` gives it.
+pub fn guard_launch(caller: Caller, grant: &GitGrant) -> Launch {
+    Launch::registered_git(Registration(caller))
+        .timeout(grant.timeout())
         .own_group()
 }
 
@@ -122,6 +135,7 @@ pub fn finish(
     args: &[OsString],
     answer: io::Result<Output>,
 ) -> Result<Output, Error> {
+    let (Deadline::Exact(bound) | Deadline::Guard(bound)) = deadline(caller);
     answer.map_err(|error| {
         if error.kind() == io::ErrorKind::TimedOut {
             Error::Limit(Limit {
@@ -132,7 +146,7 @@ pub fn finish(
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),
-                bound: deadline(caller).work,
+                bound,
             })
         } else {
             Error::Io(error)
