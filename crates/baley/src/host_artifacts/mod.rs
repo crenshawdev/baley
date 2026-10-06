@@ -19,12 +19,14 @@
 //! - `coverage`: the judge of what each guarded tool can read and write in
 //!   the folders and the placed files, from a settings document;
 //! - `compose`: Baley's entries put into an owner's existing settings
-//!   document, keeping every unrelated key and reporting every bypass.
+//!   document, keeping every unrelated key and reporting every bypass;
+//! - `command`: `baley artifact`, which prints the stubs, the manifest, the
+//!   registration, the hook and the settings to standard output and writes
+//!   no file.
 //!
 //! Delivery is `baley install`'s (Build 3 T15): where each artifact goes, who
 //! owns the file and how it is written or removed are decided there, with
-//! this module's content as the input. The print-only render command is the
-//! third plan's.
+//! this module's content as the input.
 //!
 //! Build 4 adds the agent and rung definition renderer here. Its definitions
 //! reference the session's `baley` MCP entry by the key `registration`
@@ -46,6 +48,7 @@
 //!   `powershell`), so an executable path in it is quoted for POSIX `sh`. A
 //!   hook `matcher` is a regular expression over tool names.
 
+pub mod command;
 pub mod compose;
 pub mod coverage;
 pub mod executable;
