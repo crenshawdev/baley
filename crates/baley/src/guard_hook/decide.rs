@@ -4,7 +4,7 @@
 //! policy. Path calls are judged against the hook's cwd through a supplied
 //! [`Lookup`], whether or not a project is bound.
 
-use super::context::HookContext;
+use super::context::{Bound, HookContext};
 use crate::hook_input::{CommandTool, Envelope, HookInput, PathTarget, PathTool};
 use crate::protected_paths::{Lease, Lookup, read_answer, resolve_target, write_answer};
 use baley_core::guard::{
@@ -22,12 +22,12 @@ pub(super) struct Seen {
 }
 
 /// What the entry gathers next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Step {
     /// Read the branch at the hook's cwd.
     Branch,
-    /// Read the session project's policy.
-    Policy,
+    /// Read this session project's policy.
+    Policy(Bound),
 }
 
 /// The judge's word on the call: gather one more thing, or answer.
@@ -49,6 +49,10 @@ pub(super) struct Decided {
 /// What a recorded answer carries besides the answer itself. The command is
 /// never kept, only its place in the input digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "Build 3 T10's recording step reads these facts into guard.answered"
+)]
 pub(super) struct Selected {
     /// The call's cwd, session and call id.
     pub envelope: Envelope,
@@ -91,7 +95,7 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
                 command: Some(text.as_str()),
                 ..ToolInput::default()
             };
-            let Some(verb) = git_verb(text).filter(|_| bound) else {
+            let (Some(project), Some(verb)) = (&context.project, git_verb(text)) else {
                 return unrecorded(Answer::Pass);
             };
             let mut facts = Facts::new(envelope, name, input);
@@ -104,7 +108,7 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
                 return Next::Do(Step::Branch);
             };
             let Some(settings) = &seen.settings else {
-                return Next::Do(Step::Policy);
+                return Next::Do(Step::Policy(project.clone()));
             };
             facts.branch = match branch {
                 BranchObservation::Read(name) | BranchObservation::Fallback { name, .. } => {
@@ -229,7 +233,6 @@ mod tests {
 
     use super::*;
     use crate::folders::FolderRefusal;
-    use crate::guard_hook::context::Bound;
     use crate::protected_paths::ProtectedPaths;
     use crate::protected_paths::tests::{Tree, tree};
     use baley_core::guard::GuardSettings;
@@ -338,9 +341,13 @@ mod tests {
             Next::Do(Step::Branch)
         ));
         seen.branch = Some(BranchObservation::Read("main".into()));
+        let session = Bound {
+            folder: "/p".into(),
+            root: "/p".into(),
+        };
         assert!(matches!(
             next(&call, &context(Some("/p")), &seen, &disk()),
-            Next::Do(Step::Policy)
+            Next::Do(Step::Policy(project)) if project == session
         ));
     }
 

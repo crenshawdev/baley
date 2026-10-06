@@ -25,11 +25,19 @@ pub(super) struct Bound {
 pub(super) struct HookContext {
     /// `CLAUDE_PROJECT_DIR` as given, whenever it is set and UTF-8, valid or
     /// not. Never canonicalized, so a record carries the host's own text.
+    #[allow(
+        dead_code,
+        reason = "Build 3 T10's recording step puts it in the hook caller"
+    )]
     pub project_directory: Option<String>,
     /// The session project, or `None` when nothing is bound.
     pub project: Option<Bound>,
-    /// The root of the checkout the cwd is in: where the branch is read, and
-    /// the checkout half of the remembered-policy key.
+    /// The root of the checkout the cwd is in, whose branch the hook reads,
+    /// and the checkout half of the remembered-policy key.
+    #[allow(
+        dead_code,
+        reason = "Build 3 T10's recording step keys the remembered policy by it"
+    )]
     pub checkout: Option<PathBuf>,
     /// The paths path tools are judged against, or why Baley's folders could
     /// not be resolved.
