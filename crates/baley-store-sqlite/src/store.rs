@@ -427,7 +427,9 @@ impl SqliteStore {
 
     /// One of the store's two connections, taken as `turn` takes a lock. On
     /// a guard store its busy timeout is then set to the time left, so its
-    /// statements wait in SQLite no longer than the store may.
+    /// statements wait in SQLite no longer than the store may. A guard whose
+    /// time ran out while it took the connection answers `Busy` and lets go
+    /// of it, so nothing begins past the deadline.
     fn connection<'s>(
         &'s self,
         conn: &'s Mutex<Connection>,
@@ -438,8 +440,11 @@ impl SqliteStore {
         match taken {
             Taken::Held(conn) => {
                 if let Some(deadline) = self.deadline {
-                    conn.busy_timeout(guard_busy_timeout(deadline, self.timing.now()))
-                        .map_err(sql)?;
+                    let left = guard_busy_timeout(deadline, self.timing.now());
+                    if left.is_zero() {
+                        return Err(StoreError::Busy);
+                    }
+                    conn.busy_timeout(left).map_err(sql)?;
                 }
                 Ok(conn)
             }
@@ -1478,6 +1483,21 @@ mod tests {
         let timing = Scripted::still();
         let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
         timing.script(&[ms(1_500)]);
+        assert_eq!(store.record_trace(&trace("late")), Err(StoreError::Busy));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a guard write that begins once its time ran out while it took
+    // the write connection, after its queue turn and the connection were
+    // both taken with time left.
+    #[test]
+    fn a_guard_write_begins_when_its_time_runs_out_taking_the_connection() {
+        let home = crate::checks::private_folder();
+        let timing = Scripted::still();
+        let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
+        // The queue turn's try, the connection's try, then the reading its
+        // busy timeout would be set from.
+        timing.script(&[ms(1_000), ms(1_000), ms(1_500)]);
         assert_eq!(store.record_trace(&trace("late")), Err(StoreError::Busy));
         assert_eq!(trace_rows(home.path()), 0);
     }
