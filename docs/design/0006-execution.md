@@ -92,7 +92,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 
 ## 5. Commands and operations
 
-Operations are typed operations on the host interface; the owner-only ones are also command-line commands under `baley exec`. Every request carries a request id and is answered once (EVD-R26).
+Operations are typed operations on the host interface; the owner-only ones also have command-line entries under `baley exec`. Only the `baley exec --key` credential wrapper is removed by [ADR 0039](../adr/0039-session-owned-provider-credentials.md); the execution group keeps its name. Every request carries a request id and is answered once (EVD-R26).
 
 ### execution admit, execution extend
 

@@ -70,7 +70,7 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 
 33. As an owner, I want Baley to decide from my policy when a plan or a diff must be reviewed and how strictly, so that reviews happen every time they should, not when someone remembers.
 34. As an owner, I want reviews from outside models (for example OpenAI or DeepSeek) when my policy asks for them, so that the work is attacked by a different model than the one that wrote it.
-35. As an owner, I want each outside provider to use either its own command-line login or an API key, as I choose, so that I am never forced to hand over a key.
+35. As an owner, I want the session to send outside reviews through provider APIs with keys I keep in my environment, so that Baley never handles my credentials.
 36. As an owner, I want every review finding checked against the code and presented to me in plain words with the options for fixing it, so that I rule on real problems, not raw model output.
 37. As an owner, I want my ruling on each finding to be what clears a review gate, so that no finding is dropped or applied without me.
 38. As an owner, I want Baley never to act on a finding by itself, so that fixes happen only when I decide.
@@ -105,8 +105,8 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 55. As an owner, I want every git commit and push an agent runs checked against my protected branches, so that agents cannot commit to or push a branch I protect.
 56. As an owner, I want agents kept out of Baley's own records, so that the record of the work cannot be rewritten by the work.
 57. As an owner, I want tampering with the record detected, including by checking against copies anchored on the forge, so that I can trust the history.
-58. As an owner, I want an API key to reach only the one call that needs it, with any copy in the output hidden, so that keys do not leak into conversations or logs.
-59. As an owner, I want my API keys in one file in Baley's own config folder, which I edit and Baley only reads, so that Baley never takes a key from an environment variable and keeps no second copy of it.
+58. As an owner, I want the risks of environment keys, printed output and sending code to a provider stated plainly, with my typed acknowledgement recorded and asked again when the warning changes, so that enabling a provider is an informed choice.
+59. As an owner, I want Baley never to read, store or send an API key, so that it keeps no credential copy or key-injection path.
 
 ### Hosts and running
 
@@ -124,6 +124,11 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 68. As an owner, I want Baley's memory use to stay bounded however large the record grows, so that it runs for months without slowing my machine.
 69. As an owner, I want every refusal to say what is missing and where, so that I know how to proceed.
 
+### Installing and updating
+
+70. As an owner, I want one installer command to deliver Baley and write its host wiring, without npm or a plugin, so that setup takes one action.
+71. As an owner, I want automatic updates off until I enable them and a manual update command always available, with every download verified, so that I control updates without interrupting my running server. A hook uses the stable path on its next call and must work beside an older server.
+
 ## Implementation Decisions
 
 The architecture is in [0002: System design](../0002-system-design.md); the store is in [0001: The evidence ledger](../0001-evidence-ledger.md). The decisions that shape the product:
@@ -137,7 +142,8 @@ The architecture is in [0002: System design](../0002-system-design.md); the stor
 - **Host adapters.** Baley identifies its host and version on every call and chooses mechanisms per host, such as notifying the model when long work finishes where the host supports it, and waiting in steps elsewhere.
 - **Optimistic concurrency.** Writes take turns at the store's one writer lock, one short transaction at a time. Each decision is made inside its write from inputs read there; a command whose inputs changed is refused, never merged. Long work runs outside the write and is recorded after it.
 - **Baley runs tests and checks.** Results are judged by exit code, with an optional standard report for which tests failed, so every language works.
-- **Outside models are called by the host session, never by Baley.** Baley decides the review and builds its prompt and material. Each provider uses its own command-line login or an API key, as the owner chooses. A key reaches a call only through Baley, set for that one command and hidden in its output.
+- **Outside models are called by the host session, never by Baley.** Baley decides the review and builds its prompt and material. Release 1 uses provider APIs. The session supplies the owner's environment key and returns the raw response for Baley to parse and check. Model-list requests follow the same boundary. Baley never reads keys and scrubs no command output ([ADR 0039](../../adr/0039-session-owned-provider-credentials.md)).
+- **Installation and updates.** One installer command puts the binary behind `~/.local/bin/baley`; `baley install` writes all host wiring without npm or a plugin. Updates are off by default and opt-in, checked at most daily by a detached process started by `baley serve`, verified before staging and used by new session servers. Running servers keep their version; the next hook call uses the stable path and must work beside an older server and ledger state. Manual `baley update` is always available ([ADR 0038](../../adr/0038-installer-and-opt-in-updates.md)).
 - **Settings are TOML.** One global file and one project file that overrides it. Branch, forge and repository settings live only in the project file. Settings that differ per host sit in a section for each host. Baley writes the files; the model is never told about them.
 - **Nothing is required to work the way Cadence did.** The familiar working loop (project, plan, milestone, land) is kept; everything underneath is designed afresh.
 
@@ -156,7 +162,8 @@ The architecture is in [0002: System design](../0002-system-design.md); the stor
 - Several people sharing one project's record, and a shared server for teams.
 - Moving the record between machines. Only the anchors of its chain leave the machine.
 - A separate operating-system user for Baley.
-- Defending the record or the keys against a determined agent. The design guards against accidental exposure; tampering is detected, not prevented.
+- Hiding environment keys from agents or scrubbing a key a command prints. Every program Claude Code starts can see environment keys, agents and subagents included. Code sent for review goes to the chosen provider under its terms. Baley never reads the keys.
+- Defending the record against a determined agent. Tampering is detected through the chain and anchors.
 - Running agents in parallel or in separate worktrees on one phase.
 - Tracking work in documents. Deciding what happens next is Baley's job, not a document's.
 - Importing records from Cadence.

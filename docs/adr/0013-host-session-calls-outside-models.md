@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0008: Review](../design/0008-review.md) |
 | Supersedes |  |
-| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: keys come from `keys.env`, and `baley exec --key` takes the key's name as written there |
+| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: keys come from `keys.env`, and `baley exec --key` takes the key's name as written there; [0039](0039-session-owned-provider-credentials.md), in part: the `baley exec --key` credential wrapper, provider command-line login, the model-detection exception and the session returning typed findings; Baley now parses the raw response |
 
 ## Context and problem
 

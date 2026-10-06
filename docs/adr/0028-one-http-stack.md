@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| Status | Accepted, superseded in part by 0034 |
+| Status | Accepted, superseded in part by 0034 and 0039 |
 | Date | 2026-09-28 |
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0012: Host interface](../design/0012-host-interface.md) |
 | Supersedes | |
-| Superseded by | [0034](0034-one-server-per-session.md), in part: the MCP server over HTTP on axum |
+| Superseded by | [0034](0034-one-server-per-session.md), in part: the MCP server over HTTP on axum; [0039](0039-session-owned-provider-credentials.md), in part: the model lister uses Baley's HTTP client |
 
 ## Context and problem
 

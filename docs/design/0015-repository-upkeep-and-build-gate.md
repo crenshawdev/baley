@@ -6,7 +6,7 @@
 | Design issue | [#47](https://github.com/crenshawdev/baley/issues/47) |
 | Requirement prefix | UPK |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md), [0034](../adr/0034-one-server-per-session.md) · C4 view: not applicable (no runtime component) |
+| Related | ADRs: [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md), [0034](../adr/0034-one-server-per-session.md), [0038](../adr/0038-installer-and-opt-in-updates.md), [0039](../adr/0039-session-owned-provider-credentials.md) · C4 view: not applicable (no runtime component) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -14,7 +14,7 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 Baley uses one public name, describes its built state accurately, and requires a reproducible set of checks before changes reach `main`. This area defines those names, the treatment of project history, repository metadata and labels, the formatting gate, and the evidence used to assess the test suite's cost.
 
-The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. How Baley is delivered, who writes the host files and how an existing registration is replaced wait on the owner's delivery decision under [HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [roadmap's held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
+The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/crenshawdev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
 
 Cadence is Baley's predecessor project, a separately maintained tool that can still be registered in the same host.
 
@@ -37,7 +37,7 @@ This area uses the existing [glossary](../../CONTEXT.md) terms without changing 
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
 | UPK-R1 | The executable and MCP server are `baley`; the tools are `baley_version`, `baley_query` and `baley_apply`; instruction and agent identities use `bal-`. | Host configuration, advertised tools and instructions must agree. | HST-R5, HST-R12 | Active |
-| UPK-R2 | Installation never replaces a separately owned Cadence registration by name alone; registration replacement waits on the owner's delivery decision under [HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). | An occupied name does not establish ownership. | HST-R16, HST-R17 | Active |
+| UPK-R2 | `baley install` preserves separately owned settings and registrations, including Cadence's, and replaces a Baley registration only with evidence that Baley owns it. A matching name alone grants no ownership. The binary writes the wiring at the stable path under [HST-R17](0012-host-interface.md#3-requirements) and [ADR 0038](../adr/0038-installer-and-opt-in-updates.md). | An occupied name does not establish ownership. | HST-R16, HST-R17 | Active |
 | UPK-R3 | Existing Baley spellings in inherited configuration, records and renderers remain consistent until their consumers are removed; upkeep does not rewrite stored bytes. | Record markers and hash inputs are contracts, not display text. | EVD-R19 | Active |
 | UPK-R4 | The historical mentions listed in section 6 remain, without becoming aliases; baseline performance material describes the replaced store without its project name. | Product history is separate from a supported interface. | | Active |
 | UPK-R5 | `main` requires `cargo-test`, `clippy`, `cargo-deny` and `fmt`, with strict up-to-date checks and the expected check producer preserved; `fmt` becomes required only after its job exists and passes. | The gate includes formatting without requiring a result no workflow can produce. | | Active |
@@ -111,16 +111,16 @@ The retained historical passages are:
 
 | Passage | Current location | Treatment |
 |---|---|---|
-| Product boundary | [PRD:142](prd/baley.md#L142) | Keep the distinction between the predecessor's behavior and Baley's requirements |
-| No record import | [PRD:162](prd/baley.md#L162) | Keep the explicit exclusion |
-| Heritage | [PRD:166](prd/baley.md#L166) | Keep the explanation of the working loop's origin |
+| Product boundary | [PRD:148](prd/baley.md#L148) | Keep the distinction between the predecessor's behavior and Baley's requirements |
+| No record import | [PRD:169](prd/baley.md#L169) | Keep the explicit exclusion |
+| Heritage | [PRD:173](prd/baley.md#L173) | Keep the explanation of the working loop's origin |
 | Story design context | [ADR 0017:14](../adr/0017-stories-and-sprints.md#L14) | Keep the accepted decision's body |
 | Review design context | [ADR 0019:14](../adr/0019-reviews-adjudicated-and-ruled.md#L14) | Keep the accepted decision's body |
-| README lineage | [README:45](../../README.md#L45) | Keep the name, repository link and attribution before the `baley-start` tag |
+| README lineage | [README lineage](../../README.md#lineage) | Keep the name, repository link and attribution before the `baley-start` tag |
 
 Outside this document, a case-insensitive tracked-content search for `cadence` finds eight occurrences on six lines in four files: the five passages in `docs` above and three occurrences on the README lineage line. `crates` and `.github` contain zero matches; `scripts` is absent. The old `cad-` instruction prefix has zero matches outside this document. This document's explanatory mentions and registration boundary are also permitted, without establishing aliases. No active identifier is exempted as history.
 
-The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its [non-goals](0001-evidence-ledger.md#L57), [performance account](0001-evidence-ledger.md#L1318) and [compatibility rule](0001-evidence-ledger.md#L1353). The profile is [baseline-store.json](../../spikes/evidence-ledger-bench/profile/baseline-store.json), identified by the benchmark [README:30](../../spikes/evidence-ledger-bench/README.md#L30) and [loader:558](../../spikes/evidence-ledger-bench/src/main.rs#L558). Those figures describe the replaced store, not the current test suite.
+The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its [non-goals](0001-evidence-ledger.md#L57), [performance account](0001-evidence-ledger.md#performance) and [compatibility rule](0001-evidence-ledger.md#compatibility-and-migration). The profile is [baseline-store.json](../../spikes/evidence-ledger-bench/profile/baseline-store.json), identified by the benchmark [README:30](../../spikes/evidence-ledger-bench/README.md#L30) and [loader:558](../../spikes/evidence-ledger-bench/src/main.rs#L558). Those figures describe the replaced store, not the current test suite.
 
 ### Canonical names and consumers
 
@@ -138,7 +138,7 @@ The names below cover the public and stored surfaces of [#53](https://github.com
 | Temporary paths | `.baley-release-`, [milestone/release.rs:541](../../crates/baley/src/milestone/release.rs#L541); `.baley-prune-index-` and `.baley-undo-index-`, [rail/commit.rs:318](../../crates/baley/src/rail/commit.rs#L318) and [380](../../crates/baley/src/rail/commit.rs#L380); `baley-risk-index-`, [pause/git.rs:260](../../crates/baley/src/pause/git.rs#L260); `baley-task-`, [task/mod.rs:32](../../crates/baley/src/task/mod.rs#L32) |
 | Instructions and agent identities | The compiled instruction registry uses `bal-` at [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). The inherited role table contains six roles and thirty role/rung entries at [config/roles.rs:7-60](../../crates/baley/src/config/roles.rs#L7); that table does not prove stubs are installed |
 
-The file-valued `BALEY_GLOBAL_CONFIG` is not an alias for the directory-valued `BALEY_HOME`, read at [folders.rs:47](../../crates/baley/src/folders.rs#L47). Supported settings and key locations are the vendor folders of [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md) and [0003](0003-configuration-and-routing.md). An inherited spelling does not make its format part of that interface. The parked services remain compiled for their tests and are removed by Build 9 ([inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1)); their bytes need no second rename.
+The file-valued `BALEY_GLOBAL_CONFIG` is not an alias for the directory-valued `BALEY_HOME`, read at [folders.rs:47](../../crates/baley/src/folders.rs#L47). Supported settings use the vendor folders of [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md) and [0003](0003-configuration-and-routing.md). The current design has no key file: [ADR 0039](../adr/0039-session-owned-provider-credentials.md) leaves credentials in the owner's environment. The built key reader, `baley exec --key` and HTTPS model lister await removal in Build 4 (#25). An inherited spelling does not make its format part of that interface. The parked services remain compiled for their tests and are removed by Build 9 ([inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1)); their bytes need no second rename.
 
 ### Suite-cost report
 
@@ -176,7 +176,7 @@ The isolated formatting revision is already recorded at [.git-blame-ignore-revs:
 
 Claude Code is the only supported host ([ADR 0033](../adr/0033-host-security-bar.md)). It starts `baley serve` once per session, as specified by [0012, HST-R16](0012-host-interface.md#3-requirements). The owner does not start the server. This command is the session server.
 
-The canonical server and tool names remain those in UPK-R1. An installation preserves a separately owned registration rather than inferring ownership from its name. How Baley is delivered, who writes the host files and how an existing Baley registration is replaced wait on the owner's delivery decision under [0012, HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). This area specifies neither a replacement algorithm nor a second set of tool aliases.
+The canonical server and tool names remain those in UPK-R1. The installer puts the binary behind `~/.local/bin/baley`; `baley install` writes the user-level MCP entry, hook, stubs, sandbox and deny rules at that stable path, without a plugin. It preserves separately owned entries and replaces only artifacts it can establish as its own. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) settles who writes them; [Build 3 T15](../roadmap.md#build-3-hosts) supplies the ownership and replacement algorithm under [HST-R17](0012-host-interface.md#3-requirements). This area adds no second set of tool aliases.
 
 ### Test assessment
 
@@ -197,8 +197,8 @@ UPK-R10 and UPK-Q3 require the measurement specified in section 5, full per-file
 | Wiki | Disabled | GitHub repository settings |
 | Product status | Designed and being built, not ready to use; no release is implied by accepting a design | [README:5](../../README.md#L5) |
 | Host scope | Claude Code | [README:23](../../README.md#L23), ADR 0033 |
-| Contributions | Issues welcome; pull requests by invitation | [README:37](../../README.md#L37) |
-| CI description | Names the checks actually required on `main` | [README:33](../../README.md#L33) |
+| Contributions | Issues welcome; pull requests by invitation | [README contribution policy](../../README.md#issues-and-contributions) |
+| CI description | Names the checks actually required on `main` | [README required checks](../../README.md#following-the-work) |
 
 ### Labels
 
@@ -239,12 +239,12 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | Requirement | Status | Where |
 |---|---|---|
 | UPK-R1 | Built | Package, executable and session server: [Cargo.toml:2](../../crates/baley/Cargo.toml#L2), [main.rs:17](../../crates/baley/src/main.rs#L17), [mcp/tools.rs:58-120](../../crates/baley/src/mcp/tools.rs#L58). Instruction registry: [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). Installed stubs are not established by these definitions |
-| UPK-R2 | Not built | The CLI has no installer ([main.rs:23-94](../../crates/baley/src/main.rs#L23)); registration replacement under [0012, HST-R17](0012-host-interface.md#3-requirements) waits on the owner's delivery decision, carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) |
+| UPK-R2 | Not built | The CLI has no installer ([main.rs:23-94](../../crates/baley/src/main.rs#L23)). [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) settles delivery and the binary's ownership of wiring; [Build 3 T14 to T17](../roadmap.md#build-3-hosts) implement it. T15 must establish artifact ownership before replacing a registration |
 | UPK-R3 | Built | The definitions in section 6 remain; services are parked at [inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1) |
 | UPK-R4 | Built | The six retained passages and unnamed benchmark material are cited in section 6 |
 | UPK-R5 | Built | [test.yml:121-140](../../.github/workflows/test.yml#L121) runs `fmt` beside the three other jobs, and the applied rules require all four from one producer with strict checks, as the note below records |
 | UPK-R6 | Built | [test.yml:127-140](../../.github/workflows/test.yml#L127) reads the exact channel from [rust-toolchain.toml:11](../../rust-toolchain.toml#L11), installs and selects it, explicitly adds its `rustfmt` component and runs `cargo fmt --all --check` |
-| UPK-R7 | Built | README describes the [status:5](../../README.md#L5), [host:23](../../README.md#L23), [four required checks:33](../../README.md#L33) and [contribution policy:37](../../README.md#L37). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
+| UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#how-it-works), [four required checks](../../README.md#following-the-work), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary and its unbuilt removal](../../README.md#api-keys-and-outside-review-risks). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
 | UPK-R8 | Built | Section 9's six labels remain; the seven no issue or pull request used are removed, and `enhancement` keeps its 53 closed issues without being used for new work |
 | UPK-R9 | Built | [bug.yml:12-21](../../.github/ISSUE_TEMPLATE/bug.yml#L12) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [5-11](../../.github/ISSUE_TEMPLATE/bug.yml#L5) and [22-35](../../.github/ISSUE_TEMPLATE/bug.yml#L22) |
 | UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
@@ -275,4 +275,4 @@ The count does not expand macros or resolve binary membership. For example, [led
 
 | Question | Decided by |
 |---|---|
-| How does installation replace an existing Baley registration while preserving separately owned entries? | The owner's delivery decision under [0012, HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [roadmap's held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) |
+| What evidence establishes that an existing registration or artifact belongs to Baley before replacement? | Build 3 T15's artifact ownership and application under [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) and [0012, HST-R17](0012-host-interface.md#3-requirements). The delivery mechanism is decided; the ownership check is not built. |
