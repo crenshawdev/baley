@@ -335,18 +335,16 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 
 ### Designs
 
-| Issue | What | Milestone | Depends on / blocks |
-|---|---|---|---|
-| [#47](https://github.com/crenshawdev/baley/issues/47) | Repository upkeep and the build gate | Encyclopedists | #49 #50 #54 wait on it (stated in their text; no GitHub link) |
+The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) has landed in [0015](design/0015-repository-upkeep-and-build-gate.md). The release design #14 is covered above.
 
 ### Upkeep and docs
 
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#44](https://github.com/crenshawdev/baley/issues/44) | Start the architecture overview | Evidence | None |
-| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI | Encyclopedists | #47 (stated in its text) |
-| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | #47 (stated in its text) |
-| [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | #47 (stated in its text) |
+| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI | Encyclopedists | Design landed in [0015](design/0015-repository-upkeep-and-build-gate.md); formatting prerequisite #53 closed |
+| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | Design landed in [0015](design/0015-repository-upkeep-and-build-gate.md) |
+| [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | Design landed in [0015](design/0015-repository-upkeep-and-build-gate.md) |
 
 ### Bugs
 
@@ -373,12 +371,12 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 
 ## Milestones
 
-Counts as of 2026-10-05, with #134 closed by the design landing on 2026-10-06.
+Counts as of 2026-10-05, with #134 and #47 closed by their designs landing on 2026-10-06. Encyclopedists was rechecked on 2026-10-06 and includes #47's closure.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
 | [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 32 | 15 | Builds 3 to 9, bug #40, #44 and findings #184, #186, #190, #194, #200 and #201 | Open |
-| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 3 | 4 | #47, #49, #50, #54 | Open |
+| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 4 | 3 | #49, #50, #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
 | [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
 | [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its stories, revise a truth or a story, keeping every earlier version on record. | 1 | 0 | None | Closed |
@@ -391,5 +389,5 @@ What the records leave open or do not say.
 
 - Builds 4 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
 - There is no first version number. The release design #14 picks it.
-- #44 was meant to land before Build 1 T10, which has merged. #49, #50 and #54 wait on the #47 design, as their text says; GitHub has no dependency link for them. No order is given for #47 itself or for bug #70.
+- #44 was meant to land before Build 1 T10, which has merged. The #47 design has landed in [0015](design/0015-repository-upkeep-and-build-gate.md), satisfying the design prerequisite stated by #49, #50 and #54; GitHub has no dependency link for them. No order is given for bug #70.
 - The board's Status field is set only on the build issues, #40 and #14.
