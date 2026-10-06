@@ -465,7 +465,7 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process, budget: &mut Budget) 
 mod tests {
     use baley::guard_budget::Budget;
     use baley::process::{Output, Recorded};
-    use std::{path::Path, time::Duration};
+    use std::{cell::Cell, path::Path, rc::Rc, time::Duration};
 
     #[test]
     fn an_unbounded_or_truncated_branch_read_is_not_taken_as_the_branch() {
@@ -485,9 +485,16 @@ mod tests {
 
     #[test]
     fn spent_git_time_launches_no_branch_lookup_and_reads_as_git_unavailable() {
+        // A launch from 1 s to 6 s spends git's whole 5 s with 2 s of work
+        // left, so only the spent git time can refuse the next one.
+        let now = Rc::new(Cell::new(Duration::from_secs(1)));
+        let clock = Rc::clone(&now);
+        let mut budget = Budget::with_clock(move || clock.get());
+        let first = budget.git().expect("a grant at the start");
+        now.set(Duration::from_secs(6));
+        budget.charge_git(first);
         // No scripted answer: a launch would panic.
         let mut fake = Recorded::new();
-        let mut budget = Budget::with_clock(|| Duration::from_secs(8));
 
         let (branch, failures) = super::branch_observation(Path::new("/r"), &mut fake, &mut budget);
 
