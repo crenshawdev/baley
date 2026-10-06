@@ -206,7 +206,7 @@ The all-state GitHub issue collection, including pull requests, gives these assi
 
 | Label | Open issues | Closed issues | Pull requests | Use |
 |---|---:|---:|---:|---|
-| `design` | 2 | 11 | 10 | Active |
+| `design` | 1 | 12 | 10 | Active |
 | `bug` | 7 | 2 | 0 | Active |
 | `question` | 0 | 0 | 0 | Active; the [question form:3](../../.github/ISSUE_TEMPLATE/question.yml#L3) applies it |
 | `dependencies` | 0 | 0 | 6 | Active |
@@ -245,8 +245,8 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | UPK-R5 | Partly built | [test.yml:121-140](../../.github/workflows/test.yml#L121) adds `fmt` beside the three existing jobs; applied rules still require only `cargo-test`, `clippy` and `cargo-deny`. The owner adds `fmt` with the same producer and strict checks only after it passes on `main`, following section 8 |
 | UPK-R6 | Built | [test.yml:127-140](../../.github/workflows/test.yml#L127) reads the exact channel from [rust-toolchain.toml:11](../../rust-toolchain.toml#L11), installs and selects it, explicitly adds its `rustfmt` component and runs `cargo fmt --all --check` |
 | UPK-R7 | Built | README describes the [status:5](../../README.md#L5), [host:23](../../README.md#L23), [three required checks and the formatting job:33](../../README.md#L33) and [contribution policy:37](../../README.md#L37). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
-| UPK-R8 | Not built | Section 9's inventory has thirteen labels; [#50](https://github.com/crenshawdev/baley/issues/50) owns removal of the seven unused labels, preserving `enhancement` on its 53 closed issues without using it for new work |
-| UPK-R9 | Not built | [bug.yml:1-25](../../.github/ISSUE_TEMPLATE/bug.yml#L1) has no impact field |
+| UPK-R8 | Not built | Removal of section 9's seven unused labels remains a repository-settings change owned by [#50](https://github.com/crenshawdev/baley/issues/50), preserving `enhancement` on its 53 closed issues without using it for new work |
+| UPK-R9 | Built | [bug.yml:12-21](../../.github/ISSUE_TEMPLATE/bug.yml#L12) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [5-11](../../.github/ISSUE_TEMPLATE/bug.yml#L5) and [22-35](../../.github/ISSUE_TEMPLATE/bug.yml#L22) |
 | UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
 | UPK-R11 | Built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets six build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) keeps six test threads; nextest at [test.yml:60](../../.github/workflows/test.yml#L60) explicitly sets `--build-jobs 6 --test-threads 6`, and clippy at [test.yml:89](../../.github/workflows/test.yml#L89) sets `-j 6` |
 | UPK-Q1 | Built | Section 6 classifies every retained match; no active source uses an old name |
