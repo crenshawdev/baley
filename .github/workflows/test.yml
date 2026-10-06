@@ -57,7 +57,7 @@ jobs:
       # No separate `cargo build`: the test build adds dev-dependency features,
       # so it recompiled the crate and some dependencies a second time anyway.
       # nextest builds everything the tests need, the binary included.
-      - run: cargo nextest run --locked --workspace --no-fail-fast
+      - run: cargo nextest run --locked --workspace --no-fail-fast --build-jobs 6 --test-threads 6
 
   clippy:
     # Lint warnings fail their own check.
@@ -86,7 +86,7 @@ jobs:
 
       # The minimal toolchain needs Clippy installed explicitly.
       - run: rustup component add clippy
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -j 6 -- -D warnings
 
       # baley-core must not reach the engine (design 0001, EVD-R12). The
       # forward tree is grepped: `cargo tree -i rusqlite` prints a warning and
@@ -117,3 +117,24 @@ jobs:
             | tar zxf - --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-deny-$V-x86_64-unknown-linux-musl/cargo-deny"
           cargo deny --version
       - run: cargo deny --locked check
+
+  fmt:
+    # Formatting uses the same pinned compiler as the build checks.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: |
+          set -euo pipefail
+          CHANNEL="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          if [ -z "$CHANNEL" ]; then
+            echo "::error::rust-toolchain.toml names no channel"
+            exit 1
+          fi
+          rustup toolchain install "$CHANNEL" --profile minimal
+          rustup default "$CHANNEL"
+          rustc --version
+          rustup component add rustfmt --toolchain "$CHANNEL"
+
+      - run: cargo fmt --all --check
