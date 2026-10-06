@@ -4,7 +4,7 @@ This file is the order of work from now to Baley's first public release: nine bu
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201) and [#203](https://github.com/crenshawdev/baley/issues/203), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#190](https://github.com/crenshawdev/baley/issues/190), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201), [#203](https://github.com/crenshawdev/baley/issues/203) and [#214](https://github.com/crenshawdev/baley/issues/214), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -319,7 +319,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. Installation on Claude Code: MCP registration, instruction stubs and the sandbox rule. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 findings #184, #186, #190, #200, #201 and #203.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 findings #184, #190, #200, #201, #203 and #214.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -356,11 +356,11 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#184](https://github.com/crenshawdev/baley/issues/184) | Closing or abandoning the session worker can announce a finished drain before the last answer is sent | Evidence | Its text names no build |
-| [#186](https://github.com/crenshawdev/baley/issues/186) | The cancelled-receiver capacity test can fail while slot release is correct | Evidence | Its text names no build |
 | [#190](https://github.com/crenshawdev/baley/issues/190) | `baley serve` drops calls it already read when input closes in the same burst | Evidence | Its text says T12 runs the live shutdown checks and fixes a confirmed defect in its own bug pull request |
 | [#200](https://github.com/crenshawdev/baley/issues/200) | No unit test sees a capture's instruction evidence on the caller handed to preparation | Evidence | Its text names no build |
 | [#201](https://github.com/crenshawdev/baley/issues/201) | Two projects purging the same bytes during a `document` read can each get the other's tombstone reason | Evidence | Its text names no build |
 | [#203](https://github.com/crenshawdev/baley/issues/203) | An export through a store opened for the guard waits without limit for the new copy's writer queue | None | Its text names no build |
+| [#214](https://github.com/crenshawdev/baley/issues/214) | A half-written transport error line can be interleaved by another reply | Evidence | Its text names no build |
 
 ## Milestones
 

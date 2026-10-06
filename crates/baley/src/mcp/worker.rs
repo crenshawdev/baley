@@ -399,8 +399,8 @@ mod tests {
         assert_eq!(label_of(second.blocking_recv().unwrap()), 7);
     }
 
-    #[test]
-    fn a_decision_whose_receiver_the_test_dropped_does_not_run_or_leaves_its_slot_held() {
+    #[tokio::test]
+    async fn a_decision_whose_receiver_the_test_dropped_does_not_run_or_leaves_its_slot_held() {
         let log = log();
         let worker = Worker::start().unwrap();
         let (a, hold_a) = held(0, &log);
@@ -415,6 +415,14 @@ mod tests {
         drop(waiting);
         hold_a.release.send(()).unwrap();
         next(&ran);
+        let mut drained = worker.drained();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            drained.wait_for(|drained| *drained),
+        )
+        .await
+        .expect("the worker did not drain")
+        .unwrap();
         let mut again = Vec::new();
         for label in 0..5 {
             let run: Box<dyn FnOnce(Admitted) -> CallToolResult + Send> = if label == 0 {
