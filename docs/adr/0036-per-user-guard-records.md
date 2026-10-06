@@ -55,7 +55,7 @@ Chosen option: **1**, with the bounded access Build 3 T9 built as its supporting
 
 ### Positive
 
-- A fresh clone, an unmanaged checkout and a call outside any project all get recorded answers, with no `baley init` first.
+- A fresh clone gets recorded answers with no `baley init` first. In an unmanaged checkout or outside any project, commands pass with nothing recorded, and a path tool's denial is still recorded.
 - No hook writes to a project's chain, so checkout admission and the policy step stay with the server's preparation and the command line.
 - A redelivery after a timeout gets the same answer, and two racing deliveries leave one record.
 - Every wait is bounded, so the hook answers inside the host's timeout, and a busy or stale store denies an ask instead of passing it.
