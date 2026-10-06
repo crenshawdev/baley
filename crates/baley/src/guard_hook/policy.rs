@@ -13,13 +13,15 @@ use crate::process::Process;
 use crate::settings;
 use baley_core::guard::{GuardSettings, SettingsInput};
 use baley_core::policy::{Fault, Host, SettingsFile, Unavailable};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// What the policy reads found, before any rule is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Seen {
     /// The global file's bounded read, or why the config folder is unknown.
     pub global: Result<Result<Option<SettingsFile>, Unavailable>, FolderRefusal>,
+    /// The working-tree `baley.toml` the walk found.
+    pub working_path: PathBuf,
     /// The working-tree `baley.toml`'s bounded read.
     pub working: Result<Option<SettingsFile>, Unavailable>,
     /// HEAD's copy, read only once the working-tree file was.
@@ -37,7 +39,8 @@ pub(super) fn gather(
     let global = config
         .map(|config| settings::read_for_guard(&config.join(settings::GLOBAL_FILE)))
         .map_err(Clone::clone);
-    let working = settings::read_for_guard(&project.folder.join(PROJECT_FILE));
+    let working_path = project.folder.join(PROJECT_FILE);
+    let working = settings::read_for_guard(&working_path);
     let head = match &working {
         Ok(Some(file)) => Some(committed::read_for_guard(
             &project.root,
@@ -49,6 +52,7 @@ pub(super) fn gather(
     };
     Seen {
         global,
+        working_path,
         working,
         head,
     }
@@ -71,6 +75,17 @@ pub(super) fn settings(seen: Seen) -> (SettingsInput, Option<String>) {
     });
     let (head, refused_head) = match (seen.working, seen.head) {
         (Err(refused), _) => (Some(Err(refused)), None),
+        // The walk found this file, so a read that finds none caught it
+        // mid-change, and HEAD's copy was never read.
+        (Ok(None), _) => (
+            Some(Err(Unavailable {
+                path: seen.working_path,
+                fault: Fault::Unreadable {
+                    cause: "it was gone when the guard read it".into(),
+                },
+            })),
+            None,
+        ),
         (Ok(_), Some(Err(refused))) => (Some(Err(refused.refusal.clone())), Some(refused)),
         (Ok(_), head) => (
             head.map(|read| read.map_err(|refused| refused.refusal)),
@@ -105,6 +120,7 @@ mod tests {
     fn at_head(text: &str) -> Seen {
         Seen {
             global: Ok(Ok(None)),
+            working_path: PROJECT.into(),
             working: Ok(Some(file(text))),
             head: Some(Ok(Committed {
                 layer: Some(file(text)),
@@ -183,5 +199,18 @@ mod tests {
                 .contains("user-home-invalid: HOME is not set"),
             "{torn}"
         );
+    }
+
+    #[test]
+    fn a_project_file_gone_after_the_walk_read_as_a_policy_is_caught() {
+        let seen = Seen {
+            working: Ok(None),
+            head: None,
+            ..at_head("")
+        };
+        let (SettingsInput::Torn(torn), None) = settings(seen) else {
+            panic!("torn");
+        };
+        assert_eq!(torn.path, Path::new(PROJECT));
     }
 }
