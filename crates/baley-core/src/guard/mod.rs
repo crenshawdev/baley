@@ -22,6 +22,9 @@ pub use event::{
 };
 pub use recording::{AuditPrecondition, record_answer};
 pub use redelivery::{GUARD_VIEW, GuardProjector, Redelivery, guard_key, guard_spec, redelivery};
-pub use remembered::DenialParts;
+pub use remembered::{
+    DenialParts, GUARD_POLICY_VIEW, GuardPolicyProjector, denial_parts, denials_changed,
+    guard_policy_key, guard_policy_spec, remembered_settings,
+};
 pub use scan::{GitVerb, git_verb};
 pub use settings::{GuardSettings, SettingsInput};

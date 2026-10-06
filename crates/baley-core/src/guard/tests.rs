@@ -846,3 +846,219 @@ fn a_call_with_no_recorded_answer_judged_as_a_replay_or_clash_is_caught() {
         Redelivery::NoRecord
     );
 }
+
+// The remembered policy.
+
+#[test]
+fn a_remembered_allow_or_ask_keeping_a_denial_or_the_list_is_caught() {
+    for on_protected in [OnProtected::Allow, OnProtected::Ask] {
+        assert_eq!(
+            denial_parts(&remembered(on_protected, false, &["main", "master"])),
+            DenialParts {
+                refuse: false,
+                hard_fail: false,
+                protected_branches: Vec::new(),
+            },
+            "{on_protected:?}"
+        );
+    }
+}
+
+#[test]
+fn the_protected_list_dropped_under_refuse_or_hard_fail_is_caught() {
+    let list = vec!["main".to_owned(), "master".to_owned()];
+    assert_eq!(
+        denial_parts(&remembered(OnProtected::Refuse, false, &["main", "master"])),
+        DenialParts {
+            refuse: true,
+            hard_fail: false,
+            protected_branches: list.clone(),
+        }
+    );
+    assert_eq!(
+        denial_parts(&remembered(OnProtected::Ask, true, &["main", "master"])),
+        DenialParts {
+            refuse: false,
+            hard_fail: true,
+            protected_branches: list,
+        }
+    );
+}
+
+const PROJECT_ROOT: &str = "/r";
+
+fn policy_recorded(seq: u64, checkout: &str, host: &str, parts: &DenialParts) -> Event {
+    event(
+        "guard.policy_recorded",
+        seq,
+        policy_recorded_payload(PROJECT_ROOT, Some(checkout), host, parts),
+    )
+}
+
+fn refuse_parts() -> DenialParts {
+    DenialParts {
+        refuse: true,
+        hard_fail: false,
+        protected_branches: vec!["main".into()],
+    }
+}
+
+/// The documents left after `events`, the latest put for a key winning as
+/// the store keeps them.
+fn remembered_documents(events: &[Event]) -> std::collections::BTreeMap<DocKey, Value> {
+    let projector = GuardPolicyProjector::new();
+    events
+        .iter()
+        .flat_map(|event| projector.apply(event, &[]).unwrap())
+        .map(|change| match change {
+            Change::Put { key, body } => (key, body),
+            Change::Delete { key } => panic!("unexpected delete of {key:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_remembered_denial_leaking_across_checkout_or_host_is_caught() {
+    let no_denial = DenialParts::default();
+    let documents = remembered_documents(&[
+        policy_recorded(1, "/a", "claude-code", &refuse_parts()),
+        policy_recorded(2, "/b", "claude-code", &no_denial),
+        policy_recorded(3, "/a", "other-host", &no_denial),
+        policy_recorded(4, "/b", "other-host", &no_denial),
+    ]);
+    assert_eq!(documents.len(), 4);
+    let a = &documents[&text_key(&[PROJECT_ROOT, "/a", "claude-code"])];
+    assert_eq!(
+        a,
+        &json!({
+            "project_root": PROJECT_ROOT,
+            "checkout_key": "/a",
+            "host": "claude-code",
+            "refuse": true,
+            "hard_fail": false,
+            "protected_branches": ["main"],
+            "seq": 1,
+        })
+    );
+    for (checkout, host) in [("/b", "claude-code"), ("/a", "other-host")] {
+        let other = &documents[&guard_policy_key(PROJECT_ROOT, Some(checkout), host)];
+        assert_eq!(other["refuse"], false, "{checkout} {host}");
+        assert_eq!(other["checkout_key"], checkout);
+        assert_eq!(other["host"], host);
+    }
+}
+
+#[test]
+fn a_cwd_in_no_checkout_sharing_a_key_with_a_checkout_is_caught() {
+    let (key, body) = put(GuardPolicyProjector::new()
+        .apply(
+            &event(
+                "guard.policy_recorded",
+                5,
+                policy_recorded_payload(PROJECT_ROOT, None, "claude-code", &refuse_parts()),
+            ),
+            &[],
+        )
+        .unwrap());
+    assert_eq!(key, text_key(&[PROJECT_ROOT, "", "claude-code"]));
+    assert_eq!(key, guard_policy_key(PROJECT_ROOT, None, "claude-code"));
+    assert_eq!(body["checkout_key"], "");
+}
+
+#[test]
+fn an_older_refuse_kept_over_a_newer_policy_with_no_denial_is_caught() {
+    let documents = remembered_documents(&[
+        policy_recorded(1, "/a", "claude-code", &refuse_parts()),
+        policy_recorded(2, "/a", "claude-code", &DenialParts::default()),
+    ]);
+    assert_eq!(documents.len(), 1);
+    let kept = &documents[&guard_policy_key(PROJECT_ROOT, Some("/a"), "claude-code")];
+    assert_eq!(kept["refuse"], false);
+    assert_eq!(kept["hard_fail"], false);
+    assert_eq!(kept["protected_branches"], json!([]));
+    assert_eq!(kept["seq"], 2);
+}
+
+#[test]
+fn a_malformed_guard_policy_recorded_accepted_into_the_view_is_caught() {
+    let valid = policy_recorded_payload(PROJECT_ROOT, Some("/a"), "claude-code", &refuse_parts());
+    let mut no_host = valid.clone();
+    no_host.as_object_mut().unwrap().remove("host");
+    let mut empty_checkout = valid.clone();
+    empty_checkout["checkout_root"] = json!("");
+    let mut text_flag = valid.clone();
+    text_flag["refuse"] = json!("true");
+    let mut number_branch = valid;
+    number_branch["protected_branches"] = json!([1]);
+    for payload in [no_host, empty_checkout, text_flag, number_branch] {
+        let error = GuardPolicyProjector::new()
+            .apply(&event("guard.policy_recorded", 6, payload.clone()), &[])
+            .expect_err(&format!("{payload} must be refused"));
+        assert!(
+            error.0.contains("guard.policy_recorded at seq 6"),
+            "{}",
+            error.0
+        );
+    }
+}
+
+/// A stored `guard_policy` document holding `refuse`, `hard_fail` and
+/// `branches`.
+fn remembered_document(refuse: bool, hard_fail: bool, branches: &[&str]) -> Value {
+    json!({
+        "project_root": PROJECT_ROOT,
+        "checkout_key": "/a",
+        "host": "claude-code",
+        "refuse": refuse,
+        "hard_fail": hard_fail,
+        "protected_branches": branches,
+        "seq": 1,
+    })
+}
+
+#[test]
+fn the_change_judge_appending_an_unchanged_policy_or_keeping_a_cleared_refuse_is_caught() {
+    let stored = remembered_document(true, false, &["main"]);
+    assert!(!denials_changed(Some(&stored), &refuse_parts()));
+    assert!(!denials_changed(None, &DenialParts::default()));
+    assert!(denials_changed(Some(&stored), &DenialParts::default()));
+    assert!(denials_changed(None, &refuse_parts()));
+}
+
+/// The settings remembered after a complete policy of `settings`, through
+/// the payload and the view as the hook would store and read them.
+fn remembered_after(settings: &GuardSettings) -> GuardSettings {
+    let payload = policy_recorded_payload(
+        PROJECT_ROOT,
+        Some("/a"),
+        "claude-code",
+        &denial_parts(settings),
+    );
+    let (_, document) = put(GuardPolicyProjector::new()
+        .apply(&event("guard.policy_recorded", 1, payload), &[])
+        .unwrap());
+    remembered_settings(&document).expect("the document is readable")
+}
+
+#[test]
+fn a_remembered_allow_or_ask_relaxing_a_torn_ask_through_the_view_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    for on_protected in [OnProtected::Allow, OnProtected::Ask] {
+        let last = remembered_after(&remembered(on_protected, false, &["main"]));
+        assert_eq!(last.on_protected, OnProtected::Ask, "{on_protected:?}");
+        assert_eq!(
+            commit(&settings, Some(&last), &read("main")),
+            Answer::Ask(reason::torn_ask(&named, Some("main")))
+        );
+    }
+}
+
+#[test]
+fn a_remembered_refuse_through_the_view_not_denying_under_torn_settings_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let last = remembered_after(&remembered(OnProtected::Refuse, false, &["main"]));
+    assert_eq!(
+        commit(&settings, Some(&last), &read("main")),
+        Answer::Deny(reason::remembered_refuse_deny(&named, "main"))
+    );
+}

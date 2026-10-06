@@ -169,9 +169,9 @@ pub enum Redelivery {
 ///
 /// A replay is the confirmed answer even after the policy changed
 /// (GRD-R10). A clash is judged on its own and never recorded, so one call
-/// id never has two records (D-04). A document whose outcome or reason
-/// cannot be read is a clash too: it cannot be replayed, and recording
-/// again would give the call id a second record.
+/// id never has two records. A document whose outcome or reason cannot be
+/// read is a clash too: it cannot be replayed, and recording again would
+/// give the call id a second record.
 pub fn redelivery(
     stored: Option<&Value>,
     input_digest: &str,
