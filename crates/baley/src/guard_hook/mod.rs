@@ -5,6 +5,9 @@
 //! environment, the filesystem or git and owns no policy, so it has no unit
 //! test. A judge takes plain values and is tested directly.
 
+// The hook's entry is its caller once `baley guard` runs through this module.
+#[allow(dead_code)]
+mod branch;
 mod render;
 
 pub use render::{Rendered, failed_write, render};
