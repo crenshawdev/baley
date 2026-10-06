@@ -176,7 +176,7 @@ flowchart TB
 | Term | Meaning |
 |---|---|
 | Event | One recorded fact. Immutable, typed, attributed, hash-chained. |
-| Stream | The events of one thing that changes over time, such as one plan or one dispatch. Named, for example `plan/5-2`. Each stream has its own version counter. |
+| Stream | The events of one thing that changes over time, such as one phase or one review. Named, for example `phase/5`. Each stream has its own version counter. |
 | Project sequence | The position of an event in its project's ledger. The hash chain follows this order. |
 | Anchor | A copy of a project's chain head (sequence and hash) pushed to the forge as an immutable tag. |
 | View | A keyed collection of documents computed from events, answering one kind of current-state question. |
@@ -394,13 +394,9 @@ Streams used by the record families:
 |---|---|
 | `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen`, `anchor.pushed`, `anchor.failed`, `anchor.restore_acknowledged` |
 | `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `story.declared`, `story.corrected`, `story.reassigned`, `story.reprioritized`, `story.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a story's question set ([0005](0005-context-plans-and-acceptance.md)) |
-| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
-| `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
-| `admission/<n>` | `execution.admitted`, `execution.extended` |
-| `dispatch/<id>` | `task.started`, `task.run`, `task.closed`, `suite.run`, `dispatch.ended`, `worker.exited`, `worker.interrupted` |
+| `phase/<n>` | `plan.approved`, `plan.check_issued`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone`, `risk.raised`, `risk.scanned`, `risk.fired`, `risk.overridden`, `risk.settled` ([0009](0009-risk.md)) |
 | `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `observation.recorded`, `item.overruled`, `truth.waived`, `waiver.revoked`, `verification.completed` ([0007](0007-verification.md)) |
 | `review/<id>` | `review.admitted`, `review.issued`, `review.returned`, `review.failed`, `review.adjudication`, `review.adjudicated`, `review.settled`, `review.deferred`, `finding.filed`, `finding.declined`, `finding.uncertain` ([0008](0008-review.md)) |
-| `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.authorized`, `landing.claimed`, `landing.step`, `landing.reconciled`, `landing.confirmed`, `landing.completed`, `tracker.checked` ([0011](0011-milestones-landing-undo-pause.md)) |
 | `pause` | `pause.recorded`, `pause.resumed` |
 | `capture`, `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the support families' records ([0014](0014-support-families.md)) |
@@ -408,6 +404,8 @@ Streams used by the record families:
 | `command/<kind>` | `command.claimed`, `command.completed`, `command.reconciled` |
 | `retention` | `payload.reduced`, `payload.purged` |
 | `models` | `models.seeded`, `models.owner_changed`, `models.detected`, `models.detection_failed`. The stream lives only in the reserved per-user project `user`, whose records carry policy version 0 ([0003](0003-configuration-and-routing.md)) |
+
+A plan check records its round-2 work order, scope, selecting policy version, first-check reference, original and revised digests, truth versions and material references in `plan.check_issued` before dispatch ([0005](0005-context-plans-and-acceptance.md), PLN-R16). `plan submit` writes that event on `phase/<n>`; `plan.checked` records the result with its issued binding. Keying and reading a pending binding before a plan number exists, and closing a pending check on draft discard, remain open for Build 4 in 0005 section 12. A review records each round's scope and material references in `review.issued` ([0008](0008-review.md), REV-R10). Scope and the work order's baseline, truth-version and policy bindings are inline facts, while source snapshots and review input are payload references. Replaying these records uses their recorded scope and references, without consulting current settings or source files or opening payload bodies. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged. Generated review input and prompts for reviews in 0008 use `material` references. Retention or purge can remove bodies without removing the recorded scope or references. A re-check that needs an unavailable body is refused. `plan.check_issued` is the only additional checker event; it uses the existing phase stream.
 
 The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-from-the-current-store).
 
@@ -599,7 +597,7 @@ sequenceDiagram
 |---|---|
 | One active dispatch per phase | `phase/<n>` |
 | Plan approval and supersession within a phase | `phase/<n>` |
-| Admission and extension | `admission/<n>` |
+| Plan admission | `phase/<n>` |
 | Verification completion and invalidation | `phase/<n>` |
 | Milestone close, archive, release and landing | `milestone/<name>` |
 | Roadmap changes | `roadmap` |
@@ -731,7 +729,7 @@ sequenceDiagram
 
 **Verification of views.** `baley verify <project> --views` takes the maintenance lock, so it never runs beside a rebuild. It first rebuilds forward views behind this binary's, and while an unfinished generation remains it refuses with `UnfinishedGeneration`, naming that generation, until a rebuild removes it. A building marker that names the live generation is not unfinished work a rebuild can remove: verification refuses it with `LiveGenerationProtected`, as a rebuild does. It replays the project's events into a scratch generation, stamped like a rebuild's, through the same batches and projectors, and never makes it live. In the turn that reaches the head it begins a read snapshot, on a read-only connection of its own, before releasing the writer queue, so scratch and live are compared at that one head however many commands follow, and the store's other reads go on meanwhile. For every registered view it compares the two generations' rows key by key: key and index columns, `produced_seq`, `projector_version`, and the stored document text as bytes, so a live document that is not canonical JSON differs. It reports each missing, extra or unequal document once, as (view, key), with the head it checked. Deleting the scratch generation in the same batches is tried afterwards, also after a replay or comparison error. If that deletion fails, verification returns `UnfinishedGeneration` naming the scratch generation, whether or not the comparison failed too, and its marker stays for the next rebuild; only once the scratch generation is gone does the report or the comparison's error come back. A crash leaves it for the next rebuild too. Verification changes no live row, event or payload, except through the forward rebuild it runs first for views behind this binary's. A report holds for the head it names only: an export establishes its own snapshot.
 
-Views planned for the first build, by the question they answer. Query contracts (keys, indexes, ordering, page bounds) are in [Appendix B](#appendix-b-reads-mapped-to-views).
+Views for the domain builds, by the question they answer. Build 1 supplies the store and projection machinery; each domain build supplies its events and projectors. Query contracts (keys, indexes, ordering, page bounds) are in [Appendix B](#appendix-b-reads-mapped-to-views).
 
 The store-owned `request` view is at version 2. It projects `command.claimed` to a claimed document, `command.reconciled` with an owner hold to an awaiting-owner document, and `command.completed` to a completed document. Its `by_state` index pages open claims with a bound of 100. The `claim_scope` view is at version 1, keyed by one exact token with page bound 1. `command.claimed` puts its tokens and a claim completion removes only tokens still naming that claim. Both views rebuild from events.
 
@@ -739,13 +737,13 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 |---|---|---|---|
 | `roadmap` | project | | The ordered phases and their declared stories |
 | `phase` | (project, phase) | status | Status, context, completion and whether it still applies |
-| `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness |
+| `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness, and completed check rounds with their work-order binding, scope and material references |
 | `evidence_map` | (project, phase, plan) | | The acceptance evidence a plan must produce |
 | `admission` | (project, phase) | checkout | What execution may touch, and in which checkout |
 | `dispatch` | (project, dispatch id) | phase, state | Active and ended dispatches, task and suite outcomes |
 | `run` | (project, run id) | dispatch, phase | One run: launch, result, output reference |
 | `verification` | (project, attempt id) | phase, state | Attempts, runs, claims, waivers, completion |
-| `review` | (project, review id) | phase, state | Review attempts and their outcomes |
+| `review` | (project, review id) | phase, state | Review rounds, their scope and material references, and their outcomes |
 | `review_queue` | (project, item) | phase, state | Deferred reviews with rulings owed |
 | `dismissal` | (project, finding fingerprint) | | The standing dismissal of a finding's fingerprint, matched when a finding returns ([0008](0008-review.md), REV-R22) |
 | `risk` | (project, phase) | | Observations and receipts |
@@ -769,9 +767,9 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 
 | Class | Examples | Default retention |
 |---|---|---|
-| `record` | plan and context text, verdict detail, capture text over 4 KiB | Kept for the life of the project |
+| `record` | plan and context text, checker input including deltas, verdict detail, capture text over 4 KiB | Kept for the life of the project |
 | `output` | test and command output | Kept until the milestone that produced it closes, then reduced |
-| `material` | review material, prompts sent to models | Kept for 90 days after its review closes |
+| `material` | review input and prompts belonging to a review in 0008 | Kept for 90 days after its review closes |
 
 These are the defaults. A project can change any of them in `baley.toml`, and `baley purge` removes a body at once regardless of class.
 
@@ -1158,7 +1156,7 @@ sequenceDiagram
   D->>B: ask to execute
   B->>L: re-read plan, context, admission, confirm against events
   alt evidence supports execution
-    B->>L: execution.admitted (for this checkout)
+    B->>L: plan.admitted (for this checkout)
     B-->>D: allowed, dispatch issued
   else proof missing
     B-->>D: refused, naming the missing proof
@@ -1523,19 +1521,19 @@ None. The benchmark and the host matrix, the two acceptance gates, are answered 
 | Current namespace or file | Becomes |
 |---|---|
 | `context` | `roadmap` stream, `story.refined`; `backlog` and `phase` views ([0005](0005-context-plans-and-acceptance.md)) |
-| `plan_publications` (publications, receipts) | `plan/<n>-<k>` stream; `plan` view; receipts replaced by `command.completed` and the `request` view |
+| `plan_publications` (publications, receipts) | `phase/<n>` stream; `plan` view; receipts replaced by `command.completed` and the `request` view |
 | `acceptance_maps` | `plan.approved` payload; `evidence_map` view |
-| `native_admissions` | `admission/<n>` stream; `admission` view |
-| `execution` (occurrences, active, issues) | `phase/<n>` and `dispatch/<id>` streams; `dispatch` view |
-| `native_tasks`, `native_plans` | Task and suite events on `dispatch/<id>`; `run` view; outputs become `output` payloads |
+| `native_admissions` | `plan.admitted` on `phase/<n>`; `admission` view |
+| `execution` (occurrences, active, issues) | `phase/<n>` stream; `dispatch` view |
+| `native_tasks`, `native_plans` | Task and suite events on `phase/<n>`; `run` view; outputs become `output` payloads |
 | `native_execution_summaries` | Dropped: the summary is a query |
 | `native_execution_material` | `task.closed` payload |
 | `rail_execution_material` | Dropped: written only by the legacy executor-patch path |
-| `worker_exits`, `worker_interruptions` | `worker.exited` and `worker.interrupted` events |
+| `worker_exits`, `worker_interruptions` | `worker.exited` events on `phase/<n>`, including whether the worker was interrupted ([0006](0006-execution.md)) |
 | `verification` (attempts, runs, claims, patches, waivers, humans, completions) | `verification/<id>` stream; `verification` view. The copy of execution records inside each attempt is replaced by the sequence range it observed |
 | `native_evidence` | Evidence events on the stream they concern; order comes from the project sequence, not a log scan |
 | `review` | `review/<id>` stream; `review` and `review_queue` views; retained material becomes `material` payloads |
-| `rail_observations`, `rail_receipts` | `risk/<n>` stream; `risk` view |
+| `rail_observations`, `rail_receipts` | `risk.raised`, `risk.scanned`, `risk.fired`, `risk.overridden`, `risk.settled` on `phase/<n>` ([0009](0009-risk.md)); `risk` view |
 | `milestones`, `milestone_prunes`, `milestone_releases`, `landings` | `milestone/<name>` stream with separate close, archive, release and landing steps; `milestone` view |
 | `undos`, `undo_requests` | `phase.undone` events through claim, act, record; refusals through `command.completed` |
 | `task`, `debug`, `spike` | Their own streams and views |

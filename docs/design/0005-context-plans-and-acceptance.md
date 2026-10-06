@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issue [#25](https://github.com/crenshawdev/baley/issues/25) |
+| Design issue | [#134](https://github.com/crenshawdev/baley/issues/134); build issue [#25](https://github.com/crenshawdev/baley/issues/25) |
 | Requirement prefix | PLN |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), [0017](../adr/0017-stories-and-sprints.md), [0030](../adr/0030-question-rounds.md), [0031](../adr/0031-one-term-per-concept.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), [0017](../adr/0017-stories-and-sprints.md), [0030](../adr/0030-question-rounds.md), [0031](../adr/0031-one-term-per-concept.md), [0037](../adr/0037-plan-recheck-scope.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -79,8 +79,8 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | PLN-R12 | The evidence map binds every truth a plan serves to evidence items of four kinds: `artifact`, `link`, `check`, `observation`. Each item names its truth and version and a one-line reason ("what change would break this"). Exactly one `check` per truth version across the phase; a second is refused with `truth-check-limit`. A `check` names its command, its expected literal or property, its test file and function, its setup, its call, its `boundary` (the one unit it exercises) and its `fakes` (every filesystem, process and clock seam that unit touches). A `link` is allowed only where the truth's own words name the value crossing (`link-value-not-named`). An `observation` is written only when what it names can be seen at the phase's close, and can never make a truth met, only `concerns` ([0007](0007-verification.md)). | The check is the truth; the other kinds are things the verifier inspects; nothing multiplies. | PLN-R4 | Active |
 | PLN-R13 | Baley refuses at plan submit: a truth the plan serves with no item (`uncovered-truth`); an item naming no truth or a stale truth version (`evidence-item-truth`, `truth-version-mismatch`); a truth with items but no check (`truth-without-check`); a check with a blank command, expected value or test file (`check-command`, `check-expected`, `check-test-file`); a task file outside the lease (`lease`); a story not committed to the phase (`story-not-in-phase`); a plan for a phase with no refined stories (`no-truths`); the same item id with a different definition across plans (`evidence-item-conflict`). | The map must be complete and consistent before anyone builds against it. | PLN-R11, PLN-R12 | Active |
 | PLN-R14 | Plan numbers within a phase are assigned in order and never reused. Replacing an approved plan needs its own owner approval naming the plan and the digest it replaces; a plan admitted to execution is not replaced (`admitted-plan`); a gap plan gets a new number ([0006](0006-execution.md)). | Every plan the record ever named can be found. | EVD-R2 | Active |
-| PLN-R15 | A plan is submitted whole, previewed, held as a draft by Baley, and approved by the owner by digest with owner and time. Approving an older digest when a newer draft exists is refused with `stale-draft`, naming the first differing part. A retry of the same approval is answered once. Drafts survive a server restart and are discarded when replaced or when the session that made them ends. | The owner approves exactly what was shown. | SYS-P5, SYS-R6 | Active |
-| PLN-R16 | Between submit and preview, when `review.triggers.plan.gate` is not `off`, Baley dispatches the checker with the plan and its stories' truths. The checker returns findings, each with a severity: a truth no task makes true is a blocker; a task no truth needs is a warning; a finding without severity is refused. A blocker buys one planner revision and one re-check, then the plan goes to the owner with the findings. Warnings never buy a round. The gate value says what the findings do ([0008](0008-review.md)). | The plan is judged against the goal before the owner spends time on it, at the cheapest effort, and the owner can turn it off. | PLN-R7, CFG-R12 | Active |
+| PLN-R15 | A plan is submitted whole, previewed, held as a draft by Baley, and approved by the owner by digest with owner and time. Approving an older digest when a newer draft exists is refused with `stale-draft`, naming the first differing part. A retry of the same approval is answered once. Drafts without a pending checker revision survive a server restart and are discarded when replaced or when the session that made them ends. Storage and exit for a pending checker revision remain open for Build 4 (section 12). | The owner approves exactly what was shown. | SYS-P5, SYS-R6 | Active |
+| PLN-R16 | Between submit and preview, when `review.triggers.plan.gate` is not `off`, Baley dispatches the checker with the plan and its stories' versioned truths. The checker returns findings, each with a severity: a truth no task makes true is a blocker; a task no truth needs is a warning; a finding without severity is refused. A blocker buys one planner revision and one re-check, then the plan goes to the owner with the findings. The first check reads the whole submitted plan against its stories' versioned truths. The re-check uses `review.triggers.plan.recheck`, either `full` or `diff`, with default `full`. Full reads the whole revised plan against the same truths. Diff reads every addition, modification and deletion since the checked draft, with before-and-after context. Both scopes check whether every first-round blocker is closed and may return new findings. Scope changes neither the number of rounds nor the gate's effect. Warnings never buy a round. The gate value says what the findings do ([0008](0008-review.md)). The round-2 work order binds the first check, the original and revised plan digests, the truth versions, the actual scope, the material references and the policy version that selected the scope. Before issue, the retained inputs must match the named first check and submitted revision. `plan submit` records this binding in `plan.check_issued` before returning the work order. A retry must keep that recorded binding. Missing or mismatched inputs refuse the re-check, without substituting current source or another scope. | The plan is judged against the goal before the owner spends time on it, at the cheapest effort, and the owner can turn it off. | PLN-R7, CFG-R12 | Active |
 | PLN-R17 | Baley never hands the model a number to hit: no coverage percentage, test count, tests per file or truth count. The only numbers are the owner's settings, applied by Baley and reported as refusals when crossed. | Any number given to the model becomes a target. | | Active |
 | PLN-R18 | The planner derives tests under the rules of section 10, compiled into Baley and served in the work order: one responsibility per test, one seam at most, the real logic that owns the decision, expected values from the requirement, tests that depend only on the project's language toolchain and its own test libraries, no program started, a fresh temporary directory as the one filesystem seam. The project's language and test command come from the project file (`workflow.test_command`) and its root manifest; Baley being written in Rust chooses nothing for the project. | Bounded, meaningful evidence in any language. | SYS-R8, CFG-R5 | Active |
 | PLN-R19 | Baley owns truths, the evidence map, the red-then-green record for checks ([0006](0006-execution.md)) and the verdict ([0007](0007-verification.md)). The project owns how its tests are written and run: style, framework, count, coverage, mutation, CI. Baley ships one default test style as guidance and never refuses on style. CI status is information at landing, never acceptance evidence. | Acceptance is few and reviewed; tests are many and the developer's. | | Active |
@@ -100,7 +100,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Owner | Each round's questions with their recommended answers, and the waiting questions; draft truths; plan previews; checker findings; phase facts at close | Answers (the recommended answer or the owner's own) and deferrals with reasons; approvals by digest; reorders and splits; retrospective notes | Not applicable |
 | Analyzer (dispatched) | Questions work order: the story, the project description, the roadmap, the code, the question grammar. Drafting work order: the story, its question set with every answer and deferral, the truth form and refusals | Questions (first work order); draft truths (second work order) | `roles.analyzer.*` ([0003](0003-configuration-and-routing.md)) |
 | Planner (dispatched) | The phase's goal and stories with their truths, the lease and task grammar, the evidence map grammar, the question grammar, the test derivation rules, the capacity ceiling as a fact; in a revision work order, the draft and every answer and deferral on its set | A typed plan with its evidence map and its questions; a proposed split when needed | `roles.planner.*` |
-| Checker (dispatched) | The submitted plan and its stories' truths | Findings with severity | `roles.checker.*`, gated by `review.triggers.plan.gate` |
+| Checker (dispatched) | The submitted plan and its stories' versioned truths for round 1; the retained material selected by PLN-R16 and every first-round blocker for round 2 | Findings with severity | `roles.checker.*`, gated by `review.triggers.plan.gate` |
 | Host session | Work orders to launch; each round's questions; drafts to put to the owner | The analyzer's questions as returned; the owner's answers and deferrals, relayed unchanged; approvals; adjudicated draft truths and checker output | Not applicable |
 | Baley: this area | Submissions, approvals | Previews, refusals, records | Not applicable |
 | Hardin | A refinement, phase or plan request | Whether it may happen now (phase active, dispatch active, plan admitted) | Not applicable |
@@ -170,8 +170,10 @@ Every change follows submit (preview and digest), approve (owner, by digest), re
 ### plan submit
 
 - **Inputs:** the typed plan (PLN-R11) with its evidence map (PLN-R12) and its questions (PLN-R23).
-- **Outputs:** the checker's work order when the plan gate is on; then the preview, the checker's findings, the plan's size and the phase's size against capacity, and the digest. With the preview Baley records `questions.opened` for the draft and gives the set id and round 1; a draft with no questions has an empty set, closed at once (PLN-R27). A new submit discards the draft it replaces and abandons that draft's set (PLN-R15, PLN-R25).
-- **Refusals:** every code of PLN-R13; `typed-content` (PLN-R11); `question-id`, `question-blank`, `question-dependency`, `question-cycle` (PLN-R23); `over-capacity` (PLN-R9); `phase-not-active` (PLN-R7); `plan-check-blocker` after the one revision and re-check, carrying the findings (PLN-R16).
+- **Outputs:** the checker's work order when the plan gate is on; then the preview, the checker's findings, the plan's size and the phase's size against capacity, and the digest. With the preview Baley records `questions.opened` for the draft and gives the set id and round 1; a draft with no questions has an empty set, closed at once (PLN-R27). A new submit discards the draft it replaces and abandons that draft's set (PLN-R15, PLN-R25). Plan and truth snapshots needed by a check are retained before a draft is discarded. For round 2, `plan submit` records `plan.check_issued` on `phase/<n>` before returning the work order. It binds the first check, the original and revised plan digests, the truth versions, the resolved scope, the material references and the policy version used to select the scope. Baley resolves the setting when it creates that work order. A retry must keep the binding from `plan.check_issued`.
+- **Refusals:** every code of PLN-R13; `typed-content` (PLN-R11); `question-id`, `question-blank`, `question-dependency`, `question-cycle` (PLN-R23); `over-capacity` (PLN-R9); `phase-not-active` (PLN-R7); `material-unavailable` when the retained draft, revision, truths or required comparison material cannot be read or does not match the work-order binding; `recheck-truths-changed` when the re-check's truths differ from those used by round 1 (PLN-R16). The evidence-map refusal `truth-version-mismatch` keeps its PLN-R13 meaning. After the one revision and re-check, remaining blockers go to the owner under the configured gate (PLN-R16).
+
+Baley recognizes a checker revision from the draft awaiting the one revision granted by its first `plan.checked` result. The caller supplies the revised plan, not a first-check reference; Baley selects that reference from the draft's check state and validates all retained material against it and the revision. A refused re-check leaves this state intact, so another submit in the same draft lineage remains a revision. Storage across server restarts and how a draft whose re-check was refused leaves that state are open questions for Build 4 in section 12.
 
 ### plan approve
 
@@ -278,6 +280,23 @@ One `questions answer` call writes its answers and deferrals in one transaction.
 
 Baley records it in the same transaction as the later set's `questions.opened` or the new draft, and when it discards a draft because its session ended.
 
+### plan.check_issued (event, `phase/<n>` stream)
+
+`plan submit` appends this event when it issues the checker's round 2, before handing the work order to the host. It uses the existing phase stream.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `work_order` | work order id | The round-2 check being issued |
+| `round` | 2 | The re-check |
+| `previous_check` | event reference | The first `plan.checked` result and its original plan digest |
+| `original_plan_digest`, `plan_digest` | digests | The first draft and submitted revision |
+| `truth_versions` | list of story ids, truth ids and versions | The unchanged truths from the first check |
+| `scope` | `full`, `diff` | The selected reading scope |
+| `scope_policy_version` | integer | The policy version that selected the scope |
+| `material` | payload references | Original and revised plans, truths and the exact selected checker input |
+
+`plan.checked` for that work order records the result with its issued binding. A retry must keep this binding and never select scope or material again. How the pending binding is keyed and read back before approval, and how draft discard closes a pending check, are open questions for Build 4 in section 12.
+
 ### plan.checked (event, `phase/<n>` stream)
 
 | Field | Type | Meaning |
@@ -285,6 +304,14 @@ Baley records it in the same transaction as the later set's `questions.opened` o
 | `plan_digest` | digest | The submission checked |
 | `findings` | list | severity (`blocker`, `warning`), location, claim, fix |
 | `round` | 1 or 2 | First check or the re-check |
+| `work_order` | work order id | The issued check whose result this event records |
+| `scope` | `full`, `diff` | The scope actually issued: `full` for round 1 and the resolved re-check scope for round 2 |
+| `previous_check` | event reference or absent | Required for round 2 and absent for round 1; identifies the first check and its draft digest |
+| `truth_versions` | list of story ids, truth ids and versions | The stories' truths bound to the work order, unchanged between rounds |
+| `material` | payload references | Retained plan and truth snapshots and the exact selected checker input, including the delta for `diff` |
+| `scope_policy_version` | integer | The policy version used when the checked work order selected its scope |
+
+The work order selects the full-plan input or the delta and blocker input from the retained material. Both carry the same versioned truths and every first-round blocker in round 2. The work order id, plan digest, scope, previous-check reference, truth versions, scope policy version and material references are copied from the issued work order, using `plan.check_issued` for round 2, never supplied by the checker or reconstructed from current files. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged (0001). The event envelope records the policy of the command that appends the result; `scope_policy_version` identifies the policy that selected the work order's scope.
 
 ### plan.replaced (event), phase.retrospective (event)
 
@@ -296,7 +323,7 @@ Baley records it in the same transaction as the later set's `questions.opened` o
 |---|---|---|
 | `backlog` | project | Stories in priority order with truth counts, refinement state (unrefined, questions open with the current round, drafting, refined), size when planned, the phase each is committed to |
 | `phase_plan` | project, phase | Goal, committed stories, plans with sizes, capacity, size, tasks done, definition of done state, velocity of closed phases. It is separate from the `phase` view of [0004](0004-starting-a-project-and-changing-scope.md), which serves Hardin the phase's context, plans, execution and completion state |
-| `plan` | project, phase, plan | The approved plan, its evidence map, its question set, its check state |
+| `plan` | project, phase, plan | The approved plan, its evidence map, its question set, and its completed checks with each round's scope, previous-check reference and material references |
 | `questions` | project, set | The set's subject; each question with its state (waiting and on what, in the current round, answered with the answer and whether it took the recommendation, deferred with the reason); the current round number; whether the set is open, closed or abandoned |
 
 ## 7. States
@@ -322,8 +349,11 @@ stateDiagram-v2
 stateDiagram-v2
   [*] --> Draft: plan submit
   Draft --> Checking: plan gate on
-  Checking --> Draft: blocker, one revision
+  Checking --> Draft: first-round blocker, one revision
+  Draft --> Draft: re-check refused, revision still pending
   Checking --> Previewed: no blocker, or re-check done
+  Draft --> Discarded: no pending checker revision, draft replaced or session ends
+  Checking --> Discarded: session ends
   Draft --> Previewed: plan gate off
   Previewed --> Answering: questions.opened, a question open
   Previewed --> Ready: questions.opened, no question
@@ -338,7 +368,7 @@ stateDiagram-v2
   Approved --> Admitted: execution admits it (0006)
 ```
 
-*Figure 2. States of a plan. Previewed is the moment Baley gives the preview and records the draft's question set. `plan approve` is refused in Answering (`question-open`) and in Revising (`answer-not-applied`). Admitted and later states belong to [0006](0006-execution.md).*
+*Figure 2. States of a plan. Previewed is the moment Baley gives the preview and records the draft's question set. `plan approve` is refused in Answering (`question-open`) and in Revising (`answer-not-applied`). Admitted and later states belong to [0006](0006-execution.md). Each check is bound to its submitted draft; the second check uses PLN-R16's recorded scope.*
 
 ```mermaid
 stateDiagram-v2
@@ -448,12 +478,27 @@ sequenceDiagram
       B-->>H: over-capacity, naming the story and count
     else
       alt plan gate on
-        B-->>H: checker work order
+        B-->>H: checker work order with the full plan and versioned truths
         H->>C: launch
         C-->>H: findings
-        H->>B: plan.checked
-        alt blocker, first round
-          B-->>H: one revision, planner relaunched, re-check once
+        H->>B: checker findings for the issued work order
+        B->>L: plan.checked with scope and material references
+        opt blocker, first round
+          B-->>H: planner work order for one revision
+          H->>P: launch revision
+          P-->>H: revised plan
+          H->>B: plan submit revision
+          B->>B: select scope, retain and validate material against the first check
+          break retained input unavailable or truth versions changed
+            B-->>H: material-unavailable or recheck-truths-changed
+            Note over H,B: revision still pending, exit remains open for Build 4
+          end
+          B->>L: plan.check_issued with work order, scope, policy and material binding
+          B-->>H: round-2 checker work order from the recorded binding
+          H->>C: launch re-check
+          C-->>H: findings
+          H->>B: checker findings for the issued work order
+          B->>L: plan.checked with the recorded binding and findings
         end
       end
       B->>L: questions.opened for the draft
@@ -481,7 +526,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 5. Phase planning and a plan's submission, check, questions and approval. A revised draft is checked and previewed again and opens its own question set. Approving a draft whose set holds a rejected recommendation is refused with `answer-not-applied`.*
+*Figure 5. Phase planning and a plan's submission, check, questions and approval. A revised draft is checked and previewed again and opens its own question set. Approving a draft whose set holds a rejected recommendation is refused with `answer-not-applied`. Round 2 reads the full revision or its changes, as selected by PLN-R16, and both scopes check every first-round blocker. Missing or mismatched retained inputs refuse the re-check before dispatch.*
 
 ```mermaid
 sequenceDiagram
@@ -538,6 +583,7 @@ sequenceDiagram
 |---|---|---|---|---|---|
 | `planning.phase_capacity` | integer, min 1, or absent | absent (no ceiling) | both | 0005 | The ceiling on a phase's size in tasks (PLN-R9) |
 | `review.triggers.plan.gate` | see [0003](0003-configuration-and-routing.md) | `advisory` | both | [0008](0008-review.md) | Whether the checker runs and what its findings do (PLN-R16) |
+| `review.triggers.plan.recheck` | `full`, `diff` | `full` | both | 0005 | The reading scope of round 2 for a plan check or plan review: `full` reads the whole revised plan; `diff` reads every addition, modification and deletion with before-and-after context. Both scopes check closure: every first-round blocker for the checker (PLN-R16), and every finding the owner ruled `fix` for a plan review (REV-R10). Both may report new defects. It does not control `diff` or `risk_surface` reviews. |
 | `workflow.test_command` | command | absent | project | [0006](0006-execution.md) | The suite named in every plan (PLN-R18) |
 | `roles.analyzer.*`, `roles.planner.*`, `roles.checker.*` | see [0003](0003-configuration-and-routing.md) | | both | 0003 | The three roles' model and effort |
 
@@ -548,7 +594,7 @@ sequenceDiagram
 | Analyzer questions | The analyzer, in its questions work order: the question grammar and its refusals; find every fact yourself from the code and the records and never ask the owner for one; ask only for the decisions left to the owner, each with a recommended answer and the ids of the questions it depends on; draft no truths yet; never decide | PLN-R6, PLN-R23 |
 | Analyzer drafting | The analyzer, in its drafting work order: the truth form, the three refusals, the story's questions with every answer and deferral; draft truths on the owner's answers, not on the recommendations; assume no answer to a deferred question; never decide | PLN-R2, PLN-R3, PLN-R6, PLN-R25 |
 | Planner | The planner, in its planning work order: the plan grammar with its `questions` field, the question grammar, the lease rules, the evidence map grammar, one check per truth, the test derivation rules below, the capacity ceiling as a fact, "propose a split rather than overfill", "put every decision the plan needs from the owner in `questions` with a recommended answer, write the plan on the recommended answers, and leave no decision in `notes` or task prose". In a revision work order it also receives the draft and every answer and deferral on its set, and applies them | PLN-R5, PLN-R9 to PLN-R13, PLN-R17, PLN-R18, PLN-R23, PLN-R27 |
-| Checker | The checker, in its check work order: the six dimensions (story coverage, task completeness, sequencing, goal-backward truths, scope sanity, proportionality), severity rules, "derive what must be true from the goal before opening the plan" | PLN-R16 |
+| Checker | The checker, in its check work order: the six dimensions (story coverage, task completeness, sequencing, goal-backward truths, scope sanity, proportionality), severity rules, derive what must be true from the goal before opening the plan. For round 2, follow the work order's scope, check every first-round blocker and report new defects in the selected material | PLN-R16 |
 | Default test style | The planner and, through [0006](0006-execution.md), the executor, when the project has set nothing: test a unit through what it exposes; fake only the outside world; never start a program; skip trivial code; write the expected value by hand | PLN-R19 |
 | Stubs | The host session: which operation each of `story refine`, `story questions submit`, `questions round`, `questions answer`, `story truths submit`, `phase plan`, `plan submit`, `phase close` calls, and that the owner approves each preview | PLN-R15 |
 | Rounds | The host session, with every question set: submit the analyzer's questions as returned; put every question of the current round to the owner with its recommended answer and show the waiting questions; relay each answer and deferral unchanged; answer, drop, merge, reword and reorder none; ask again after each call until the set is closed | PLN-R24, PLN-R25, PLN-R26 |
@@ -582,7 +628,7 @@ The binary parks the inherited engine for Build 9 to delete, and nothing in prod
 | PLN-R12, PLN-R13 | Not built | Only the parked engine checks a plan's evidence map, associations and limits, and it has no refusals about committed stories (`story-not-in-phase`, `no-truths`) (`crates/baley/src/plan/associations.rs:287-497`, `crates/baley/src/plan/limits.rs:187-438`, `crates/baley/src/plan/evidence.rs:12-116`). The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:156`) until Build 4 |
 | PLN-R14 | Not built | Only the parked engine numbers a phase's plans and refuses to replace an admitted plan (`crates/baley/src/plan/inventory.rs:129-179`, `crates/baley/src/plan/validation.rs:23-105`). The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:156`) until Build 4 |
 | PLN-R15 | Not built | Only the parked engine holds a plan draft, approves it by digest and refuses `stale-draft` (`crates/baley/src/plan_service.rs:163-260`). Its drafts are memory-only and lost on restart (`crates/baley/src/session/mod.rs:427-437`). The session server answers `plan-submit` as unavailable (`crates/baley/src/mcp/operations.rs:156`) until Build 4 |
-| PLN-R16 | Not built | `/bal-plan` forbids checker dispatch (`crates/baley/src/plan/instructions.rs:504-506`), and the parked engine still holds the 3.x checker verdict record as a fact kind (`crates/baley/src/evidence/mod.rs:48`, `crates/baley/src/evidence/checker.rs:43-52`) |
+| PLN-R16 | Not built | `/bal-plan` forbids checker dispatch (`crates/baley/src/plan/instructions.rs:504-506`), and the parked engine still holds the 3.x checker verdict record as a fact kind (`crates/baley/src/evidence/mod.rs:48`, `crates/baley/src/evidence/checker.rs:43-52`). Re-check scope selection, retained comparison material, `plan.check_issued` and pending-check lookup are not built |
 | PLN-R17, PLN-R18, PLN-R19 | Built as text | The derivation rules are compiled at `crates/baley/src/plan/instructions.rs:119-180`, which `baley plan-instructions` prints. The compiled text still tells the planner to flag ambiguity for the owner in prose (`crates/baley/src/plan/instructions.rs:124`) |
 | PLN-R23 to PLN-R27 | Not built | The parked engine's phase context carries `assumptions` as strings the session writes (`crates/baley/src/context/model.rs:44`). There is no question, question set, round, answer or deferral record, no `questions` view, and no `question-open` or `answer-not-applied` refusal |
 
@@ -590,5 +636,8 @@ The binary parks the inherited engine for Build 9 to delete, and nothing in prod
 
 | Question | Decided by |
 |---|---|
+| How the plan checker's revision and a plan review's revision combine for one plan | Build 4, at the hand-off between `plan submit` and the plan-triggered review in [0008](0008-review.md) |
+| Where a checker's pending revision lives across a server restart, given that the server mints a new session id at each start, and how a draft whose re-check was refused leaves that state | Build 4, at the draft and checker revision state in `plan submit` |
+| How a pending round-2 binding is keyed and read back before a plan number exists, and how discarding its draft closes the pending check | Build 4, at `plan.check_issued`, `plan.checked` and draft discard |
 | The exact conditions under which a check's verdict is `rejected` for a test that could not have failed | [0007: Verification](0007-verification.md) |
 | How the analyzer, planner and checker work orders are delivered to the session's subagents on Claude Code, how their output is adjudicated there, and how the session puts a round's questions to the owner and returns the answers | [0012: Host interface](0012-host-interface.md) |
