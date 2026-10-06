@@ -1513,13 +1513,19 @@ mod tests {
         assert_eq!(opened_with(ms(1_000), ms(1_500), ms(1_500)), ms(1_000));
     }
 
-    // Catches a guard open whose own statements run under the 5,000 ms
-    // busy timeout until a later acquisition sets it.
+    // Catches a guard open whose writer connects under the 5,000 ms busy
+    // timeout, or any of its statements that runs under the timeout an
+    // earlier one set: either skips a reading, so the last ones read later.
     #[test]
-    fn a_guard_open_runs_its_statements_under_the_normal_busy_timeout() {
+    fn a_guard_open_runs_a_statement_under_the_normal_or_an_earlier_busy_timeout() {
         let home = crate::checks::private_folder();
-        let store = guard_on(home.path(), Scripted::still(), ms(1_500));
-        assert_eq!(busy_timeouts(&store), (1_500, 1_500));
+        let store = guard_on(home.path(), Scripted::stepping(ms(100)), ms(1_500));
+        // Readings 100 ms apart, the deadline 1,500 ms after the first. One
+        // each before the writer's connect, the epoch's two queries, the
+        // digest, the reader's connect and the two file settings, so the
+        // writer's last is the eighth, with 800 ms left. The view check's
+        // try and busy timeout leave the reader 600 ms.
+        assert_eq!(busy_timeouts(&store), (800, 600));
     }
 
     // Catches a guard open whose statements after the writer connects keep
