@@ -29,7 +29,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 
 Installation is designed but not built or released. The planned install is one command: an installer script verifies the release and places the binary behind `~/.local/bin/baley`, then runs `baley install`. The binary writes the MCP entry, pre-tool hook, stubs, sandbox settings and Read/Edit deny rules. No npm or plugin is needed. Install takes settings defaults; `baley config interview` remains available later. A new Claude Code session loads the wiring, and each checkout needs `baley init`.
 
-Automatic updates are opt-in and off by default. Once enabled, a detached process started by `baley serve` checks at most daily, verifies the download's signature and checksum, and stages the new version beside the old one for new sessions only. The guard never checks for updates or waits for them. Manual `baley update` is always available in the design. See [delivery and updates](docs/adr/0038-installer-and-opt-in-updates.md).
+Automatic updates are opt-in and off by default. Once enabled, a detached process started by `baley serve` checks at most daily, verifies the download's signature and checksum, and stages the new version beside the old one. New sessions start the new server; running servers keep their version. The hook uses the new version at its next call and must work with an older running server and its ledger state. The updater contacts the release source without sending project content or provider credentials. The guard never checks for updates or waits for them. Manual `baley update` is always available in the design. See [delivery and updates](docs/adr/0038-installer-and-opt-in-updates.md).
 
 ## API keys and outside-review risks
 
@@ -39,7 +39,7 @@ Release 1 outside reviews use provider APIs only. Baley builds the request and n
 
 Before an outside provider is enabled, the interview asks which providers to use, states these risks and requires a typed confirmation. It records the acknowledgement in the ledger and asks again when the warning changes. Install defaults enable no outside provider and never acknowledge a warning for you.
 
-This boundary is not built yet. The current binary still contains the `keys.env` reader, `baley exec` and the HTTPS model lister. Their removal has no build assigned. See [the credential decision](docs/adr/0039-session-owned-provider-credentials.md) and [configuration build status](docs/design/0003-configuration-and-routing.md#11-build-status).
+This boundary is not built yet. The current binary still contains the `keys.env` reader, `baley exec --key` and the HTTPS model lister. Their removal has no build assigned. See [the credential decision](docs/adr/0039-session-owned-provider-credentials.md) and [configuration build status](docs/design/0003-configuration-and-routing.md#11-build-status).
 
 ## Following the work
 
