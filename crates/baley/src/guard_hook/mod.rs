@@ -8,6 +8,8 @@
 // The hook's entry is its caller once `baley guard` runs through this module.
 #[allow(dead_code)]
 mod branch;
+#[allow(dead_code)]
+mod context;
 mod render;
 
 pub use render::{Rendered, failed_write, render};
