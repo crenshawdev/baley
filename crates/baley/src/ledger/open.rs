@@ -232,7 +232,16 @@ mod tests {
         let old = store(&home, T1, view_set_5()).unwrap();
         assert_eq!(models::observe_hint_version(&old), Ok(Some(HINT_VERSION)));
         drop(old);
-        let current = store(&home, T1, options()).unwrap();
+        // The rebuild that brings it current reads the store's clock.
+        let current = store(
+            &home,
+            T1,
+            Options {
+                timing: std::sync::Arc::new(Fixed),
+                ..options()
+            },
+        )
+        .unwrap();
         assert_eq!(
             models::observe_hint_version(&current),
             Ok(Some(HINT_VERSION))
