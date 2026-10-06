@@ -438,7 +438,15 @@ pub fn schema_answer(arguments: &Value) -> Value {
 
 /// The schema of one served operation, from the library's request shapes.
 fn served_schema(operation: &str) -> Option<Value> {
-    let root = serde_json::to_value(schemars::schema_for!(RequestShape)).ok()?;
+    // The selected variant must not refer to definitions left on the root.
+    let settings = schemars::generate::SchemaSettings::default()
+        .with(|settings| settings.inline_subschemas = true);
+    let root = serde_json::to_value(
+        settings
+            .into_generator()
+            .into_root_schema_for::<RequestShape>(),
+    )
+    .ok()?;
     root["oneOf"]
         .as_array()?
         .iter()
@@ -802,6 +810,57 @@ mod tests {
                 "{property} missing from {answer}"
             );
         }
+    }
+
+    #[test]
+    fn no_served_operation_schema_refers_to_a_definition_it_drops() {
+        fn check(schema: &Value) {
+            match schema {
+                Value::Object(fields) => {
+                    assert!(
+                        !fields.contains_key("$ref"),
+                        "unresolved reference: {schema}"
+                    );
+                    for value in fields.values() {
+                        check(value);
+                    }
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        check(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for tool in [Tool::Query, Tool::Apply] {
+            for operation in tool.operations() {
+                if matches!(operation.status, Status::Available { .. }) {
+                    let schema = served_schema(operation.name).expect(operation.name);
+                    check(&schema);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_document_schema_does_not_omit_or_widen_the_capture_identity() {
+        // Design 0012 requires exactly a capture kind and a string id.
+        let schema = served_schema("document").unwrap();
+        let identities = schema["properties"]["identity"]["oneOf"]
+            .as_array()
+            .unwrap();
+        assert_eq!(identities.len(), 1);
+        let identity = &identities[0];
+        assert_eq!(identity["type"], "object");
+        assert_eq!(identity["properties"]["kind"]["const"], "capture");
+        assert_eq!(identity["properties"]["id"]["type"], "string");
+        assert_eq!(identity["additionalProperties"], false);
+        let required = identity["required"].as_array().unwrap();
+        assert!(required.contains(&json!("kind")));
+        assert!(required.contains(&json!("id")));
+        assert_eq!(identity["properties"].as_object().unwrap().len(), 2);
     }
 
     fn sha256_hex(text: &str) -> String {
