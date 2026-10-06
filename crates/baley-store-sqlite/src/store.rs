@@ -637,7 +637,8 @@ pub(crate) fn connect(
 /// A connection that can only read the existing database file: opened
 /// read-only, so a missing file is an error and never created. Only the
 /// busy timeout is set; the write settings `connect` applies have nothing
-/// to do on it.
+/// to do on it. It is `BUSY_TIMEOUT` on a guard store too, because the
+/// guard opens no read-only connection.
 pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open_with_flags(
         path,

@@ -9,9 +9,14 @@
 //! store files for ownership, kind, modes and links before every open.
 //! A store opened for the guard waits for its locks, its connections and
 //! SQLite's busy handler no longer than the storage time it was given, at
-//! most `GUARD_STORAGE_CAP`, and then answers `StoreError::Busy`. It never
-//! rebuilds a project's views inline: views behind this binary's answer
-//! `StoreError::NeedsRebuild`.
+//! most `GUARD_STORAGE_CAP`, and then answers `StoreError::Busy`. Its reads
+//! and commands never rebuild a project's views inline: views behind this
+//! binary's answer `StoreError::NeedsRebuild`. Two paths the guard never
+//! calls keep their unbounded waits on such a store: lease renewal still
+//! brings views forward under the maintenance lock, and read-only
+//! connections (payload bodies, export, chain and view verification) keep
+//! `BUSY_TIMEOUT`. A guard caller of either bounds it first, at
+//! `SqliteStore::catch_up` and `connect_read_only`.
 //! The adapter runs the port's conformance suite as one test per check,
 //! and keeps its own tests for SQLite mechanisms.
 

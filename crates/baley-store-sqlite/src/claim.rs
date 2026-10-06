@@ -169,6 +169,8 @@ impl SqliteStore {
             if result.is_some() {
                 return Ok(());
             }
+            // Unbounded even on a guard store: the guard never renews a
+            // lease. A guard caller would go through `catch_up` instead.
             self.bring_current(project)?;
         }
     }

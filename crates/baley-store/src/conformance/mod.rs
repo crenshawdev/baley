@@ -31,8 +31,8 @@ pub trait StoreFactory {
     fn reopen(&self, store: &Self::Store, binary: Binary) -> Result<Self::Store, StoreError>;
     /// Opens an independent connection as the supplied binary with the
     /// adapter's bounded access, as the guard opens it. Bounded access
-    /// answers `StoreError::NeedsRebuild` for views behind the binary's and
-    /// never rebuilds them inline.
+    /// answers `StoreError::NeedsRebuild` to a read or a command whose
+    /// views are behind the binary's and never rebuilds them inline.
     fn reopen_bounded(
         &self,
         store: &Self::Store,
