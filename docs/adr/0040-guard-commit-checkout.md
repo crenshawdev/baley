@@ -33,7 +33,7 @@ The guard gets policy from the session project at `CLAUDE_PROJECT_DIR`. A shell 
 
 Chosen option: **1**, because it applies the session project's branch rules where the commit lands and separates remembered denials by that same checkout.
 
-The scanner gives a commit `Cwd`, an ordered `Directory` list of git `-C` operands, or `Unestablished`. Starting at the hook cwd, each operand is joined to the previous directory; an absolute operand replaces it. Path components are preserved for filesystem resolution. `--work-tree` and `-c` do not redirect the checkout. `--git-dir` in either form, an earlier segment led by `cd`, `pushd`, `popd` or `export`, an empty or expanding `-C` operand, or commits naming different targets make it unestablished. An expanding operand starts with `~` or contains `*`, `?` or `[`. Only the first word of a segment counts as a directory or environment change. Push still takes precedence and always asks in a bound project.
+The scanner gives a commit `Cwd`, an ordered `Directory` list of git `-C` operands, or `Unestablished`. Starting at the hook cwd, each operand is joined to the previous directory; an absolute operand replaces it. Path components are preserved for filesystem resolution. `--work-tree` and `-c` do not redirect the checkout. `--git-dir` in either form, an earlier segment matching GRD-R3's recognised directory or environment change shapes, an empty or expanding `-C` operand, or commits naming different targets make it unestablished. An expanding operand starts with `~` or contains `*`, `?` or `[`. Push still takes precedence and always asks in a bound project.
 
 In a bound project an unestablished target asks with one fixed reason, with no branch or settings read. It is recorded like every other ask, and an unrecordable ask becomes a deny under GRD-R9. With no project bound, commands still pass with nothing recorded.
 
@@ -54,6 +54,7 @@ The branch lookup and the bounded `.git/HEAD` fallback use the resolved commit d
 ### Negative
 
 - Ambiguous targets ask even when a shell could resolve them, and an unrecordable ask denies.
+- A command that moves a detected commit by a means outside GRD-R3's recognised shapes is judged as though it ran from the hook cwd.
 - Different operand lists are conservatively treated as different targets even if they might reach the same directory.
 - An old denial recorded for a redirected command was keyed by cwd. It stays under that old key, since the old event lacks enough information to move it reliably.
 - Branch reads remain observations before execution; a later branch change is not prevented by this hook.
