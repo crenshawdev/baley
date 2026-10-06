@@ -18,8 +18,8 @@
 //!   the home and config folder and off the placed files;
 //! - `coverage`: the judge of what each guarded tool can read and write in
 //!   the folders and the placed files, from a settings document;
-//! - the composition with existing settings, added by the same task's second
-//!   plan.
+//! - `compose`: Baley's entries put into an owner's existing settings
+//!   document, keeping every unrelated key and reporting every bypass.
 //!
 //! Delivery is `baley install`'s (Build 3 T15): where each artifact goes, who
 //! owns the file and how it is written or removed are decided there, with
@@ -46,6 +46,7 @@
 //!   `powershell`), so an executable path in it is quoted for POSIX `sh`. A
 //!   hook `matcher` is a regular expression over tool names.
 
+pub mod compose;
 pub mod coverage;
 pub mod executable;
 pub mod hook;

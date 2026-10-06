@@ -27,7 +27,10 @@
 //!   no tool here;
 //! - a hook counts as the guard only when it is the command hook `hook`
 //!   renders, with no field that narrows, detaches or reshapes it and no
-//!   timeout below the guard's budget.
+//!   timeout below the guard's budget;
+//! - an `allowWrite` entry inside a folder is a gap, although Claude Code
+//!   keeps a `denyWrite` entry inside an otherwise writable path. A narrower
+//!   `allowRead` entry does re-open a `denyRead` folder.
 //!
 //! One gap runs the other way and is written down here: an `allowRead` or
 //! `allowWrite` entry is judged only when it is absolute. A `~/` entry needs
