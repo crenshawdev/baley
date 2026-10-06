@@ -73,8 +73,9 @@ pub fn read(
 }
 
 /// Bytes kept of each stream of a guard launch. A project file larger than
-/// this is refused as incomplete output.
-const GUARD_OUTPUT_LIMIT: usize = 1 << 20;
+/// this is refused as incomplete output, as the guard's working-tree read
+/// refuses one.
+const GUARD_OUTPUT_LIMIT: usize = settings::GUARD_LIMIT;
 
 /// Bytes kept of git's first stderr line in a guard read's error, so the
 /// error cannot carry a flood of output or any later line.
@@ -89,8 +90,8 @@ const GUARD_EXCERPT_LIMIT: usize = 256;
 /// `GUARD_OUTPUT_LIMIT` bytes (1 MiB), and an error keeps at most
 /// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line.
 ///
-/// It has no caller yet: Build 3's recording guard reads it after the branch
-/// lookup, on the same budget.
+/// The guard hook is its caller: it reads HEAD's copy at the session
+/// project's root after the branch lookup, on the same budget.
 pub fn read_for_guard(
     root: &Path,
     working: &SettingsFile,

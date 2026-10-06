@@ -81,5 +81,5 @@ pub mod policy_step;
 pub mod protected_paths;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
-/// The two settings files as bytes: the global file's path and one reader.
+/// The two settings files as bytes: the global file's path, one reader and its capped form for the guard.
 pub mod settings;

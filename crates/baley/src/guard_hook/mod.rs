@@ -10,6 +10,8 @@
 mod branch;
 #[allow(dead_code)]
 mod context;
+#[allow(dead_code)]
+mod policy;
 mod render;
 
 pub use render::{Rendered, failed_write, render};
