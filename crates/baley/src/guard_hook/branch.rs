@@ -77,9 +77,11 @@ pub(super) fn branch(git: GitRead, head: Option<String>) -> BranchObservation {
 fn regular_text(path: &Path) -> Option<String> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    // Non-blocking, so a pipe or device in place of the file cannot hold the
+    // open past the hook's time; the regular-file check below refuses it.
     let mut file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .ok()?;
     let metadata = file.metadata().ok()?;
@@ -238,5 +240,23 @@ mod tests {
             branch(detached, None),
             unreadable("current branch is unresolvable or HEAD is detached")
         );
+    }
+
+    #[test]
+    fn a_head_file_that_is_a_pipe_holding_the_fallback_open_is_caught() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("HEAD");
+        let name = std::ffi::CString::new(pipe.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a valid NUL-terminated path inside the test's own directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0);
+        // A pipe with no writer blocks a plain open forever, so the read runs
+        // on its own thread and a blocked open fails here instead of hanging.
+        let (sent, read) = std::sync::mpsc::channel();
+        std::thread::spawn(move || sent.send(regular_text(&pipe)));
+        let text = read
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the open blocked on the pipe");
+        assert_eq!(text, None);
     }
 }
