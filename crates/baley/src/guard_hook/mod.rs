@@ -104,6 +104,7 @@ pub fn run() -> ExitCode {
                 }
             }
             Next::Do(Step::Branch(at)) => {
+                seen.target_checkout = Some(context::walk(&at));
                 let git = branch::git_branch(&at, &mut System, &mut budget);
                 seen.branch = Some(branch::branch(git, branch::symbolic_head(&at)));
             }

@@ -6,7 +6,7 @@
 //! judged against the hook's cwd through a supplied [`Lookup`], whether or
 //! not a project is bound.
 
-use super::context::{Bound, HookContext};
+use super::context::{Bound, HookContext, Walk};
 use crate::hook_input::{CommandTool, Envelope, HookInput, PathTarget, PathTool};
 use crate::protected_paths::{Lease, Lookup, read_answer, resolve_target, write_answer};
 use baley_core::guard::{
@@ -20,6 +20,8 @@ use std::path::PathBuf;
 pub(super) struct Seen {
     /// The branch at the commit's target directory.
     pub branch: Option<BranchObservation>,
+    /// The walk from the commit's target directory, for remembered denials.
+    pub target_checkout: Option<Walk>,
     /// The session project's settings.
     pub settings: Option<SettingsInput>,
     /// Git's stderr ending a torn HEAD copy's cause, which a record leaves
@@ -65,7 +67,7 @@ pub(super) struct Selected {
     pub tool: &'static str,
     /// The input digest over the fields the guard read.
     pub input_digest: String,
-    /// A path tool's resolved target, when it resolves to UTF-8 text.
+    /// A path tool's resolved target or a redirected commit's directory.
     pub target: Option<String>,
     /// The git verb a command runs.
     pub verb: Option<GitVerb>,
@@ -118,9 +120,14 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
                     return decide(Answer::Ask(reason::commit_target_ask()), facts);
                 }
                 GitCommand::Commit(CommitTarget::Cwd) => PathBuf::from(&envelope.cwd),
-                GitCommand::Commit(CommitTarget::Directory(operands)) => operands
-                    .iter()
-                    .fold(PathBuf::from(&envelope.cwd), |at, operand| at.join(operand)),
+                GitCommand::Commit(CommitTarget::Directory(operands)) => {
+                    let at = operands
+                        .iter()
+                        .fold(PathBuf::from(&envelope.cwd), |at, operand| at.join(operand));
+                    // The cwd and operands are UTF-8, so the joined path is too.
+                    facts.target = at.to_str().map(str::to_owned);
+                    at
+                }
             };
             let Some(branch) = &seen.branch else {
                 return Next::Do(Step::Branch(at));
@@ -448,6 +455,19 @@ mod tests {
         ));
         assert_eq!(decided.answer, Answer::Pass);
         assert_eq!(decided.record, None);
+    }
+
+    #[test]
+    fn a_redirected_commit_record_omitting_its_resolved_directory_is_caught() {
+        let record = decided(next(
+            &bash("git -C /r -C src commit"),
+            &context(Some("/p")),
+            &after_gathering(protecting_main()),
+            &disk(),
+        ))
+        .record
+        .expect("the denial is recorded");
+        assert_eq!(record.target.as_deref(), Some("/r/src"));
     }
 
     #[test]
