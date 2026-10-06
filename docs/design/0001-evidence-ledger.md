@@ -394,10 +394,9 @@ Streams used by the record families:
 |---|---|
 | `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen`, `anchor.pushed`, `anchor.failed`, `anchor.restore_acknowledged` |
 | `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `story.declared`, `story.corrected`, `story.reassigned`, `story.reprioritized`, `story.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a story's question set ([0005](0005-context-plans-and-acceptance.md)) |
-| `phase/<n>` | `plan.approved`, `plan.check_issued`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
+| `phase/<n>` | `plan.approved`, `plan.check_issued`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone`, `risk.raised`, `risk.scanned`, `risk.fired`, `risk.overridden`, `risk.settled` ([0009](0009-risk.md)) |
 | `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `observation.recorded`, `item.overruled`, `truth.waived`, `waiver.revoked`, `verification.completed` ([0007](0007-verification.md)) |
 | `review/<id>` | `review.admitted`, `review.issued`, `review.returned`, `review.failed`, `review.adjudication`, `review.adjudicated`, `review.settled`, `review.deferred`, `finding.filed`, `finding.declined`, `finding.uncertain` ([0008](0008-review.md)) |
-| `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.authorized`, `landing.claimed`, `landing.step`, `landing.reconciled`, `landing.confirmed`, `landing.completed`, `tracker.checked` ([0011](0011-milestones-landing-undo-pause.md)) |
 | `pause` | `pause.recorded`, `pause.resumed` |
 | `capture`, `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the support families' records ([0014](0014-support-families.md)) |
@@ -1534,7 +1533,7 @@ None. The benchmark and the host matrix, the two acceptance gates, are answered 
 | `verification` (attempts, runs, claims, patches, waivers, humans, completions) | `verification/<id>` stream; `verification` view. The copy of execution records inside each attempt is replaced by the sequence range it observed |
 | `native_evidence` | Evidence events on the stream they concern; order comes from the project sequence, not a log scan |
 | `review` | `review/<id>` stream; `review` and `review_queue` views; retained material becomes `material` payloads |
-| `rail_observations`, `rail_receipts` | `risk/<n>` stream; `risk` view |
+| `rail_observations`, `rail_receipts` | `risk.raised`, `risk.scanned`, `risk.fired`, `risk.overridden`, `risk.settled` on `phase/<n>` ([0009](0009-risk.md)); `risk` view |
 | `milestones`, `milestone_prunes`, `milestone_releases`, `landings` | `milestone/<name>` stream with separate close, archive, release and landing steps; `milestone` view |
 | `undos`, `undo_requests` | `phase.undone` events through claim, act, record; refusals through `command.completed` |
 | `task`, `debug`, `spike` | Their own streams and views |
