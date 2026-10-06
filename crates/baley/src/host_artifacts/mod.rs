@@ -42,4 +42,6 @@
 //!   `powershell`), so an executable path in it is quoted for POSIX `sh`. A
 //!   hook `matcher` is a regular expression over tool names.
 
+pub mod executable;
+pub mod registration;
 pub mod stubs;
