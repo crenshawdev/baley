@@ -59,6 +59,8 @@ pub mod exec;
 pub mod folders;
 /// The guard's one time budget: git and storage allowances inside the hook timeout.
 pub mod guard_budget;
+/// The guard hook: reads one host tool call, judges it and answers in the host's pre-tool hook form.
+pub mod guard_hook;
 /// Classifies one hook call's input for the guard: which tool it is and what it carries.
 pub mod hook_input;
 /// `baley init`: ties a repository to a ledger project.
