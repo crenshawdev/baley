@@ -613,7 +613,7 @@ The existing source checks are kept and run at these points:
 
 | Check | Today | Runs |
 |---|---|---|
-| Verification claim recomputed at commit | `store/writer.rs:1436` | Inside `decide` for `verdict.claimed` |
+| Verification claim recomputed at commit | `store/writer.rs:1373-1384` | Inside `decide` for `verdict.claimed` |
 | Source reachability, commit signatures, staged-path leases | `execution/receipts.rs:1137-1210` | Before `transact`, facts recorded; HEAD re-checked inside |
 | Changed source or index refused on re-observation | `verification/inputs.rs:458-461` | Inside `decide` |
 | HEAD unchanged during an execution request | `execution_service.rs:2825` | Inside `decide` |
@@ -1186,7 +1186,7 @@ sequenceDiagram
 
 #### A retried tool call
 
-A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id. A completed request gets `Replayed`, and an open claim gets `InProgress`; neither re-executes the effect. The lookup needs only the live `request` view at this binary's projector version; the project's other views and its view set stamp do not matter to a replay, even when a newer binary has since rebuilt them. Only a new request is fenced on every live view's version. If the retry's project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. Nothing is recorded twice and no effect runs twice.
+A host may deliver the same MCP tool call twice after a timeout. The second delivery carries the same request id. A completed request gets `Replayed`, and an open claim gets `InProgress`; neither re-executes the effect. The lookup needs only the live `request` view at this binary's projector version; the project's other views and its view set stamp do not matter to a replay, even when a newer binary has since rebuilt them. Only a new request is fenced on every live view's version. If the retry's project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. Nothing is recorded twice and no effect runs twice. A pre-tool hook call carries no request id: each guard process mints a fresh one, and a redelivered hook call is found by host, session and call id in the `guard` view of `user` instead ([0010](0010-guard.md), GRD-R10).
 
 #### Two sessions writing at once
 
