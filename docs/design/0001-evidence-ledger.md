@@ -394,7 +394,7 @@ Streams used by the record families:
 |---|---|
 | `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen`, `anchor.pushed`, `anchor.failed`, `anchor.restore_acknowledged` |
 | `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `story.declared`, `story.corrected`, `story.reassigned`, `story.reprioritized`, `story.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a story's question set ([0005](0005-context-plans-and-acceptance.md)) |
-| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
+| `phase/<n>` | `plan.approved`, `plan.check_issued`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
 | `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `observation.recorded`, `item.overruled`, `truth.waived`, `waiver.revoked`, `verification.completed` ([0007](0007-verification.md)) |
 | `review/<id>` | `review.admitted`, `review.issued`, `review.returned`, `review.failed`, `review.adjudication`, `review.adjudicated`, `review.settled`, `review.deferred`, `finding.filed`, `finding.declined`, `finding.uncertain` ([0008](0008-review.md)) |
 | `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
@@ -406,7 +406,7 @@ Streams used by the record families:
 | `retention` | `payload.reduced`, `payload.purged` |
 | `models` | `models.seeded`, `models.owner_changed`, `models.detected`, `models.detection_failed`. The stream lives only in the reserved per-user project `user`, whose records carry policy version 0 ([0003](0003-configuration-and-routing.md)) |
 
-A plan check records its reading scope and retained material in `plan.checked` ([0005](0005-context-plans-and-acceptance.md), PLN-R16). A review records each round's scope and material references in `review.issued` ([0008](0008-review.md), REV-R10). Scope and the work order's baseline, truth-version and policy bindings are inline facts, while source snapshots and review input are payload references. Replaying these records uses their recorded scope and references, without consulting current settings or source files or opening payload bodies. Plan and truth snapshots use `record` references; generated review input uses `material` references. Retention or purge can remove bodies without removing the recorded scope or references. A re-check that needs an unavailable body is refused. No additional event family, stream or view is introduced for re-check scope.
+A plan check records its round-2 work order, scope, selecting policy version, first-check reference, original and revised digests, truth versions and material references in `plan.check_issued` before dispatch ([0005](0005-context-plans-and-acceptance.md), PLN-R16). `plan submit` writes that event on `phase/<n>`; the plan projector records the pending check and its binding. `plan.checked` records the result and completes the pending check. A review records each round's scope and material references in `review.issued` ([0008](0008-review.md), REV-R10). Scope and the work order's baseline, truth-version and policy bindings are inline facts, while source snapshots and review input are payload references. Replaying these records uses their recorded scope and references, without consulting current settings or source files or opening payload bodies. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged. Generated review input and prompts for reviews in 0008 use `material` references. Retention or purge can remove bodies without removing the recorded scope or references. A re-check that needs an unavailable body is refused. `plan.check_issued` is the only additional checker event; it uses the existing phase stream and plan view.
 
 The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-from-the-current-store).
 
@@ -738,7 +738,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 |---|---|---|---|
 | `roadmap` | project | | The ordered phases and their declared stories |
 | `phase` | (project, phase) | status | Status, context, completion and whether it still applies |
-| `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness, and check rounds with their scope and material references |
+| `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness, and pending or completed check rounds with their work-order binding, scope and material references |
 | `evidence_map` | (project, phase, plan) | | The acceptance evidence a plan must produce |
 | `admission` | (project, phase) | checkout | What execution may touch, and in which checkout |
 | `dispatch` | (project, dispatch id) | phase, state | Active and ended dispatches, task and suite outcomes |
@@ -768,9 +768,9 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 
 | Class | Examples | Default retention |
 |---|---|---|
-| `record` | plan and context text, verdict detail, capture text over 4 KiB | Kept for the life of the project |
+| `record` | plan and context text, checker input including deltas, verdict detail, capture text over 4 KiB | Kept for the life of the project |
 | `output` | test and command output | Kept until the milestone that produced it closes, then reduced |
-| `material` | review material, prompts sent to models | Kept for 90 days after its review closes |
+| `material` | review input and prompts belonging to a review in 0008 | Kept for 90 days after its review closes |
 
 These are the defaults. A project can change any of them in `baley.toml`, and `baley purge` removes a body at once regardless of class.
 
@@ -1157,7 +1157,7 @@ sequenceDiagram
   D->>B: ask to execute
   B->>L: re-read plan, context, admission, confirm against events
   alt evidence supports execution
-    B->>L: execution.admitted (for this checkout)
+    B->>L: plan.admitted (for this checkout)
     B-->>D: allowed, dispatch issued
   else proof missing
     B-->>D: refused, naming the missing proof

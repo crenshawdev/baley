@@ -31,7 +31,7 @@
 
 ## Decision
 
-Chosen option: **3**, accepted on 2026-10-02. Default `review.triggers.plan.recheck` to `full` and allow `diff` for plan checks and plan-triggered review rounds. The first round reads the whole submitted plan against its stories' versioned truths. Full reads the whole revised plan against the same truths. Diff reads every addition, modification and deletion since the first round's draft, with before-and-after context. Both scopes check every first-round blocker and may report new defects. Scope changes neither the gate's effect nor the round limit.
+Chosen option: **3**, accepted on 2026-10-02. Default `review.triggers.plan.recheck` to `full` and allow `diff` for plan checks and plan-triggered review rounds. The first round reads the whole submitted plan against its stories' versioned truths. Full reads the whole revised plan against the same truths. Diff reads every addition, modification and deletion since the first round's draft, with before-and-after context. Both scopes check closure and may report new defects. The plan checker checks every first-round blocker (PLN-R16). A plan-triggered review checks each finding the owner ruled `fix` (REV-R10), as diff and risk reviews do. Scope changes neither the gate's effect nor the round limit.
 
 Diff and risk review re-checks read their whole revised target independently of this setting: the original reviewed changes and the completed fixes, with the original base, revised endpoint and exact included commits retained.
 
@@ -53,7 +53,7 @@ Resolve the scope when the round-2 work order is created. Bind its baseline, tru
 
 ### Follow-up
 
-- Build 4 supplies plan scope selection, the setting's first reader and validation, work-order material and domain records and projections.
+- Build 4 supplies plan scope selection, the setting's first reader and validation, work-order material and domain records and projections. Design 0005 leaves open how the checker's revision and a plan review's revision combine for one plan, owned by Build 4.
 - Build 5 supplies revised targets for diff and completion risk reviews.
 
 ## Options in detail
@@ -68,7 +68,7 @@ Revisits the entire revised plan and its truths, but removes the narrower choice
 
 ### Full with an explicit diff option
 
-Makes the coverage tradeoff explicit. Full is the default; diff deliberately narrows the reading to changes and blocker closure. Both can report new defects, and the record preserves which scope ran.
+Makes the coverage tradeoff explicit. Full is the default; diff deliberately narrows the reading to changes. Both scopes check closure of first-round blockers for the checker and findings ruled `fix` for a plan review. Both can report new defects, and the record preserves which scope ran.
 
 ### One scope setting for all review triggers
 
