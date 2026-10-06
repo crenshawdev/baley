@@ -1,7 +1,8 @@
 //! The decisions here run over a table of what each lookup answers for one
 //! exact path, and a path not in the table is missing. The table resolves
 //! nothing: a link names the canonical path it leads to. Nothing here touches
-//! a disk, reads the environment or starts a program.
+//! a disk, reads the environment or starts a program. The table is visible to
+//! the crate's tests, so the guard hook's decisions run over the same seam.
 
 use super::{
     Entry, Lease, Lookup, Part, ProtectedPaths, ResolveFailure, contains, is_inside, read_answer,
@@ -24,13 +25,13 @@ struct Seen {
     entry: Entry,
 }
 
-struct Tree {
+pub(crate) struct Tree {
     paths: BTreeMap<PathBuf, Seen>,
     /// One lookup of one path that fails with something other than missing.
     failure: Option<(Ask, PathBuf)>,
 }
 
-fn tree() -> Tree {
+pub(crate) fn tree() -> Tree {
     Tree {
         paths: BTreeMap::new(),
         failure: None,
@@ -53,11 +54,11 @@ impl Tree {
         self
     }
 
-    fn dir(self, path: &str) -> Self {
+    pub(crate) fn dir(self, path: &str) -> Self {
         self.add(path, true)
     }
 
-    fn file(self, path: &str) -> Self {
+    pub(crate) fn file(self, path: &str) -> Self {
         self.add(path, false)
     }
 
