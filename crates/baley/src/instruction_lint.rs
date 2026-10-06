@@ -121,7 +121,7 @@ fn compiled_instructions_name_only_what_exists() {
             .strip_suffix("/SKILL.md")
             .unwrap()
     }));
-    // guard::input and guard::bash accept this named event. The hook manifest is
+    // hook_input accepts only this named event. The hook manifest is
     // a separate artifact, never a member of this instruction corpus.
     let hook_events = ["PreToolUse"];
     let segment = r"(?:[A-Za-z_][A-Za-z0-9_-]*(?:\[[A-Za-z0-9_]+\])?|<(?:role|provider|trigger)>)";
