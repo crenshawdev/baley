@@ -9,6 +9,14 @@ mod branch;
 mod context;
 mod decide;
 mod policy;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Build 3 T10's recording step in run is its caller"
+    )
+)]
+mod record;
 mod render;
 
 pub use render::{Rendered, failed_write, render};
@@ -69,7 +77,7 @@ pub fn run() -> ExitCode {
                     .as_ref()
                     .map(|paths| paths.config.as_path());
                 let read = policy::gather(config, &project, &mut System, &mut budget);
-                seen.settings = Some(policy::settings(read));
+                seen.settings = Some(policy::settings(read).0);
             }
         }
     };

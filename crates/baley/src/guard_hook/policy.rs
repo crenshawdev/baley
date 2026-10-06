@@ -4,7 +4,7 @@
 //! a checkout or records a policy.
 
 use super::context::Bound;
-use crate::committed::{self, Committed};
+use crate::committed::{self, Committed, GuardRefusal};
 use crate::discovery::PROJECT_FILE;
 use crate::folders::FolderRefusal;
 use crate::guard_budget::Budget;
@@ -23,7 +23,7 @@ pub(super) struct Seen {
     /// The working-tree `baley.toml`'s bounded read.
     pub working: Result<Option<SettingsFile>, Unavailable>,
     /// HEAD's copy, read only once the working-tree file was.
-    pub head: Option<Result<Committed, Unavailable>>,
+    pub head: Option<Result<Committed, GuardRefusal>>,
 }
 
 /// Reads the global file from `config` and the project's files, HEAD's copy
@@ -54,11 +54,13 @@ pub(super) fn gather(
     }
 }
 
-/// The settings a commit is judged under. A refused working-tree read is
-/// torn, and so is the global file when Baley's folders are unknown, since a
-/// policy without the owner's global file is not the owner's policy. The
-/// merge applies Claude Code's `[host.claude-code]` sections.
-pub(super) fn settings(seen: Seen) -> SettingsInput {
+/// The settings a commit is judged under, and the excerpt of git's stderr
+/// in them when HEAD's copy is the torn file, which a record leaves out. A
+/// refused working-tree read is torn, and so is the global file when Baley's
+/// folders are unknown, since a policy without the owner's global file is
+/// not the owner's policy. The merge applies Claude Code's
+/// `[host.claude-code]` sections.
+pub(super) fn settings(seen: Seen) -> (SettingsInput, Option<String>) {
     let global = seen.global.unwrap_or_else(|refusal| {
         Err(Unavailable {
             path: settings::GLOBAL_FILE.into(),
@@ -67,13 +69,25 @@ pub(super) fn settings(seen: Seen) -> SettingsInput {
             },
         })
     });
-    let head = match seen.working {
-        Err(refused) => Some(Err(refused)),
-        Ok(_) => seen.head,
+    let (head, refused_head) = match (seen.working, seen.head) {
+        (Err(refused), _) => (Some(Err(refused)), None),
+        (Ok(_), Some(Err(refused))) => (Some(Err(refused.refusal.clone())), Some(refused)),
+        (Ok(_), head) => (
+            head.map(|read| read.map_err(|refused| refused.refusal)),
+            None,
+        ),
     };
     match policy_step::build(&Reads { global, head }, Some(Host::ClaudeCode)) {
-        Ok(policy) => SettingsInput::Complete(GuardSettings::from_policy(&policy)),
-        Err(torn) => SettingsInput::Torn(torn),
+        Ok(policy) => (
+            SettingsInput::Complete(GuardSettings::from_policy(&policy)),
+            None,
+        ),
+        Err(torn) => {
+            let excerpt = refused_head
+                .filter(|refused| refused.refusal == torn)
+                .and_then(|refused| refused.excerpt);
+            (SettingsInput::Torn(torn), excerpt)
+        }
     }
 }
 
@@ -117,19 +131,25 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_head_copy_read_as_complete_defaults_is_caught() {
-        let refused = unreadable(PROJECT, "HEAD's copy: git exited with code 128");
+    fn a_refused_head_copy_read_as_complete_defaults_or_losing_gits_excerpt_is_caught() {
+        let refused = unreadable(PROJECT, "HEAD's copy: git exited with code 128: fatal: x");
         let seen = Seen {
-            head: Some(Err(refused.clone())),
+            head: Some(Err(GuardRefusal {
+                refusal: refused.clone(),
+                excerpt: Some("fatal: x".into()),
+            })),
             ..at_head("[git]\non_protected = \"refuse\"\n")
         };
-        assert_eq!(settings(seen), SettingsInput::Torn(refused));
+        assert_eq!(
+            settings(seen),
+            (SettingsInput::Torn(refused), Some("fatal: x".into()))
+        );
     }
 
     #[test]
     fn a_head_copy_that_refuses_read_as_another_answer_is_caught() {
         let seen = at_head("[git]\non_protected = \"refuse\"\n");
-        assert_eq!(settings(seen), refusing());
+        assert_eq!(settings(seen), (refusing(), None));
     }
 
     #[test]
@@ -137,7 +157,7 @@ mod tests {
         let seen = at_head(
             "[git]\non_protected = \"ask\"\n\n[host.claude-code.git]\non_protected = \"refuse\"\n",
         );
-        assert_eq!(settings(seen), refusing());
+        assert_eq!(settings(seen), (refusing(), None));
     }
 
     #[test]
@@ -148,13 +168,13 @@ mod tests {
             head: None,
             ..at_head("")
         };
-        assert_eq!(settings(seen), SettingsInput::Torn(refused));
+        assert_eq!(settings(seen), (SettingsInput::Torn(refused), None));
 
         let seen = Seen {
             global: Err(FolderRefusal::UserHomeUnset),
             ..at_head("[git]\non_protected = \"refuse\"\n")
         };
-        let SettingsInput::Torn(torn) = settings(seen) else {
+        let (SettingsInput::Torn(torn), None) = settings(seen) else {
             panic!("torn");
         };
         assert_eq!(torn.path, Path::new("config.toml"));

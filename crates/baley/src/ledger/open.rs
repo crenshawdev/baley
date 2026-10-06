@@ -85,7 +85,10 @@ pub(crate) fn store(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    //! Other modules' store tests open guard stores through `Fixed`, `guard`
+    //! and `view_set_6`, as these tests do.
+
     use super::*;
 
     const T0: &str = "2026-10-01T10:00:00Z";
@@ -144,7 +147,7 @@ mod tests {
     }
 
     /// The options as they stood at view set 6, before the guard views.
-    fn view_set_6() -> Options {
+    pub(crate) fn view_set_6() -> Options {
         let mut registry = Registry::new();
         register_anchor_events(&mut registry).unwrap();
         register_project_events(&mut registry).unwrap();
@@ -185,7 +188,7 @@ mod tests {
 
     /// A clock that always reads the same, so a guard store's storage time
     /// never runs out here, and a pause that returns at once.
-    struct Fixed;
+    pub(crate) struct Fixed;
 
     impl baley_store_sqlite::Timing for Fixed {
         fn now(&self) -> Duration {
@@ -196,7 +199,7 @@ mod tests {
     }
 
     /// The guard's options with 1.5 s of storage time on the fixed clock.
-    fn guard() -> Options {
+    pub(crate) fn guard() -> Options {
         Options {
             timing: std::sync::Arc::new(Fixed),
             ..guard_options(Duration::from_millis(1_500))
