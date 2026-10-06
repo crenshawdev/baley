@@ -1,5 +1,6 @@
-//! A guard answer recorded in the per-user `user` project (design 0010
-//! section 6). Every guard write is one command in `user` on stream `guard`,
+//! A guard answer recorded in the per-user `user` project, and the answer
+//! found for a redelivered call before git is read (design 0010 section 6,
+//! GRD-R9 and GRD-R10). Every guard write is one command in `user` on stream `guard`,
 //! at policy version 0, by Baley, with the hook's caller. The session
 //! project is a fact in the caller and the payload, never the ledger
 //! project, so recording needs no project ledger and admits no checkout.
@@ -19,7 +20,7 @@ use baley_core::guard::{
 use baley_core::policy::{Fault, Unavailable};
 use baley_store::{
     Actor, Admin, Caller, Command, CommandKind, Decision, HookCaller, Ledger, NewEvent, Observed,
-    OutcomeKind, ProjectId, Refusal, RequestId, StoreError, StreamName, Transaction,
+    OutcomeKind, ProjectId, Refusal, RequestId, StoreError, StreamName, Transaction, Views,
     request_digest,
 };
 use serde_json::json;
@@ -296,6 +297,28 @@ fn claude_code() -> &'static str {
     baley_core::policy::Host::ClaudeCode.name()
 }
 
+/// The answer recorded under the call's id, read before any git or policy
+/// read. With no `user` there is no record, and nothing is created. It reads
+/// no policy and writes nothing.
+pub(super) fn lookup(
+    store: &(impl Admin + Views),
+    caller: &HookCaller,
+    input_digest: &str,
+) -> Result<Redelivery, StoreError> {
+    let user = ProjectId(USER_PROJECT.into());
+    if !store.projects()?.iter().any(|(known, _)| *known == user) {
+        return Ok(Redelivery::NoRecord);
+    }
+    let key = guard_key(caller.host(), caller.host_session(), caller.call().text());
+    let stored = store.get(&user, GUARD_VIEW, &key)?;
+    Ok(redelivery(
+        stored.as_ref().map(|document| &document.body),
+        input_digest,
+        caller.project_directory(),
+        caller.working_directory(),
+    ))
+}
+
 /// The error a decision returns once another process answered the call id
 /// first, so nothing is appended.
 fn answered_first(call: &str) -> StoreError {
@@ -318,7 +341,7 @@ mod tests {
         GUARD_POLICY_RECORDED, ToolInput, input_digest, reason, remembered_settings,
     };
     use baley_core::policy::OnProtected;
-    use baley_store::{CallSource, Event, PageRequest, Views};
+    use baley_store::{CallSource, Event, PageRequest};
     use baley_store_sqlite::SqliteStore;
 
     const T0: &str = "2026-10-06T10:00:00Z";
@@ -711,5 +734,70 @@ mod tests {
             let text = recorded.as_str().expect("text");
             assert!(text.contains(&kept), "{text}");
         }
+    }
+
+    #[test]
+    fn a_replay_that_changes_after_the_policy_changed_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(&dir);
+        let refuse = refusing();
+        let judged = refused_on_main(&refuse, KEY);
+        record(&store, &caller("t1"), &commit(), &judged, request(1), T1).unwrap();
+        // Judged fresh under `allow`, the same commit would pass.
+        let allowing = GuardSettings {
+            on_protected: OnProtected::Allow,
+            ..refusing()
+        };
+        let main = BranchObservation::Read("main".into());
+        let fresh = commit_push_answer(
+            GitVerb::Commit,
+            true,
+            &SettingsInput::Complete(allowing),
+            None,
+            &main,
+        );
+        assert_eq!(fresh, Answer::Pass);
+
+        let found = lookup(&store, &caller("t1"), &commit().input_digest);
+
+        assert_eq!(
+            found,
+            Ok(Redelivery::Replay(Answer::Deny(reason::refuse_deny(
+                "main"
+            ))))
+        );
+    }
+
+    #[test]
+    fn different_input_accepted_under_one_call_id_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(&dir);
+        let ask = Answer::Ask(reason::push_ask());
+        let push = bash("git push a", GitVerb::Push);
+        record(
+            &store,
+            &caller("t1"),
+            &push,
+            &Judged::Absent(ask),
+            request(1),
+            T1,
+        )
+        .unwrap();
+
+        let other = bash("git push b", GitVerb::Push);
+        let found = lookup(&store, &caller("t1"), &other.input_digest);
+
+        assert_eq!(found, Ok(Redelivery::Clash));
+    }
+
+    #[test]
+    fn a_lookup_that_creates_user_or_finds_a_record_on_a_fresh_home_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(&dir);
+
+        let found = lookup(&store, &caller("t1"), &commit().input_digest);
+
+        assert_eq!(found, Ok(Redelivery::NoRecord));
+        assert_eq!(store.projects(), Ok(vec![]));
     }
 }
