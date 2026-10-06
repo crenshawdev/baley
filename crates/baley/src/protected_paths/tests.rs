@@ -587,6 +587,57 @@ fn a_baley_toml_elsewhere_a_sibling_and_a_project_file_are_allowed() {
     }
 }
 
+// Issue #194: a checkout whose baley.toml is not created yet, with /P a
+// second name for /p as a case-insensitive volume gives it.
+fn write_beside_missing_file(target: &str, fs: &Tree) -> Answer {
+    let list = ProtectedPaths {
+        home: "/u/.local/share/baley".into(),
+        config: "/u/.config/baley".into(),
+        files: vec!["/p/baley.toml".into()],
+    };
+    write_answer("/p", target, &list, &Lease::NoActiveDispatch, fs)
+}
+
+#[test]
+fn a_case_variant_spelling_that_creates_a_missing_protected_file_is_caught() {
+    let fs = tree().dir("/p").hard("/P", "/p");
+    for target in [
+        "/p/BALEY.TOML",
+        "/p/Baley.toml",
+        "BALEY.TOML",
+        "/P/baley.toml",
+        "/P/BALEY.TOML",
+    ] {
+        assert!(is_deny(&write_beside_missing_file(target, &fs)), "{target}");
+    }
+}
+
+#[test]
+fn a_name_that_only_starts_like_a_missing_protected_file_denied_is_caught() {
+    let fs = tree().dir("/p").dir("/p/sub");
+    for target in [
+        "/p/baley.toml.bak",
+        "/p/sub/baley.toml",
+        "/p/BALEY.TOML/inner.txt",
+    ] {
+        assert_eq!(
+            write_beside_missing_file(target, &fs),
+            Answer::Pass,
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn an_existing_protected_file_matched_by_a_case_variant_spelling_is_caught() {
+    let fs = tree().dir("/p").file("/p/baley.toml");
+    assert_eq!(
+        write_beside_missing_file("/p/BALEY.TOML", &fs),
+        Answer::Pass
+    );
+    assert!(is_deny(&write_beside_missing_file("/p/baley.toml", &fs)));
+}
+
 fn read(cwd: &str, path: Option<&str>, pattern: Option<&str>, fs: &Tree) -> Answer {
     read_answer(cwd, path, pattern, &protected_list(), fs)
 }
