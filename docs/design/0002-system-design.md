@@ -84,7 +84,7 @@ graph LR
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. The planned updater contacts the release source for manual or opt-in updates; T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
+*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. The planned foreground `baley update` command and the detached opt-in updater contact the release source; T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 | Actor | What it is | Its part |
 |---|---|---|
@@ -175,7 +175,7 @@ graph LR
     subgraph 2 ["Baley"]
       style 2 fill:none,stroke:#0b4884,color:#0b4884
 
-      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Manual and<br />opt-in checks share the daily<br />claim; no updater is built<br />yet.</div>"]
+      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Opted-in<br />checks run at most daily.<br />Foreground manual checks<br />share its installation scope<br />and daily intent but never<br />refuse as not due; no updater<br />is built yet.</div>"]
       style 11 fill:#438dd5,stroke:#2e6295,color:#ffffff
       12[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
@@ -195,15 +195,16 @@ graph LR
     3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
     3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
     3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
-    3-. "<div>Starts manual or opted-in<br />checks without waiting for<br />network (planned T14)</div><div style='font-size: 70%'></div>" .->11
+    3-. "<div>Starts opted-in checks at<br />server start without waiting<br />for network (planned T14)</div><div style='font-size: 70%'></div>" .->11
     11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks<br />(planned T14)</div><div style='font-size: 70%'></div>" .->12
+    3-. "<div>Runs baley update in the<br />foreground, waits for<br />releases and receipt (planned<br />T14, verification by #14)</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
     11-. "<div>Fetches releases verified by<br />#14, unsigned development<br />artifacts only in T14 and T17</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
 
   end
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus T14's planned detached updater. The updater opens the same per-user store through the store port to claim and record checks. Provider calls and credentials stay with the host session. Release downloads use the binary's HTTP client, with automatic checks only after opt-in. T14 and T17 use unsigned development artifacts; #14 supplies release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
+*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus T14's planned detached updater. The updater opens the same per-user store through the store port to claim and record checks. Provider calls and credentials stay with the host session. The planned manual `baley update` waits for its releases and receipt in the foreground; only opted-in checks at server start run in the detached updater. Both use the binary's HTTP client. T14 and T17 use unsigned development artifacts; #14 supplies release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
 
 <!-- c4:components -->
 ```mermaid
@@ -220,6 +221,8 @@ graph LR
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
@@ -245,7 +248,7 @@ graph LR
         style 9 fill:#85bbf0,stroke:#5d82a8,color:#000000
       end
 
-      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Manual and<br />opt-in checks share the daily<br />claim; no updater is built<br />yet.</div>"]
+      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Opted-in<br />checks run at most daily.<br />Foreground manual checks<br />share its installation scope<br />and daily intent but never<br />refuse as not due; no updater<br />is built yet.</div>"]
       style 11 fill:#438dd5,stroke:#2e6295,color:#ffffff
       12[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
@@ -273,14 +276,16 @@ graph LR
     10-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
     10-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
     10-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
-    4-. "<div>Starts manual or opted-in<br />checks without waiting for<br />network (planned T14)</div><div style='font-size: 70%'></div>" .->11
+    4-. "<div>Starts opted-in checks at<br />server start without waiting<br />for network (planned T14)</div><div style='font-size: 70%'></div>" .->11
     11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks<br />(planned T14)</div><div style='font-size: 70%'></div>" .->12
+    4-. "<div>Runs baley update in the<br />foreground, waits for<br />releases and receipt (planned<br />T14, verification by #14)</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
+    11-. "<div>Fetches releases verified by<br />#14, unsigned development<br />artifacts only in T14 and T17</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
 
   end
 ```
 <!-- /c4:components -->
 
-*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts T14's planned detached updater, which opens the same per-user ledger through the store port. Its downloads and the release source are shown in Figure 3.*
+*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts T14's planned detached updater for opted-in checks at server start without waiting for the network. The updater opens the same per-user ledger through the store port. The host interface also runs manual `baley update` in the foreground, waiting for the release source and its receipt. Figure 3 shows the updater's download path.*
 
 | Component | Responsibility |
 |---|---|
