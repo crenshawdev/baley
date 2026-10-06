@@ -174,7 +174,7 @@ Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means th
 | Keys (component) | A key name | The key's value for one use; a refusal when the name has no line or the file is refused (CFG-R24) | Not applicable |
 | Model catalog (component) | A host or provider name and a model name | Whether the name is accepted; the catalog version | Not applicable |
 | Work order composer ([0002](0002-system-design.md) section 8) | A route | A work order carrying it | The route |
-| Guard hook ([0010](0010-guard.md)) | The hook's `CLAUDE_PROJECT_DIR`, and its working directory for the branch and the paths a tool names | The project and its guard settings, built with Claude Code's host sections, or torn settings naming the file, or no project | Not applicable |
+| Guard hook ([0010](0010-guard.md)) | The hook's `CLAUDE_PROJECT_DIR`, and its working directory as the base for tool paths and the commit target where the branch is read | The session project and its guard settings, built with Claude Code's host sections and HEAD's copy of the session project's `baley.toml`, or torn settings naming the file, or no project | Not applicable |
 | Host adapter ([0012](0012-host-interface.md)) | A rung and a model name | The model's effort level, or none for a model without effort, and the model parameter | Not applicable |
 | Dispatched workers (the six roles) | A work order | A typed result | `roles.<role>.model`, `roles.<role>.effort`, `escalate_on_failure` |
 
