@@ -41,7 +41,7 @@ Chosen option: **1**. Remove `keys.env` and the `baley exec --key` credential wr
 
 **Sandbox.** Installation allows the chosen providers' API hosts. It creates no key folder and grants no `~/.codex` exception. Denials over Baley's home and config folder still protect the ledger and settings. They do not protect credentials in the session's environment.
 
-**Warning and acknowledgement.** The README, documentation and interview state these risks plainly: Baley never reads your keys. Keys live in your environment, where every program Claude Code starts can see them, agents and subagents included. Nothing scrubs a key a command prints. Your code goes to the chosen provider under its terms. The interview asks which providers to use, shows the warning and requires a typed confirmation. It records the selected providers, warning version and acknowledgement in the ledger and asks again when the warning changes. No setting or alternative entry point bypasses that acknowledgement. Install takes defaults with outside providers disabled, never an automatic acknowledgement.
+**Warning and acknowledgement.** The README, documentation and interview state these risks plainly: Baley never reads your keys. Keys live in your environment, where every program Claude Code starts can see them, agents and subagents included. Nothing scrubs a key a command prints. Your code goes to the chosen provider under its terms. The interview asks which providers to use, shows the warning and requires a typed confirmation. It records the selected providers, warning version and acknowledgement in the ledger and asks again when the warning changes. No setting or alternative entry point bypasses that acknowledgement. A fresh install takes defaults with outside providers disabled; a reinstall keeps acknowledged choices. Install never supplies an acknowledgement.
 
 ## Consequences
 
@@ -61,9 +61,9 @@ Chosen option: **1**. Remove `keys.env` and the `baley exec --key` credential wr
 
 ### Follow-up
 
-- The owner must assign the build that removes the built `keys.env` reader (`crates/baley/src/keys.rs`), `baley exec --key` (`crates/baley/src/exec.rs`) and HTTPS lister and key lookup (`crates/baley/src/detection/`). No build is assigned by this decision.
-- Build 3 T16 owns provider selection, the warning and typed ledger acknowledgement in the interview, including the `review.reviewers` reader and writer that setup needs. Build 4 owns `baley models import`, fetch work orders and their session return, and acknowledgement checks before review or list-fetch work orders. The pure catalog code in `crates/baley-core/src/catalog/detection/` stays.
-- Build 4's review work orders and return parser follow REV-R4. Build 3's installer follows HST-R17. Neither assignment silently takes ownership of removing the built credential paths.
+- Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)) removes the built `keys.env` reader (`crates/baley/src/keys.rs`), `baley exec --key` (`crates/baley/src/exec.rs`) and HTTPS lister and key lookup (`crates/baley/src/detection/`). It also switches `baley init` from HTTPS detection to catalog seeding.
+- Build 3 T16 owns provider selection, the warning and typed ledger acknowledgement in the interview, including the `review.reviewers` reader and writer that setup needs. Its final summary lists every file to be written; `yes` records acknowledgement, writes API-host allowances through the installation writer, writes the global reviewer list and then runs the settings `config set`. A failure stops at that step, reports completed writes and permits a safe rerun ([0003 section 5](../design/0003-configuration-and-routing.md#5-commands-and-operations)). Build 4 owns `baley models import`, fetch work orders and their session return, and acknowledgement checks before review or list-fetch work orders. The pure catalog code in `crates/baley-core/src/catalog/detection/` stays.
+- Build 4's review work orders and return parser follow REV-R4. Build 3's installer follows HST-R17. Build 4 owns removal of the built credential paths alongside the session fetch-and-return path.
 
 ## Options in detail
 
