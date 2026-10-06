@@ -58,9 +58,14 @@ fn gather_for_guard(path: &Path) -> Seen {
 
 /// What one read of a settings path found.
 pub(crate) enum Seen {
-    Missing,
+    NotOpened {
+        cause: std::io::Error,
+        link: std::io::Result<bool>,
+    },
     NotRegular,
-    Unreadable { cause: String },
+    Unreadable {
+        cause: String,
+    },
     Opened(Vec<u8>),
 }
 
@@ -79,10 +84,10 @@ fn gather_up_to(path: &Path, limit: u64) -> Seen {
         .open(path)
     {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Seen::Missing,
         Err(error) => {
-            return Seen::Unreadable {
-                cause: error.to_string(),
+            return Seen::NotOpened {
+                cause: error,
+                link: std::fs::symlink_metadata(path).map(|meta| meta.file_type().is_symlink()),
             };
         }
     };
@@ -111,7 +116,18 @@ pub(crate) fn judge(path: &Path, seen: Seen) -> Result<Option<SettingsFile>, Una
         fault,
     };
     match seen {
-        Seen::Missing => Ok(None),
+        Seen::NotOpened { cause, link } => {
+            let missing = cause.kind() == std::io::ErrorKind::NotFound;
+            match link {
+                Err(error) if missing && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Ok(true) if missing => Err(unavailable(Fault::Unreadable {
+                    cause: "it is a link to a missing file".into(),
+                })),
+                _ => Err(unavailable(Fault::Unreadable {
+                    cause: cause.to_string(),
+                })),
+            }
+        }
         Seen::NotRegular => Err(unavailable(Fault::NotRegular)),
         Seen::Unreadable { cause } => Err(unavailable(Fault::Unreadable { cause })),
         Seen::Opened(bytes) => Ok(Some(file(path, bytes))),
@@ -141,7 +157,16 @@ mod tests {
     #[test]
     fn a_missing_file_is_no_layer_and_an_unreadable_one_is_unavailable() {
         let path = Path::new(PATH);
-        assert_eq!(judge(path, Seen::Missing), Ok(None));
+        assert_eq!(
+            judge(
+                path,
+                Seen::NotOpened {
+                    cause: std::io::ErrorKind::NotFound.into(),
+                    link: Err(std::io::ErrorKind::NotFound.into()),
+                }
+            ),
+            Ok(None)
+        );
 
         let refusal = judge(path, Seen::NotRegular).unwrap_err();
         assert_eq!(
@@ -247,6 +272,40 @@ mod tests {
         );
         assert_eq!(read(&dir.path().join("absent")), Ok(None));
         assert_eq!(read(dir.path()).unwrap_err().fault, Fault::NotRegular);
+    }
+
+    #[test]
+    fn a_dangling_settings_link_is_not_reported_as_a_missing_layer() {
+        let path = Path::new(PATH);
+        let refusal = judge(
+            path,
+            Seen::NotOpened {
+                cause: std::io::ErrorKind::NotFound.into(),
+                link: Ok(true),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "config-unavailable: cannot read /c/config.toml: it is a link to a missing file"
+        );
+    }
+
+    #[test]
+    fn readers_do_not_lose_a_dangling_settings_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("baley.toml");
+        symlink("missing.toml", &path).unwrap();
+        for result in [read(&path), read_for_guard(&path)] {
+            let refusal = result.unwrap_err();
+            assert_eq!(refusal.path, path);
+            assert_eq!(
+                refusal.fault,
+                Fault::Unreadable {
+                    cause: "it is a link to a missing file".into(),
+                }
+            );
+        }
     }
 
     #[test]
