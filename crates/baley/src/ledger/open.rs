@@ -7,14 +7,16 @@ use std::time::Duration;
 use baley_core::capture::{CaptureProjector, register_capture_events};
 use baley_core::catalog::{ModelCatalogProjector, register_model_events};
 use baley_core::checkout::{CheckoutProjector, register_checkout_events};
+use baley_core::guard::{GuardPolicyProjector, GuardProjector, register_guard_events};
 use baley_core::policy::recorded::{PolicyProjector, register_policy_events};
 use baley_core::{Registry, register_anchor_events, register_project_events};
 use baley_store_sqlite::Options;
 
 /// Registers exactly the anchor types, `project.initialized`, the four
-/// `models.*` types, `policy.effective`, `checkout.seen` and
-/// `capture.recorded` understood by the CLI, and declares view set version 6,
-/// `capture checkout claim_scope model_catalog policy request`.
+/// `models.*` types, `policy.effective`, `checkout.seen`, `capture.recorded`,
+/// `guard.answered` and `guard.policy_recorded` understood by the CLI, and
+/// declares view set version 7,
+/// `capture checkout claim_scope guard guard_policy model_catalog policy request`.
 /// The startup `quick_check` is off, so every command-line caller opens as
 /// before.
 pub(crate) fn options() -> Options {
@@ -25,6 +27,7 @@ pub(crate) fn options() -> Options {
     register_policy_events(&mut registry).expect("unique policy types");
     register_checkout_events(&mut registry).expect("unique checkout types");
     register_capture_events(&mut registry).expect("unique capture types");
+    register_guard_events(&mut registry).expect("unique guard types");
     Options {
         schema: Box::new(registry),
         projectors: vec![
@@ -32,8 +35,10 @@ pub(crate) fn options() -> Options {
             Box::new(PolicyProjector::new()),
             Box::new(CheckoutProjector::new()),
             Box::new(CaptureProjector::new()),
+            Box::new(GuardProjector::new()),
+            Box::new(GuardPolicyProjector::new()),
         ],
-        view_set_version: NonZeroU32::new(6).expect("nonzero"),
+        view_set_version: NonZeroU32::new(7).expect("nonzero"),
         ..Options::default()
     }
 }
@@ -138,6 +143,28 @@ mod tests {
         }
     }
 
+    /// The options as they stood at view set 6, before the guard views.
+    fn view_set_6() -> Options {
+        let mut registry = Registry::new();
+        register_anchor_events(&mut registry).unwrap();
+        register_project_events(&mut registry).unwrap();
+        register_model_events(&mut registry).unwrap();
+        register_policy_events(&mut registry).unwrap();
+        register_checkout_events(&mut registry).unwrap();
+        register_capture_events(&mut registry).unwrap();
+        Options {
+            schema: Box::new(registry),
+            projectors: vec![
+                Box::new(ModelCatalogProjector::new()),
+                Box::new(PolicyProjector::new()),
+                Box::new(CheckoutProjector::new()),
+                Box::new(CaptureProjector::new()),
+            ],
+            view_set_version: NonZeroU32::new(6).unwrap(),
+            ..Options::default()
+        }
+    }
+
     /// The names of the views the options declare, in order.
     fn view_names(options: &Options) -> Vec<String> {
         options
@@ -186,6 +213,7 @@ mod tests {
     #[test]
     fn the_guard_variant_declares_a_different_view_set_from_options() {
         use baley_core::capture::{CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION};
+        use baley_core::guard::{GUARD_ANSWERED, GUARD_ANSWERED_VERSION};
 
         let (cli, guard) = (options(), guard_options(Duration::from_millis(1_500)));
         assert_eq!(guard.view_set_version, cli.view_set_version);
@@ -195,6 +223,7 @@ mod tests {
                 .schema
                 .reads(CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION)
         );
+        assert!(guard.schema.reads(GUARD_ANSWERED, GUARD_ANSWERED_VERSION));
     }
 
     // Catches a guard open that runs the startup check, or loses the storage
@@ -294,6 +323,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         drop(store(&home, T0, view_set_5()).unwrap());
+
+        let reopened = store(&home, T1, options());
+
+        assert!(reopened.is_ok(), "{:?}", reopened.err());
+    }
+
+    // Catches the guard views added without raising the view set version,
+    // which the store refuses at reopen, or a set version that fences a
+    // ledger the previous binary wrote.
+    #[test]
+    fn a_guard_view_added_without_raising_the_set_version_or_refused_at_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        drop(store(&home, T0, view_set_6()).unwrap());
 
         let reopened = store(&home, T1, options());
 
