@@ -206,7 +206,7 @@ The all-state GitHub issue collection, including pull requests, gives these assi
 
 | Label | Open issues | Closed issues | Pull requests | Use |
 |---|---:|---:|---:|---|
-| `design` | 2 | 11 | 10 | Active |
+| `design` | 1 | 12 | 10 | Active |
 | `bug` | 7 | 2 | 0 | Active |
 | `question` | 0 | 0 | 0 | Active; the [question form:3](../../.github/ISSUE_TEMPLATE/question.yml#L3) applies it |
 | `dependencies` | 0 | 0 | 6 | Active |
