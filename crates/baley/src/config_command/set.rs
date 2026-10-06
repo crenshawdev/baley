@@ -224,7 +224,10 @@ fn check_project_expected(
         && layer == FileLayer::Project
         && !has_project
     {
-        return Err(changed_since_shown(&expected.path));
+        return Err(refusal(format!(
+            "config-conflict: no project covers this folder any more; {} was shown; run the interview again",
+            expected.path.display()
+        )));
     }
     Ok(())
 }
@@ -530,7 +533,9 @@ mod tests {
         assert_eq!(refused.code, 2);
         assert_eq!(
             refused.lines,
-            ["config-conflict: /r/baley.toml changed since it was shown; run the interview again"]
+            [
+                "config-conflict: no project covers this folder any more; /r/baley.toml was shown; run the interview again"
+            ]
         );
     }
 
