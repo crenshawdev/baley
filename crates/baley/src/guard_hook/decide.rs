@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn a_redirected_commit_on_main_passing_or_losing_its_denial_record_is_caught() {
+    fn an_observed_protected_branch_passing_or_losing_its_denial_record_is_caught() {
         let decided = decided(next(
             &bash("git -C /r commit"),
             &context(Some("/p")),

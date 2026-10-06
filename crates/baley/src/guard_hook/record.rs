@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn a_redirected_record_losing_its_target_directory_or_checkout_key_is_caught() {
+    fn a_storage_round_trip_losing_the_supplied_target_or_checkout_key_is_caught() {
         let dir = tempfile::tempdir().unwrap();
         let store = open(&dir);
         let selected = Selected {
