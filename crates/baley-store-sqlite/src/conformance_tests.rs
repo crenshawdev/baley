@@ -44,8 +44,17 @@ impl SqliteFactory {
         path
     }
     fn open(&self, home: &Path, binary: Binary) -> Result<SqliteStore, StoreError> {
+        self.open_as(home, binary, Scripted::still(), None)
+    }
+    /// Opens with `timing`, and with a guard storage time when one is given.
+    fn open_as(
+        &self,
+        home: &Path,
+        binary: Binary,
+        timing: Arc<Scripted>,
+        guard_storage_time: Option<Duration>,
+    ) -> Result<SqliteStore, StoreError> {
         self.inside(home);
-        let timing = Scripted::still();
         let store = SqliteStore::open(
             home,
             AT,
@@ -54,6 +63,7 @@ impl SqliteFactory {
                 schema: binary.schema,
                 view_set_version: binary.view_set_version,
                 timing: timing.clone(),
+                guard_storage_time,
                 ..Options::default()
             },
         )?;
@@ -79,6 +89,19 @@ impl StoreFactory for SqliteFactory {
     fn reopen(&self, store: &SqliteStore, binary: Binary) -> Result<SqliteStore, StoreError> {
         self.inside(&store.home);
         self.open(&store.home, binary)
+    }
+    fn reopen_bounded(
+        &self,
+        store: &SqliteStore,
+        binary: Binary,
+    ) -> Result<SqliteStore, StoreError> {
+        // Time that steps, so a contended wait ends as `Busy`, not a hang.
+        self.open_as(
+            &store.home,
+            binary,
+            Scripted::stepping(Duration::from_millis(10)),
+            Some(Duration::from_millis(1_500)),
+        )
     }
     fn stamp_newer_epoch(&self, store: &SqliteStore) -> Result<u32, StoreError> {
         self.raw(store)?

@@ -29,6 +29,15 @@ pub trait StoreFactory {
     fn create(&self, binary: Binary) -> Result<Self::Store, StoreError>;
     /// Opens an independent connection as the supplied binary.
     fn reopen(&self, store: &Self::Store, binary: Binary) -> Result<Self::Store, StoreError>;
+    /// Opens an independent connection as the supplied binary with the
+    /// adapter's bounded access, as the guard opens it. Bounded access
+    /// answers `StoreError::NeedsRebuild` for views behind the binary's and
+    /// never rebuilds them inline.
+    fn reopen_bounded(
+        &self,
+        store: &Self::Store,
+        binary: Binary,
+    ) -> Result<Self::Store, StoreError>;
     /// Damages one project's rows behind the port.
     fn corrupt(
         &self,
@@ -221,6 +230,7 @@ pub use compatibility::{
     a_store_stamped_with_a_newer_epoch_opens_read_only,
     a_view_set_changed_without_a_new_version_is_refused_at_open,
     an_older_binary_never_rebuilds_a_newer_view, an_older_view_version_rebuilds_forward_before_use,
+    bounded_access_rebuilds_no_views_inline,
 };
 mod claims;
 pub use claims::{
@@ -319,6 +329,7 @@ macro_rules! conformance_suite {
             a_newer_view_set_refuses_an_older_binarys_commands,
             an_older_binary_never_rebuilds_a_newer_view,
             an_older_view_version_rebuilds_forward_before_use,
+            bounded_access_rebuilds_no_views_inline,
             a_removed_view_rebuilds_forward_before_use,
             a_view_set_changed_without_a_new_version_is_refused_at_open,
             a_command_outside_an_active_claims_scope_proceeds,

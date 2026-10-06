@@ -122,6 +122,38 @@ pub fn an_older_view_version_rebuilds_forward_before_use<F: StoreFactory>(factor
         })
     );
 }
+/// Reads and commands through bounded access as a newer binary, then a
+/// normal open. Catches an inline rebuild under bounded access.
+pub fn bounded_access_rebuilds_no_views_inline<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    fixture(&store);
+    let before = history(&store);
+    let bounded = factory.reopen_bounded(&store, newer_views()).unwrap();
+    let needs = Some(StoreError::NeedsRebuild { project: project() });
+    assert_eq!(bounded.get(&project(), "item", &id(1)).err(), needs);
+    assert_eq!(bounded.find(&project(), "item", &query(2)).err(), needs);
+    let answered = bounded
+        .transact(&command("fixture.add", "bounded"), &mut |_| {
+            panic!("decision ran under bounded access")
+        })
+        .err();
+    assert_eq!(answered, needs);
+    assert_eq!(history(&store), before);
+    assert_eq!(
+        doc(&store, "item", &id(1)),
+        Some((json!({"id":1,"state":"done","rank":0,"owner":""}), 4))
+    );
+    let normal = factory.reopen(&store, newer_views()).unwrap();
+    assert_eq!(
+        normal.get(&project(), "item", &id(1)).unwrap(),
+        Some(Document {
+            key: id(1),
+            produced_seq: 4,
+            projector_version: 3,
+            body: json!({"id":1,"state":"done","rank":0,"owner":"","new_field":true})
+        })
+    );
+}
 /// Removes a view under a higher set version. Catches permanent fencing of retired views.
 pub fn a_removed_view_rebuilds_forward_before_use<F: StoreFactory>(factory: &F) {
     let store = created(factory);
