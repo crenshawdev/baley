@@ -322,6 +322,12 @@ impl SqliteStore {
         Ok(store)
     }
 
+    /// Whether the store was opened with a guard storage time, so it waits
+    /// for nothing past its deadline and rebuilds no views inline.
+    pub(crate) fn bounded(&self) -> bool {
+        self.deadline.is_some()
+    }
+
     /// Whether a failed startup `quick_check` fences every write.
     pub(crate) fn fenced(&self) -> bool {
         matches!(self.health, StartupHealth::Unhealthy { .. })

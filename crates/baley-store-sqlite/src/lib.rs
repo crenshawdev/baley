@@ -9,7 +9,9 @@
 //! store files for ownership, kind, modes and links before every open.
 //! A store opened for the guard waits for its locks, its connections and
 //! SQLite's busy handler no longer than the storage time it was given, at
-//! most `GUARD_STORAGE_CAP`, and then answers `StoreError::Busy`.
+//! most `GUARD_STORAGE_CAP`, and then answers `StoreError::Busy`. It never
+//! rebuilds a project's views inline: views behind this binary's answer
+//! `StoreError::NeedsRebuild`.
 //! The adapter runs the port's conformance suite as one test per check,
 //! and keeps its own tests for SQLite mechanisms.
 

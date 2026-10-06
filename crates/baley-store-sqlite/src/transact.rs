@@ -34,7 +34,7 @@ use serde_json::Value;
 
 use crate::claim::{claim_from_doc, open_claims_in};
 use crate::payload::{put_payload, put_reference, sql_int, stored};
-use crate::rebuild::{caller_text, read_only};
+use crate::rebuild::{NotCurrent, caller_text, read_only};
 use crate::store::{SqliteStore, sql};
 use crate::view::{
     Fence, Staging, find_documents, find_with_staged, fold, get_document, live_views, write_staged,
@@ -75,7 +75,8 @@ impl SqliteStore {
     /// sequence. When the live `request` view, or for a new request any
     /// live view, is behind this binary's, the turn ends without writing,
     /// the views are brought forward outside the queue, and the command
-    /// starts again; a newer one refuses.
+    /// starts again; a newer one refuses. A guard store answers views behind
+    /// as `NeedsRebuild` instead, and stamps an empty project's first.
     pub(crate) fn command_path<T>(
         &self,
         command: &Command,
@@ -120,15 +121,15 @@ impl SqliteStore {
         let mut new = Some(new);
         loop {
             match self.command_turn(command, entry, &mut replay, &mut new)? {
-                Some(recorded) => return Ok(recorded),
-                None => self.bring_current(&command.project)?,
+                Ok(recorded) => return Ok(recorded),
+                Err(found) => self.catch_up(&command.project, found)?,
             }
         }
     }
 
-    /// One try at a command under the writer queue. `None` when the
-    /// project's views must be brought forward first; nothing is written
-    /// then, and the callbacks are still unused.
+    /// One try at a command under the writer queue, or why the project's
+    /// views must be readied first; nothing is written then, and the
+    /// callbacks are still unused.
     fn command_turn<T>(
         &self,
         command: &Command,
@@ -137,7 +138,7 @@ impl SqliteStore {
             impl FnOnce(&rusqlite::Transaction<'_>, RequestState, u64) -> Result<T, StoreError>,
         >,
         new: &mut Option<impl FnOnce(&mut Work<'_, '_>, Option<Claim>) -> Result<T, StoreError>>,
-    ) -> Result<Option<CommandResult<T>>, StoreError> {
+    ) -> Result<Result<CommandResult<T>, NotCurrent>, StoreError> {
         let recorded = self.write(|tx| {
             let project = &command.project;
             let head = stored_head(tx, project)?;
@@ -145,7 +146,8 @@ impl SqliteStore {
             let generation = match self.views().judge_request(&live)? {
                 Fence::Current(generation) => generation,
                 Fence::Newer(reason) => return Err(read_only(project, reason)),
-                Fence::Unstamped | Fence::Behind => return Ok(None),
+                Fence::Unstamped => return Ok(Err(NotCurrent::Unstamped)),
+                Fence::Behind => return Ok(Err(NotCurrent::Behind)),
             };
             let requests = self.views().table(REQUEST_VIEW)?;
             if let Some(document) =
@@ -185,7 +187,7 @@ impl SqliteStore {
                             RequestState::Completed(digest, outcome),
                             document.produced_seq,
                         )
-                        .map(|value| Some(CommandResult::Replayed(value)));
+                        .map(|value| Ok(CommandResult::Replayed(value)));
                     }
                     RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _)
                         if matches!(entry, Entry::Complete(_)) =>
@@ -214,7 +216,7 @@ impl SqliteStore {
                     {
                         let replay = replay.take().ok_or_else(spent)?;
                         return replay(tx, state, document.produced_seq)
-                            .map(|value| Some(CommandResult::Replayed(value)));
+                            .map(|value| Ok(CommandResult::Replayed(value)));
                     }
                     RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _) => {
                         let claim = claim_from_doc(
@@ -247,7 +249,8 @@ impl SqliteStore {
             match self.views().judge_set(&live) {
                 Fence::Current(_) => {}
                 Fence::Newer(reason) => return Err(read_only(project, reason)),
-                Fence::Unstamped | Fence::Behind => return Ok(None),
+                Fence::Unstamped => return Ok(Err(NotCurrent::Unstamped)),
+                Fence::Behind => return Ok(Err(NotCurrent::Behind)),
             }
             self.check_readable(tx, project, head.as_ref())?;
             let own_claim = if matches!(entry, Entry::Complete(_)) {
@@ -278,9 +281,9 @@ impl SqliteStore {
             }
             work.check_payloads_attached()?;
             let head = work.write()?;
-            Ok(Some(CommandResult::New(result, head)))
+            Ok(Ok(CommandResult::New(result, head)))
         })?;
-        if let Some(CommandResult::New(_, head)) = &recorded {
+        if let Ok(CommandResult::New(_, head)) = &recorded {
             // Committed: every event through the new head was checked
             // readable or was written here by this binary.
             self.readable()

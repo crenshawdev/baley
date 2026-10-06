@@ -14,7 +14,9 @@
 //! flips. A rebuild or verification holds the maintenance lock throughout;
 //! commands do not take it. `view_gen` stamps each generation with the
 //! projector versions and view set version that built it, and a project's
-//! live stamps decide whether this binary may use its views.
+//! live stamps decide whether this binary may use its views. A store opened
+//! for the guard rebuilds nothing: it stamps an empty project's generation 0
+//! and answers views behind as `StoreError::NeedsRebuild`.
 
 use std::cmp::Ordering;
 use std::time::Duration;
@@ -41,12 +43,21 @@ pub(crate) fn read_only(project: &ProjectId, reason: String) -> StoreError {
     })
 }
 
+/// Why a read or a command could not use a project's live views yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotCurrent {
+    /// Never stamped, with no events: generation 0 needs its stamps.
+    Unstamped,
+    /// Built by an older binary: the views need a rebuild.
+    Behind,
+}
+
 impl SqliteStore {
     /// Runs `f` on the project's live generation in the read snapshot that
     /// found it built by this binary's views, so a flip between the check
     /// and the read cannot put an older binary's empty table in front of
     /// the caller. A newer generation refuses; an older or unstamped one is
-    /// brought forward and checked again in a fresh snapshot.
+    /// handed to `catch_up` and checked again in a fresh snapshot.
     pub(crate) fn read_current<T>(
         &self,
         project: &ProjectId,
@@ -56,15 +67,38 @@ impl SqliteStore {
             let read = self.snapshot(|conn| {
                 let live = live_views(conn, project)?;
                 match self.views().judge_set(&live) {
-                    Fence::Current(generation) => f(conn, generation).map(Some),
+                    Fence::Current(generation) => f(conn, generation).map(Ok),
                     Fence::Newer(reason) => Err(read_only(project, reason)),
-                    Fence::Unstamped | Fence::Behind => Ok(None),
+                    Fence::Unstamped => Ok(Err(NotCurrent::Unstamped)),
+                    Fence::Behind => Ok(Err(NotCurrent::Behind)),
                 }
             })?;
             match read {
-                Some(value) => return Ok(value),
-                None => self.bring_current(project)?,
+                Ok(value) => return Ok(value),
+                Err(found) => self.catch_up(project, found)?,
             }
+        }
+    }
+
+    /// Readies a project's views that a read or a command `found` not
+    /// current, before it checks them again. A normal store brings them
+    /// forward, waiting for the maintenance lock as long as it takes. A
+    /// guard store never takes that lock and never rebuilds inline: it
+    /// stamps an empty project in a bounded writer turn, and answers views
+    /// behind as `NeedsRebuild` with nothing written.
+    pub(crate) fn catch_up(
+        &self,
+        project: &ProjectId,
+        found: NotCurrent,
+    ) -> Result<(), StoreError> {
+        if !self.bounded() {
+            return self.bring_current(project);
+        }
+        match found {
+            NotCurrent::Unstamped => self.stamp_empty(project),
+            NotCurrent::Behind => Err(StoreError::NeedsRebuild {
+                project: project.clone(),
+            }),
         }
     }
 
@@ -97,7 +131,8 @@ impl SqliteStore {
 
     /// Stamps generation 0 of a project that has no generation and no
     /// events: nothing to replay, so no rebuild. Rechecked under the queue;
-    /// a project changed meanwhile is left for the caller's next check.
+    /// a project changed meanwhile is left for the caller's next check. It
+    /// needs no maintenance lock, so a guard store stamps through it alone.
     fn stamp_empty(&self, project: &ProjectId) -> Result<(), StoreError> {
         self.write(|tx| {
             let live = live_views(tx, project)?;
@@ -959,9 +994,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use baley_store::{
-        Change, Command, CommandKind, Decision, DocKey, EventSchema, FieldKind, FieldSpec,
-        IndexField, IndexSpec, KeyValue, NewEvent, Observed, Order, OutcomeKind, Projector,
-        ProjectorError, Recorded, StreamName, ViewSpec, Views,
+        Admin, Change, Command, CommandKind, Decision, DocKey, EventSchema, FieldKind, FieldSpec,
+        IndexField, IndexQuery, IndexSpec, KeyValue, NewEvent, Observed, Order, OutcomeKind,
+        PageRequest, Projector, ProjectorError, Recorded, StreamName, ViewSpec, Views,
     };
     use rusqlite::Connection;
     use serde_json::{Value, json};
@@ -1184,6 +1219,41 @@ mod tests {
                 ..Options::default()
             },
         )
+    }
+
+    /// `open_as` for a guard store: 1.5 s of storage time on a timing that
+    /// steps 10 ms a reading, so a wait it should not make ends as `Busy`
+    /// instead of hanging.
+    fn open_guard(
+        home: &Path,
+        projectors: Vec<Box<dyn Projector>>,
+        view_set_version: u32,
+    ) -> SqliteStore {
+        SqliteStore::open(
+            home,
+            AT,
+            Options {
+                projectors,
+                schema: Box::new(Schema),
+                view_set_version: set(view_set_version + 1),
+                timing: Scripted::stepping(Duration::from_millis(10)),
+                guard_storage_time: Some(Duration::from_millis(1_500)),
+                ..Options::default()
+            },
+        )
+        .expect("guard open")
+    }
+
+    /// Every document of the `item` view, in state order.
+    fn by_state() -> IndexQuery {
+        IndexQuery {
+            index: "by_state".into(),
+            equals: Vec::new(),
+            page: PageRequest {
+                limit: 10,
+                after: None,
+            },
+        }
     }
 
     /// The two fixture views, `item` at version 2 and `tally`, as set 2.
@@ -1845,5 +1915,94 @@ mod tests {
             ),
             Some(0)
         );
+    }
+
+    // Catches a guard store that rebuilds views behind its binary's inline,
+    // or waits for the maintenance lock to do it, instead of answering that
+    // they need a rebuild with nothing changed.
+    #[test]
+    fn a_guard_store_rebuilds_views_behind_its_binarys_inline() {
+        let home = crate::checks::private_folder();
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let live = live_gen(home.path()).expect("live");
+        let before = (stamps(home.path(), live), events(home.path()));
+        let _held = store.hold_maintenance().expect("maintenance lock");
+        let guard = open_guard(home.path(), vec![item(3), tally(None)], 3);
+        let needs = Some(StoreError::NeedsRebuild { project: project() });
+        assert_eq!(guard.get(&project(), "item", &id(1)).err(), needs);
+        assert_eq!(guard.find(&project(), "item", &by_state()).err(), needs);
+        let answered = guard
+            .transact(&command("fixture.add", "r3"), &mut |_| {
+                panic!("the decision ran")
+            })
+            .err();
+        assert_eq!(answered, needs);
+        assert_eq!(live_gen(home.path()), Some(live));
+        assert_eq!((stamps(home.path(), live), events(home.path())), before);
+    }
+
+    // Catches a guard store that answers an empty project, as a new `user`
+    // is, as needing a rebuild, or waits for the maintenance lock to stamp it.
+    #[test]
+    fn a_guard_store_refuses_an_empty_project_it_can_stamp() {
+        let home = crate::checks::private_folder();
+        let store = open_with(home.path(), Scripted::still());
+        let _held = store.hold_maintenance().expect("maintenance lock");
+        let guard = open_guard(home.path(), vec![item(2), tally(None)], 2);
+        guard
+            .create_project(&project(), "fixture", AT)
+            .expect("project");
+        assert_eq!(doc(&guard, "item", &id(1)), None);
+        assert_eq!(live_gen(home.path()), Some(0));
+        assert_eq!(
+            stamps(home.path(), 0),
+            [
+                ("claim_scope".into(), 1, 3),
+                ("item".into(), 2, 3),
+                ("request".into(), 2, 3),
+                ("tally".into(), 1, 3)
+            ]
+        );
+        assert!(matches!(
+            record(&guard, "r1", &[(1, "open")]),
+            Ok(Recorded::New { .. })
+        ));
+    }
+
+    // Catches the compatibility fence weakened on the guard path: views a
+    // newer binary built answered as needing a rebuild by this one, which
+    // would rebuild them backward.
+    #[test]
+    fn a_guard_store_answers_a_newer_binarys_views_as_needing_a_rebuild() {
+        let home = crate::checks::private_folder();
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        open_as(
+            home.path(),
+            vec![item(3), tally(None)],
+            3,
+            Scripted::still(),
+        )
+        .expect("newer")
+        .rebuild(&project())
+        .expect("rebuild");
+        let guard = open_guard(home.path(), vec![item(2), tally(None)], 2);
+        for older in [&guard, &store] {
+            let read = older.get(&project(), "item", &id(1)).err();
+            assert!(
+                matches!(&read, Some(StoreError::Refused(Refusal::ProjectReadOnly { project: named, .. })) if *named == project()),
+                "{read:?}"
+            );
+            let answered = older
+                .transact(&command("fixture.add", "late"), &mut |_| {
+                    panic!("the decision ran")
+                })
+                .err();
+            assert!(
+                matches!(&answered, Some(StoreError::Refused(Refusal::ProjectReadOnly { project: named, .. })) if *named == project()),
+                "{answered:?}"
+            );
+        }
     }
 }
