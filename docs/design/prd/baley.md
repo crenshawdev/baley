@@ -124,6 +124,11 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 68. As an owner, I want Baley's memory use to stay bounded however large the record grows, so that it runs for months without slowing my machine.
 69. As an owner, I want every refusal to say what is missing and where, so that I know how to proceed.
 
+### Installing and updating
+
+70. As an owner, I want one installer command to deliver Baley and write its host wiring, without npm or a plugin, so that setup takes one action.
+71. As an owner, I want automatic updates off until I enable them and a manual update command always available, with every download verified, so that I control updates without interrupting my running server. A hook uses the stable path on its next call and must work beside an older server.
+
 ## Implementation Decisions
 
 The architecture is in [0002: System design](../0002-system-design.md); the store is in [0001: The evidence ledger](../0001-evidence-ledger.md). The decisions that shape the product:
@@ -138,7 +143,7 @@ The architecture is in [0002: System design](../0002-system-design.md); the stor
 - **Optimistic concurrency.** Writes take turns at the store's one writer lock, one short transaction at a time. Each decision is made inside its write from inputs read there; a command whose inputs changed is refused, never merged. Long work runs outside the write and is recorded after it.
 - **Baley runs tests and checks.** Results are judged by exit code, with an optional standard report for which tests failed, so every language works.
 - **Outside models are called by the host session, never by Baley.** Baley decides the review and builds its prompt and material. Release 1 uses provider APIs. The session supplies the owner's environment key and returns the raw response for Baley to parse and check. Model-list requests follow the same boundary. Baley never reads keys and scrubs no command output ([ADR 0039](../../adr/0039-session-owned-provider-credentials.md)).
-- **Installation and updates.** One installer command puts the binary behind `~/.local/bin/baley`; `baley install` writes all host wiring without npm or a plugin. Updates are off by default and opt-in, checked at most daily by a detached process started by `baley serve`, verified before staging and effective for new sessions only. Manual `baley update` is always available ([ADR 0038](../../adr/0038-installer-and-opt-in-updates.md)).
+- **Installation and updates.** One installer command puts the binary behind `~/.local/bin/baley`; `baley install` writes all host wiring without npm or a plugin. Updates are off by default and opt-in, checked at most daily by a detached process started by `baley serve`, verified before staging and used by new session servers. Running servers keep their version; the next hook call uses the stable path and must work beside an older server and ledger state. Manual `baley update` is always available ([ADR 0038](../../adr/0038-installer-and-opt-in-updates.md)).
 - **Settings are TOML.** One global file and one project file that overrides it. Branch, forge and repository settings live only in the project file. Settings that differ per host sit in a section for each host. Baley writes the files; the model is never told about them.
 - **Nothing is required to work the way Cadence did.** The familiar working loop (project, plan, milestone, land) is kept; everything underneath is designed afresh.
 

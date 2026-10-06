@@ -61,8 +61,12 @@ graph LR
     style 13 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     14["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    15["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>OpenAI and DeepSeek, reached<br />by the session through their<br />APIs.</div>"]
+    style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     2["<div style='font-weight: bold'>Baley</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Decides and orchestrates<br />every step of the process;<br />keeps the record.</div>"]
     style 2 fill:#1168bd,stroke:#0b4884,color:#ffffff
 
@@ -71,20 +75,23 @@ graph LR
     13-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
     13-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->2
     13-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->14
+    13-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->17
     2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->14
-    2-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->15
+    2-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
+    2-. "<div>Fetches signed releases for<br />manual or opt-in updates</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->15
 
   end
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers.*
+*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. Baley contacts the release source for manual or opt-in updates.*
 
 | Actor | What it is | Its part |
 |---|---|---|
 | Owner | The person responsible for the work | Approves, rules and sets policy |
 | Baley | One Rust binary, started by each Claude Code session as its own MCP server over stdio, and by the host's pre-tool hook once per tool call | Decides, orchestrates, validates and keeps the record |
 | Host | Claude Code | Its main session relays and adjudicates, and the subagents it starts each do one piece of engineering judgment |
+| Release source | Signed checksum manifests and platform archives | Supplies installation and update downloads; automatic update checks require opt-in |
 | Outside reviewers | OpenAI and DeepSeek | Review plans and diffs through their APIs, called by the host session. The session also fetches model lists with the owner's environment keys and returns the raw answers to Baley ([0003](0003-configuration-and-routing.md), CFG-R20) |
 | Repository | The project's git checkout | Holds the source; Baley reads git facts and runs tests and git there |
 | Forge | GitHub | Holds chain anchors, pull requests and issues |
@@ -157,8 +164,12 @@ graph LR
     style 13 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     14["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    15["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>OpenAI and DeepSeek, reached<br />by the session through their<br />APIs.</div>"]
+    style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
       style 2 fill:none,stroke:#0b4884,color:#0b4884
@@ -176,16 +187,18 @@ graph LR
     13-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->3
     13-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->3
     13-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->14
+    13-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->17
     3-. "<div>Reads, and writes a file<br />whole for config set</div><div style='font-size: 70%'></div>" .->12
     3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->11
     3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->14
-    3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->15
+    3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
+    3-. "<div>Fetches signed releases for<br />manual or opt-in updates</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->15
 
   end
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files. Provider calls and credentials stay with the host session. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
+*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files. Provider calls and credentials stay with the host session. Release downloads use the binary's HTTP client, with automatic checks in a detached process only after opt-in. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
 
 <!-- c4:components -->
 ```mermaid
@@ -202,8 +215,10 @@ graph LR
     style 13 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     14["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    15["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
       style 2 fill:none,stroke:#0b4884,color:#0b4884
@@ -252,13 +267,14 @@ graph LR
     6-. "<div>Records and acts through</div><div style='font-size: 70%'></div>" .->10
     10-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->11
     10-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->14
-    10-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->15
+    10-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
+    10-. "<div>Fetches signed releases for<br />manual or opt-in updates</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->15
 
   end
 ```
 <!-- /c4:components -->
 
-*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader.*
+*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. Ports also fetch signed releases for manual or opt-in updates.*
 
 | Component | Responsibility |
 |---|---|
@@ -297,14 +313,14 @@ The one contract between Baley and every worker, including the outside reviews t
 | SYS-R8 | Baley runs the test suite and each check's command itself. It judges results by exit code, with an optional standard report (such as JUnit XML) for which tests failed. | Evidence is first-hand, and every language works. |
 | SYS-R9 | Outside models are called by the host session, never by Baley. Baley decides whether an outside review runs and with which providers, builds the complete prompt and request as a work order, and parses and validates the raw response returned through `review return`. | Responsibility stays with the party that acts. |
 | SYS-R10 | Outside reviews use provider APIs only in release 1. The host reviewer is a Claude Code subagent. Provider command-line agents are outside this release. | One bounded request and response contract for outside reviewers ([ADR 0039](../adr/0039-session-owned-provider-credentials.md)). |
-| SYS-R11 | Baley never reads, stores or sends an API key. Owners keep keys in their own environment. A work order names the address, authentication header and environment variable, and the session sends the request. `keys.env` and `baley exec` are removed. Baley has no output scrubber. | Credentials stay with the owner and calls stay with the session ([ADR 0039](../adr/0039-session-owned-provider-credentials.md)). |
+| SYS-R11 | Baley never reads, stores or sends an API key. Owners keep keys in their own environment. A work order names the address, authentication header and environment variable, and the session sends the request. `keys.env` and `baley exec --key` are removed. Baley has no output scrubber. | Credentials stay with the owner and calls stay with the session ([ADR 0039](../adr/0039-session-owned-provider-credentials.md)). |
 | SYS-R12 | Before an outside provider is enabled, the interview asks which providers to use, states the risks, takes a typed confirmation and records the acknowledgement and warning version in the ledger. A changed warning requires confirmation again, and no entry point bypasses it. | Every program Claude Code starts can see environment keys, agents and subagents included. Nothing scrubs a printed key. Review material goes to the chosen provider under its terms. |
 | SYS-R13 | Settings are TOML: one global file for everything shared across projects and one project file that overrides it. Branch, forge and repository settings live only in the project file. Settings that differ per host sit in a section for each host. Baley's command line and interview write the files; the model is never told about them; the ledger records the effective settings Baley acted under. | Familiar, reviewable settings with a record of what applied. |
 | SYS-R14 | The first release supports Linux and macOS. | Windows is planned for a later release. |
 
 ## 10. Cross-cutting concerns
 
-- **Trust.** Baley never reads API keys. Keys in the session's environment are visible to every program Claude Code starts, agents and subagents included. Nothing scrubs a key a command prints. Code sent for review goes to the chosen provider under its terms. Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
+- **Trust.** The installer and updater contact the release source to fetch signed manifests and release archives; automatic checks require opt-in, and these requests send no project content or provider credentials. Baley never reads API keys. Keys in the session's environment are visible to every program Claude Code starts, agents and subagents included. Nothing scrubs a key a command prints. Code sent for review goes to the chosen provider under its terms. Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
 - **Failure and recovery.** Claim, act, record (SYS-P7). A killed process is never taken as success. The log is good enough to diagnose a live failure.
 - **Resources.** Memory use and read cost are defects a user sees: no loading the whole store, bounded reads, streaming.
 - **Concurrency.** One user, one machine, one server process per session; several processes write the one per-user ledger through the store, with no single writer, and optimistic concurrency keeps them from overwriting each other (SYS-R6). No parallel or worktree execution.
@@ -321,11 +337,10 @@ Decision records this design produces.
 - Baley runs tests itself and judges by exit code (SYS-R8): [ADR 0014](../adr/0014-baley-runs-tests.md)
 - Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md), superseded in part by ADR 0027
 - Baley's own crenshawdev folders (SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md), superseded in part by ADR 0032, ADR 0033 and ADR 0039
-- One HTTP client, `reqwest`, for Baley's outgoing calls: [ADR 0028](../adr/0028-one-http-stack.md), its MCP server part superseded by ADR 0034 and its authenticated model-list path by ADR 0039
+- One HTTP client, `reqwest`, for Baley's outgoing calls, including release updates: [ADR 0028](../adr/0028-one-http-stack.md), its MCP server part superseded by ADR 0034 and its authenticated model-list path by ADR 0039
 - A host may offer more than Claude Code as a declared addition (SYS-P12): [ADR 0029](../adr/0029-a-host-may-offer-more.md), superseded in part by ADR 0033
 - One term per concept across every document, kept in the glossary [CONTEXT.md](../../CONTEXT.md), with phase for the working increment and story for the owner's declared work: [ADR 0031](../adr/0031-one-term-per-concept.md), superseding ADR 0017 in part
 - Support only hosts whose sandboxing and execution controls meet Baley's requirements (SYS-P12): [ADR 0033](../adr/0033-host-security-bar.md), superseding ADR 0008, 0018, 0020, 0027 and 0029 in part
-
 - One-command installation and opt-in verified updates: [ADR 0038](../adr/0038-installer-and-opt-in-updates.md)
 - Session-owned credentials, API-only outside reviews and imported model lists (SYS-R9 to SYS-R12): [ADR 0039](../adr/0039-session-owned-provider-credentials.md)
 
@@ -334,4 +349,4 @@ Decision records this design produces.
 | Question | Where it is decided |
 |---|---|
 | Reading git facts inside the write transaction (issue #40) | Build 4 |
-| Which build removes the built key reader, `baley exec` and HTTPS model lister? | John Crenshaw must assign it. The removal is unassigned, and no code changes with this design. See [0003 section 11](0003-configuration-and-routing.md#11-build-status). |
+| Which build removes the built key reader, `baley exec --key` and HTTPS model lister? | The owner must assign it. The removal is unassigned, and no code changes with this design. See [0003 section 11](0003-configuration-and-routing.md#11-build-status). |

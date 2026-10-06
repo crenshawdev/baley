@@ -14,7 +14,7 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 Baley uses one public name, describes its built state accurately, and requires a reproducible set of checks before changes reach `main`. This area defines those names, the treatment of project history, repository metadata and labels, the formatting gate, and the evidence used to assess the test suite's cost.
 
-The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new sessions only. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/crenshawdev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
+The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/crenshawdev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
 
 Cadence is Baley's predecessor project, a separately maintained tool that can still be registered in the same host.
 
@@ -111,16 +111,16 @@ The retained historical passages are:
 
 | Passage | Current location | Treatment |
 |---|---|---|
-| Product boundary | [PRD:142](prd/baley.md#L142) | Keep the distinction between the predecessor's behavior and Baley's requirements |
-| No record import | [PRD:162](prd/baley.md#L162) | Keep the explicit exclusion |
-| Heritage | [PRD:166](prd/baley.md#L166) | Keep the explanation of the working loop's origin |
+| Product boundary | [PRD:148](prd/baley.md#L148) | Keep the distinction between the predecessor's behavior and Baley's requirements |
+| No record import | [PRD:169](prd/baley.md#L169) | Keep the explicit exclusion |
+| Heritage | [PRD:173](prd/baley.md#L173) | Keep the explanation of the working loop's origin |
 | Story design context | [ADR 0017:14](../adr/0017-stories-and-sprints.md#L14) | Keep the accepted decision's body |
 | Review design context | [ADR 0019:14](../adr/0019-reviews-adjudicated-and-ruled.md#L14) | Keep the accepted decision's body |
 | README lineage | [README lineage](../../README.md#lineage) | Keep the name, repository link and attribution before the `baley-start` tag |
 
 Outside this document, a case-insensitive tracked-content search for `cadence` finds eight occurrences on six lines in four files: the five passages in `docs` above and three occurrences on the README lineage line. `crates` and `.github` contain zero matches; `scripts` is absent. The old `cad-` instruction prefix has zero matches outside this document. This document's explanatory mentions and registration boundary are also permitted, without establishing aliases. No active identifier is exempted as history.
 
-The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its [non-goals](0001-evidence-ledger.md#L57), [performance account](0001-evidence-ledger.md#L1318) and [compatibility rule](0001-evidence-ledger.md#L1353). The profile is [baseline-store.json](../../spikes/evidence-ledger-bench/profile/baseline-store.json), identified by the benchmark [README:30](../../spikes/evidence-ledger-bench/README.md#L30) and [loader:558](../../spikes/evidence-ledger-bench/src/main.rs#L558). Those figures describe the replaced store, not the current test suite.
+The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its [non-goals](0001-evidence-ledger.md#L57), [performance account](0001-evidence-ledger.md#performance) and [compatibility rule](0001-evidence-ledger.md#compatibility-and-migration). The profile is [baseline-store.json](../../spikes/evidence-ledger-bench/profile/baseline-store.json), identified by the benchmark [README:30](../../spikes/evidence-ledger-bench/README.md#L30) and [loader:558](../../spikes/evidence-ledger-bench/src/main.rs#L558). Those figures describe the replaced store, not the current test suite.
 
 ### Canonical names and consumers
 
@@ -138,7 +138,7 @@ The names below cover the public and stored surfaces of [#53](https://github.com
 | Temporary paths | `.baley-release-`, [milestone/release.rs:541](../../crates/baley/src/milestone/release.rs#L541); `.baley-prune-index-` and `.baley-undo-index-`, [rail/commit.rs:318](../../crates/baley/src/rail/commit.rs#L318) and [380](../../crates/baley/src/rail/commit.rs#L380); `baley-risk-index-`, [pause/git.rs:260](../../crates/baley/src/pause/git.rs#L260); `baley-task-`, [task/mod.rs:32](../../crates/baley/src/task/mod.rs#L32) |
 | Instructions and agent identities | The compiled instruction registry uses `bal-` at [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). The inherited role table contains six roles and thirty role/rung entries at [config/roles.rs:7-60](../../crates/baley/src/config/roles.rs#L7); that table does not prove stubs are installed |
 
-The file-valued `BALEY_GLOBAL_CONFIG` is not an alias for the directory-valued `BALEY_HOME`, read at [folders.rs:47](../../crates/baley/src/folders.rs#L47). Supported settings use the vendor folders of [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md) and [0003](0003-configuration-and-routing.md). The current design has no key file: [ADR 0039](../adr/0039-session-owned-provider-credentials.md) leaves credentials in the owner's environment. The built key reader, `baley exec` and HTTPS model lister await removal, with no build assigned. An inherited spelling does not make its format part of that interface. The parked services remain compiled for their tests and are removed by Build 9 ([inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1)); their bytes need no second rename.
+The file-valued `BALEY_GLOBAL_CONFIG` is not an alias for the directory-valued `BALEY_HOME`, read at [folders.rs:47](../../crates/baley/src/folders.rs#L47). Supported settings use the vendor folders of [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md) and [0003](0003-configuration-and-routing.md). The current design has no key file: [ADR 0039](../adr/0039-session-owned-provider-credentials.md) leaves credentials in the owner's environment. The built key reader, `baley exec --key` and HTTPS model lister await removal, with no build assigned. An inherited spelling does not make its format part of that interface. The parked services remain compiled for their tests and are removed by Build 9 ([inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1)); their bytes need no second rename.
 
 ### Suite-cost report
 

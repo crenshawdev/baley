@@ -19,6 +19,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
 
         host = softwareSystem "Host" "Claude Code: the owner's session, which relays Baley's work orders and adjudicates. The session's workers are its subagents, and they run inside Claude Code's sandbox." "External"
         repo = softwareSystem "Repository" "The project's git checkout." "External"
+        releases = softwareSystem "Release source" "Signed checksum manifests and platform archives for installation and manual or opt-in updates." "External"
         forge = softwareSystem "Forge" "GitHub: chain anchors, pull requests, issues." "External"
         reviewers = softwareSystem "Outside reviewers" "OpenAI and DeepSeek, reached by the session through their APIs." "External"
 
@@ -50,16 +51,19 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         ports -> ledger "Appends events, reads views"
         ports -> repo "Reads git facts, runs tests and git"
         ports -> forge "Pushes anchors, opens pull requests and issues"
+        ports -> releases "Fetches signed releases for manual or opt-in updates" "HTTPS, reqwest"
     }
 
     views {
         systemContext baley "context" {
             include *
+            include reviewers
             autolayout lr
         }
 
         container baley "containers" {
             include *
+            include reviewers
             autolayout lr
         }
 
