@@ -6,7 +6,7 @@
 | Date | 2026-10-06 |
 | Deciders | John Crenshaw |
 | Design document | [0010: Guard](../design/0010-guard.md) |
-| Supersedes | [0036](0036-per-user-guard-records.md) in part: the checkout used to key remembered denials |
+| Supersedes | [0036](0036-per-user-guard-records.md), in part: the checkout used to key remembered denials |
 | Superseded by | |
 
 ## Context and problem
