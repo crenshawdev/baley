@@ -24,7 +24,7 @@ pub enum Artifact {
     Registration,
     /// The guard hook.
     Hook,
-    /// The security settings, whose content the second plan renders.
+    /// The security settings, whose content `security::propose` renders.
     Settings,
 }
 

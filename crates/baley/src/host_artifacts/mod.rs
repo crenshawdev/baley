@@ -14,8 +14,10 @@
 //! - `placement`: an explicit placement map that turns supplied paths into
 //!   the expected files and the protected-path list the guard and the doctor
 //!   take;
-//! - the security settings proposal, the coverage judge and the composition
-//!   with existing settings, added by the same task's second plan.
+//! - `security`: the sandbox and deny-rule proposal that keeps agents out of
+//!   the home and config folder and off the placed files;
+//! - the coverage judge and the composition with existing settings, added by
+//!   the same task's second plan.
 //!
 //! Delivery is `baley install`'s (Build 3 T15): where each artifact goes, who
 //! owns the file and how it is written or removed are decided there, with
@@ -46,4 +48,5 @@ pub mod executable;
 pub mod hook;
 pub mod placement;
 pub mod registration;
+pub mod security;
 pub mod stubs;
