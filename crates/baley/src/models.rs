@@ -183,7 +183,7 @@ pub enum OwnerOutcome {
 /// runs first. The request id is fresh, and the returned version is read
 /// after the append inside this command's transaction.
 pub fn change(
-    store: &(impl Ledger + Views),
+    store: &impl Ledger,
     catalog: Catalog,
     name: &str,
     change: OwnerChange,
@@ -622,10 +622,9 @@ mod tests {
     use baley_core::policy::Host;
     use baley_store::{
         Actor, Admin, Anchor, Claim, ClaimId, ClaimOwner, Claimed, Command, CommandKind, Decide,
-        DecideClaim, DecideReconcile, Decision, DocKey, Document, Event, Head, HistoryFilter,
-        IndexQuery, Ledger, NewEvent, Observed, OutcomeKind, Page, PageRequest, ProjectId,
-        ReconcileAuthority, Recorded, RequestId, StoreError, StreamName, VerifyReport, Views,
-        request_digest,
+        DecideClaim, DecideReconcile, Decision, Event, Head, HistoryFilter, Ledger, NewEvent,
+        Observed, OutcomeKind, Page, PageRequest, ProjectId, ReconcileAuthority, Recorded,
+        RequestId, StoreError, StreamName, VerifyReport, Views, request_digest,
     };
     use baley_store_sqlite::SqliteStore;
     use serde_json::{Value, json};
@@ -1116,33 +1115,6 @@ mod tests {
             anchor: Option<&Anchor>,
         ) -> Result<VerifyReport, StoreError> {
             Ledger::verify(self.store, project, anchor)
-        }
-    }
-
-    impl Views for CommitsAfter<'_> {
-        fn get(
-            &self,
-            project: &ProjectId,
-            view: &str,
-            key: &DocKey,
-        ) -> Result<Option<Document>, StoreError> {
-            self.store.get(project, view, key)
-        }
-        fn get_many(
-            &self,
-            project: &ProjectId,
-            view: &str,
-            keys: &[DocKey],
-        ) -> Result<Vec<Option<Document>>, StoreError> {
-            self.store.get_many(project, view, keys)
-        }
-        fn find(
-            &self,
-            project: &ProjectId,
-            view: &str,
-            query: &IndexQuery,
-        ) -> Result<Page<Document>, StoreError> {
-            self.store.find(project, view, query)
         }
     }
 
