@@ -13,6 +13,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
                 catalog = component "Model catalog" "The models each host and provider offers, seeded from the binary, changed by the owner and refreshed from imported lists."
                 ports = component "Ports and adapters" "Storage, git and test runner, forge and host adapters. The core sees only these ports."
             }
+            updater = container "Detached updater (planned T14)" "A separate process of the binary. Opens the per-user store to claim and record update checks. Manual and opt-in checks share the daily claim; no updater is built yet." "Rust"
             ledger = container "Ledger" "One append-only, hash-chained record per user, outside any checkout." "SQLite" "Database"
             settings = container "Settings" "One global file and one file per project." "TOML" "File"
         }
@@ -51,7 +52,9 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         ports -> ledger "Appends events, reads views"
         ports -> repo "Reads git facts, runs tests and git"
         ports -> forge "Pushes anchors, opens pull requests and issues"
-        ports -> releases "Fetches signed releases for manual or opt-in updates" "HTTPS, reqwest"
+        hostInterface -> updater "Starts manual or opted-in checks without waiting for network (planned T14)"
+        updater -> ledger "Opens the per-user store through the store port, claims and records checks (planned T14)"
+        updater -> releases "Fetches releases verified by #14, unsigned development artifacts only in T14 and T17" "HTTPS, reqwest"
     }
 
     views {

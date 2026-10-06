@@ -57,39 +57,40 @@ graph LR
 
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
-    13["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
-    style 13 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    14["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
+    14["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>OpenAI and DeepSeek, reached<br />by the session through their<br />APIs.</div>"]
+    17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    18["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>OpenAI and DeepSeek, reached<br />by the session through their<br />APIs.</div>"]
+    style 18 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     2["<div style='font-weight: bold'>Baley</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Decides and orchestrates<br />every step of the process;<br />keeps the record.</div>"]
     style 2 fill:#1168bd,stroke:#0b4884,color:#ffffff
 
-    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->13
+    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->14
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->2
-    13-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
-    13-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->2
-    13-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->14
-    13-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->17
-    2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->14
-    2-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
-    2-. "<div>Fetches signed releases for<br />manual or opt-in updates</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->15
+    14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
+    14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->2
+    14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
+    14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
+    2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
+    2-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
+    2-. "<div>Fetches releases verified by<br />#14, unsigned development<br />artifacts only in T14 and T17</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
 
   end
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. Baley contacts the release source for manual or opt-in updates.*
+*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. The planned updater contacts the release source for manual or opt-in updates; T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 | Actor | What it is | Its part |
 |---|---|---|
 | Owner | The person responsible for the work | Approves, rules and sets policy |
 | Baley | One Rust binary, started by each Claude Code session as its own MCP server over stdio, and by the host's pre-tool hook once per tool call | Decides, orchestrates, validates and keeps the record |
+| Detached updater (planned, T14) | A separate process of the same binary | Opens the per-user store to claim and record daily update checks; no updater is built yet |
 | Host | Claude Code | Its main session relays and adjudicates, and the subagents it starts each do one piece of engineering judgment |
 | Release source | Signed checksum manifests and platform archives | Supplies installation and update downloads; automatic update checks require opt-in |
 | Outside reviewers | OpenAI and DeepSeek | Review plans and diffs through their APIs, called by the host session. The session also fetches model lists with the owner's environment keys and returns the raw answers to Baley ([0003](0003-configuration-and-routing.md), CFG-R20) |
@@ -160,45 +161,49 @@ graph LR
 
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
-    13["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
-    style 13 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    14["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
+    14["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>OpenAI and DeepSeek, reached<br />by the session through their<br />APIs.</div>"]
+    17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    18["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>OpenAI and DeepSeek, reached<br />by the session through their<br />APIs.</div>"]
+    style 18 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
       style 2 fill:none,stroke:#0b4884,color:#0b4884
 
-      11[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
+      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Manual and<br />opt-in checks share the daily<br />claim; no updater is built<br />yet.</div>"]
       style 11 fill:#438dd5,stroke:#2e6295,color:#ffffff
-      12["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
+      12[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
+      13["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
+      style 13 fill:#438dd5,stroke:#2e6295,color:#ffffff
       3["<div style='font-weight: bold'>Baley server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>The Rust binary. Each Claude<br />Code session starts its own<br />process of it over stdio as<br />an MCP server. The command<br />line runs it as a process of<br />its own, and the guard hook<br />as one process per tool call,<br />which records its answers in<br />the per-user ledger.</div>"]
       style 3 fill:#438dd5,stroke:#2e6295,color:#ffffff
     end
 
-    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->13
+    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->14
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->3
-    13-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->3
-    13-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->3
-    13-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->14
-    13-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->17
-    3-. "<div>Reads, and writes a file<br />whole for config set</div><div style='font-size: 70%'></div>" .->12
-    3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->11
-    3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->14
-    3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
-    3-. "<div>Fetches signed releases for<br />manual or opt-in updates</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->15
+    14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->3
+    14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->3
+    14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
+    14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
+    3-. "<div>Reads, and writes a file<br />whole for config set</div><div style='font-size: 70%'></div>" .->13
+    3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
+    3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
+    3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
+    3-. "<div>Starts manual or opted-in<br />checks without waiting for<br />network (planned T14)</div><div style='font-size: 70%'></div>" .->11
+    11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks<br />(planned T14)</div><div style='font-size: 70%'></div>" .->12
+    11-. "<div>Fetches releases verified by<br />#14, unsigned development<br />artifacts only in T14 and T17</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
 
   end
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files. Provider calls and credentials stay with the host session. Release downloads use the binary's HTTP client, with automatic checks in a detached process only after opt-in. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
+*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus T14's planned detached updater. The updater opens the same per-user store through the store port to claim and record checks. Provider calls and credentials stay with the host session. Release downloads use the binary's HTTP client, with automatic checks only after opt-in. T14 and T17 use unsigned development artifacts; #14 supplies release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
 
 <!-- c4:components -->
 ```mermaid
@@ -211,14 +216,12 @@ graph LR
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
 
-    13["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
-    style 13 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    14["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
+    14["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
-    style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
+    17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
       style 2 fill:none,stroke:#0b4884,color:#0b4884
@@ -242,39 +245,42 @@ graph LR
         style 9 fill:#85bbf0,stroke:#5d82a8,color:#000000
       end
 
-      11[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
+      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Manual and<br />opt-in checks share the daily<br />claim; no updater is built<br />yet.</div>"]
       style 11 fill:#438dd5,stroke:#2e6295,color:#ffffff
-      12["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
+      12[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
+      13["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
+      style 13 fill:#438dd5,stroke:#2e6295,color:#ffffff
     end
 
-    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->13
+    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->14
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
-    13-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->4
-    13-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->4
-    13-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->14
+    14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->4
+    14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->4
+    14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
     4-. "<div>Asks what may happen next</div><div style='font-size: 70%'></div>" .->5
     5-. "<div>Applies the area's rules</div><div style='font-size: 70%'></div>" .->6
     6-. "<div>Requests work orders</div><div style='font-size: 70%'></div>" .->7
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
-    8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->12
-    4-. "<div>Writes a settings file whole,<br />for config set</div><div style='font-size: 70%'></div>" .->12
+    8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
+    4-. "<div>Writes a settings file whole,<br />for config set</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->9
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->10
     4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8
     4-. "<div>Model commands</div><div style='font-size: 70%'></div>" .->9
     9-. "<div>Records seeds, owner changes<br />and detections</div><div style='font-size: 70%'></div>" .->10
     6-. "<div>Records and acts through</div><div style='font-size: 70%'></div>" .->10
-    10-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->11
-    10-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->14
-    10-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
-    10-. "<div>Fetches signed releases for<br />manual or opt-in updates</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->15
+    10-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
+    10-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
+    10-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
+    4-. "<div>Starts manual or opted-in<br />checks without waiting for<br />network (planned T14)</div><div style='font-size: 70%'></div>" .->11
+    11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks<br />(planned T14)</div><div style='font-size: 70%'></div>" .->12
 
   end
 ```
 <!-- /c4:components -->
 
-*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. Ports also fetch signed releases for manual or opt-in updates.*
+*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts T14's planned detached updater, which opens the same per-user ledger through the store port. Its downloads and the release source are shown in Figure 3.*
 
 | Component | Responsibility |
 |---|---|
@@ -308,7 +314,7 @@ The one contract between Baley and every worker, including the outside reviews t
 | SYS-R3 | Withdrawn. There is no install-time choice of start route and no service or launcher: Claude Code starts the server for each session ([ADR 0034](../adr/0034-one-server-per-session.md)). | |
 | SYS-R4 | Withdrawn. There is no single shared server to join and no idle exit; a server's lifetime is its session's (SYS-R1, SYS-R5). | |
 | SYS-R5 | A session's calls are handled asynchronously at the edge and decided one at a time on the server's own worker, as synchronous code. A failure in one call never takes the server down. One bounded queue serves the session and every subagent: one call running and four waiting, with at most 16 MiB of raw frames among them, and a call beyond either bound gets a retryable overload answer. Memory stays bounded however large the ledger grows. At end of input the server stops taking calls, lets accepted work run for at most ten seconds and makes one `PASSIVE` checkpoint attempt. | Subagents share their session's connection, so one queue keeps them from starving each other, and the bounds are what a session may cost. |
-| SYS-R6 | Writes use optimistic concurrency across processes: each session's server, the guard hook and the command line open the per-user store. Every write takes the writer queue, `BEGIN IMMEDIATE` and the epoch check, and each command's decision is made inside its transaction from inputs read there. Events are appended, never overwritten, and a command whose inputs changed is refused as stale, never merged. No record is locked while an agent works. | Several sessions' servers, the guard hook and the command line write the one per-user ledger from separate processes; contention within a project is low because only one dispatch per phase is active. Builds on 0001 EVD-R6, EVD-R7, EVD-R8 and EVD-R26. |
+| SYS-R6 | Writes use optimistic concurrency across processes: each session's server, the guard hook and the command line open the per-user store. T14's planned detached updater also opens it, recording `update.check` claims and `update.checked` or `update.failed` outcomes in the per-user project `user` through the same port. Every write takes the writer queue, `BEGIN IMMEDIATE` and the epoch check, and each command's decision is made inside its transaction from inputs read there. Events are appended, never overwritten, and a command whose inputs changed is refused as stale, never merged. No record is locked while an agent works. | Several sessions' servers, the guard hook, the command line and the planned updater write the one per-user ledger from separate processes; contention within a project is low because only one dispatch per phase is active. Builds on 0001 EVD-R6, EVD-R7, EVD-R8 and EVD-R26. |
 | SYS-R7 | Long work (test runs, git and forge steps) is claimed and started, then recorded when it ends. Where the host supports being notified when a call finishes, Baley keeps the call open; everywhere else the session waits in steps, each call returning on completion or after a timeout with "still running". The host adapter chooses. | Hosts limit how long a tool call may run. |
 | SYS-R8 | Baley runs the test suite and each check's command itself. It judges results by exit code, with an optional standard report (such as JUnit XML) for which tests failed. | Evidence is first-hand, and every language works. |
 | SYS-R9 | Outside models are called by the host session, never by Baley. Baley decides whether an outside review runs and with which providers, builds the complete prompt and request as a work order, and parses and validates the raw response returned through `review return`. | Responsibility stays with the party that acts. |
@@ -320,7 +326,7 @@ The one contract between Baley and every worker, including the outside reviews t
 
 ## 10. Cross-cutting concerns
 
-- **Trust.** The installer and updater contact the release source to fetch signed manifests and release archives; automatic checks require opt-in, and these requests send no project content or provider credentials. Baley never reads API keys. Keys in the session's environment are visible to every program Claude Code starts, agents and subagents included. Nothing scrubs a key a command prints. Code sent for review goes to the chosen provider under its terms. Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
+- **Trust.** The installer and updater contact the release source to fetch signed manifests and release archives; automatic checks require opt-in, and these requests send no project content or provider credentials. T14's updater opens the per-user store to claim and record those checks. The release design #14 owns both verifiers, their signature format and trust root; T14 and T17 qualify unsigned development artifacts only, and no release exists before #14. Baley never reads API keys. Keys in the session's environment are visible to every program Claude Code starts, agents and subagents included. Nothing scrubs a key a command prints. Code sent for review goes to the chosen provider under its terms. Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
 - **Failure and recovery.** Claim, act, record (SYS-P7). A killed process is never taken as success. The log is good enough to diagnose a live failure.
 - **Resources.** Memory use and read cost are defects a user sees: no loading the whole store, bounded reads, streaming.
 - **Concurrency.** One user, one machine, one server process per session; several processes write the one per-user ledger through the store, with no single writer, and optimistic concurrency keeps them from overwriting each other (SYS-R6). No parallel or worktree execution.
@@ -349,4 +355,3 @@ Decision records this design produces.
 | Question | Where it is decided |
 |---|---|
 | Reading git facts inside the write transaction (issue #40) | Build 4 |
-| Which build removes the built key reader, `baley exec --key` and HTTPS model lister? | The owner must assign it. The removal is unassigned, and no code changes with this design. See [0003 section 11](0003-configuration-and-routing.md#11-build-status). |
