@@ -68,6 +68,12 @@ pub enum StoreError {
     /// project's rebuilds and view verifications refuse the same way until
     /// the marker is repaired.
     LiveGenerationProtected { project: ProjectId, generation: u64 },
+    /// A store opened for bounded access, as the guard's is, found the
+    /// project's live views behind this binary's. It answers this instead
+    /// of rebuilding them inline or waiting for the maintenance lock, and
+    /// nothing was recorded. A normal open, or `baley rebuild <project>`,
+    /// brings them forward.
+    NeedsRebuild { project: ProjectId },
 }
 
 /// The input that moved.
@@ -274,6 +280,11 @@ impl fmt::Display for StoreError {
                 "project {}'s building marker names generation {generation}, which is live; nothing was removed",
                 project.0
             ),
+            Self::NeedsRebuild { project } => write!(
+                f,
+                "project {}'s views need a rebuild by this binary; run baley rebuild {}",
+                project.0, project.0
+            ),
         }
     }
 }
@@ -450,6 +461,15 @@ mod home_tests {
         assert_eq!(
             StoreError::Refused(Refusal::UnsafeHome(faults)).to_string(),
             "refused: unsafe-home: /h is a symbolic link (fix: replace the link with the real folder); /h/baley.db is not a regular file (fix: remove or rename it)"
+        );
+    }
+
+    #[test]
+    fn the_needs_rebuild_text_leaves_out_the_project_or_the_remedy() {
+        let project = ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        assert_eq!(
+            StoreError::NeedsRebuild { project }.to_string(),
+            "project 6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f's views need a rebuild by this binary; run baley rebuild 6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f"
         );
     }
 }
