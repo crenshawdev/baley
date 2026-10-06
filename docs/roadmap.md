@@ -370,7 +370,7 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 
 ## Milestones
 
-Counts from GitHub on 2026-10-06, after #212, #213, #215, #216 and #217 closed, assuming #184, #200 and #201 close with this change. Evidence shows 42 closed and 15 open issues, and Encyclopedists six closed and one open.
+Counts from GitHub on 2026-10-06, after #212, #213, #215, #216 and #217 closed, assuming #184, #200 and #201 are closed. Evidence shows 42 closed and 15 open issues, and Encyclopedists six closed and one open.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
