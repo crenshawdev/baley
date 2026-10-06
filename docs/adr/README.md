@@ -43,4 +43,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0033](0033-host-security-bar.md) | Support only hosts whose sandboxing and execution controls meet Baley's requirements | Accepted, supersedes 0008, 0018, 0020, 0027 and 0029 in part |
 | [0034](0034-one-server-per-session.md) | Run one Baley server per session over stdio | Accepted, supersedes 0011, and 0028 in part |
 | [0035](0035-restore-purge-uncertainty.md) | Report purge uncertainty after restoring a store | Accepted, supersedes 0022 in part |
-| 0036 | Keep guard records per user and bound the guard's access | Reserved |
+| [0036](0036-per-user-guard-records.md) | Keep guard records per user and bound the guard's access | Accepted |
