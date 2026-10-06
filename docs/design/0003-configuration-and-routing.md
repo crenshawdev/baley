@@ -287,7 +287,7 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 ### baley models add, baley models remove
 
 - **Inputs:** a host or provider name, one of `claude-code`, `openai` or `deepseek`, and a model name, which is never empty; `add` takes an optional `--tier` of `flagship`, `balanced` or `cheap`. A missing or empty name or any other tier is a usage error, exit 2.
-- **Outputs:** the change and the new catalog version, such as `added "gpt-test-1" to openai at tier cheap; catalog version 3`, with `models.owner_changed` recorded in the per-user project `user` (section 6).
+- **Outputs:** the change and the new catalog version, such as `added "gpt-test-1" to openai at tier cheap; catalog version 3`, with `models.owner_changed` recorded in the per-user project `user` (section 6). The version is the one this command committed.
   - Adding a name the catalog already holds, other than a host alias, makes it the owner's entry. With `--tier` it takes that tier and shows as placed by the owner, and it keeps its high-effort flag, since `--tier` says nothing about effort.
   - Adding a name the owner removed accepts it again.
   - Removing a seeded or detected id hides it, and no later seed or detection brings it back. Only an owner addition does.
