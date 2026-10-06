@@ -3,8 +3,10 @@
 //! supplies every observation it judges.
 
 mod answer;
+mod event;
 pub mod reason;
 mod recording;
+mod remembered;
 mod scan;
 mod settings;
 
@@ -12,6 +14,12 @@ mod settings;
 mod tests;
 
 pub use answer::{Answer, BranchObservation, commit_push_answer, powershell_answer};
+pub use event::{
+    AnsweredFacts, GUARD_ANSWERED, GUARD_ANSWERED_VERSION, GUARD_COMMAND, GUARD_POLICY_RECORDED,
+    GUARD_POLICY_RECORDED_VERSION, GUARD_STREAM, SettingsFact, ToolInput, answered_payload,
+    input_digest, policy_recorded_payload, register_guard_events,
+};
 pub use recording::{AuditPrecondition, record_answer};
+pub use remembered::DenialParts;
 pub use scan::{GitVerb, git_verb};
 pub use settings::{GuardSettings, SettingsInput};

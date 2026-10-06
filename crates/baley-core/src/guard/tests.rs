@@ -559,3 +559,92 @@ fn an_unrecordable_deny_or_pass_being_changed_is_caught() {
         );
     }
 }
+
+// The guard's events and the input digest.
+
+#[test]
+fn a_guard_event_registered_at_any_version_but_1_is_caught() {
+    use baley_store::EventSchema;
+
+    let mut registry = crate::registry::Registry::new();
+    register_guard_events(&mut registry).unwrap();
+    for type_name in ["guard.answered", "guard.policy_recorded"] {
+        assert!(registry.reads(type_name, 1), "{type_name}");
+        assert!(!registry.reads(type_name, 2), "{type_name}");
+    }
+}
+
+fn bash(command: &str) -> String {
+    input_digest(
+        "Bash",
+        &ToolInput {
+            command: Some(command),
+            ..ToolInput::default()
+        },
+    )
+}
+
+#[test]
+fn an_input_digest_that_ignores_the_command_text_is_caught() {
+    let digest = bash("git commit -m a");
+    assert_ne!(digest, bash("git commit -m b"));
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    );
+}
+
+#[test]
+fn an_input_digest_without_the_tool_is_caught() {
+    let monitor = input_digest(
+        "Monitor",
+        &ToolInput {
+            command: Some("git push"),
+            ..ToolInput::default()
+        },
+    );
+    assert_ne!(bash("git push"), monitor);
+}
+
+#[test]
+fn an_input_digest_that_drops_the_field_names_is_caught() {
+    let path = ToolInput {
+        path: Some("x"),
+        ..ToolInput::default()
+    };
+    let glob = ToolInput {
+        glob: Some("x"),
+        ..ToolInput::default()
+    };
+    assert_ne!(input_digest("Grep", &path), input_digest("Grep", &glob));
+}
+
+#[test]
+fn command_text_reaching_the_guard_answered_payload_is_caught() {
+    let digest = bash("git commit -m SENTINEL-COMMAND");
+    let settings = GuardSettings {
+        protected_branches: vec!["main".into()],
+        on_protected: OnProtected::Refuse,
+        hard_fail: false,
+    };
+    let facts = AnsweredFacts {
+        host: "claude-code",
+        session: Some("s1"),
+        call: "toolu_01",
+        project_directory: Some("/r"),
+        cwd: "/r",
+        tool: "Bash",
+        input_digest: &digest,
+        target: None,
+        verb: Some(GitVerb::Commit),
+        branch: Some("main"),
+        settings: SettingsFact::Complete(&settings),
+    };
+    let payload = answered_payload(&facts, &Answer::Deny(reason::refuse_deny("main")))
+        .expect("a deny is recorded");
+    let text = payload.to_string();
+    assert!(!text.contains("SENTINEL-COMMAND"), "{text}");
+    assert!(text.contains(&digest), "{text}");
+}
