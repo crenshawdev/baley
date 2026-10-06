@@ -43,5 +43,6 @@
 //!   hook `matcher` is a regular expression over tool names.
 
 pub mod executable;
+pub mod hook;
 pub mod registration;
 pub mod stubs;
