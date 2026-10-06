@@ -1,6 +1,9 @@
 //! The guard's decisions on supplied values. Expectations come from design
 //! 0010 and the guard's rules, never from running this code.
 
+use baley_store::{Actor, Change, DocKey, Event, Hash, KeyValue, ProjectId, Projector, RequestId};
+use serde_json::{Value, json};
+
 use super::*;
 use crate::policy::{
     EffectivePolicy, Host, OnProtected, Schema, SettingsFile, Unavailable, effective_policy,
@@ -647,4 +650,199 @@ fn command_text_reaching_the_guard_answered_payload_is_caught() {
     let text = payload.to_string();
     assert!(!text.contains("SENTINEL-COMMAND"), "{text}");
     assert!(text.contains(&digest), "{text}");
+}
+
+// The `guard` view and the redelivery judge.
+
+fn event(type_name: &str, seq: u64, payload: Value) -> Event {
+    Event {
+        project_id: ProjectId("user".into()),
+        seq,
+        stream: "guard".into(),
+        stream_version: seq,
+        type_name: type_name.into(),
+        type_version: 1,
+        actor: Actor::Baley,
+        caller: None,
+        recorded_at: "2026-10-06T09:00:00Z".into(),
+        request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
+        git: None,
+        policy_version: 0,
+        payload,
+        prev_hash: None,
+        hash: Hash([0; 32]),
+    }
+}
+
+fn put(changes: Vec<Change>) -> (DocKey, Value) {
+    match <[Change; 1]>::try_from(changes) {
+        Ok([Change::Put { key, body }]) => (key, body),
+        other => panic!("expected one put, got {other:?}"),
+    }
+}
+
+fn text_key(parts: &[&str]) -> DocKey {
+    DocKey(
+        parts
+            .iter()
+            .map(|part| KeyValue::Text((*part).into()))
+            .collect(),
+    )
+}
+
+/// A `guard.answered` payload for an ask about a push from `/r`.
+fn answered(session: Option<&str>) -> Value {
+    answered_payload(
+        &AnsweredFacts {
+            host: "claude-code",
+            session,
+            call: "toolu_01",
+            project_directory: Some("/r"),
+            cwd: "/r/sub",
+            tool: "Bash",
+            input_digest: "d1",
+            target: None,
+            verb: Some(GitVerb::Push),
+            branch: None,
+            settings: SettingsFact::Absent,
+        },
+        &Answer::Ask(reason::push_ask()),
+    )
+    .expect("an ask is recorded")
+}
+
+#[test]
+fn a_guard_answer_stored_under_the_wrong_key_or_losing_a_fact_is_caught() {
+    let (key, body) = put(GuardProjector::new()
+        .apply(&event("guard.answered", 7, answered(Some("s1"))), &[])
+        .unwrap());
+    assert_eq!(key, text_key(&["claude-code", "s1", "toolu_01"]));
+    assert_eq!(key, guard_key("claude-code", Some("s1"), "toolu_01"));
+    assert_eq!(
+        body,
+        json!({
+            "host": "claude-code",
+            "session_key": "s1",
+            "call": "toolu_01",
+            "input_digest": "d1",
+            "project_directory": "/r",
+            "cwd": "/r/sub",
+            "outcome": "ask",
+            "reason": reason::push_ask(),
+            "seq": 7,
+        })
+    );
+}
+
+#[test]
+fn a_call_with_no_session_colliding_with_a_sessioned_call_is_caught() {
+    let projector = GuardProjector::new();
+    let (with, _) = put(projector
+        .apply(&event("guard.answered", 1, answered(Some("s1"))), &[])
+        .unwrap());
+    let (without, body) = put(projector
+        .apply(&event("guard.answered", 2, answered(None)), &[])
+        .unwrap());
+    assert_ne!(with, without);
+    assert_eq!(without, text_key(&["claude-code", "", "toolu_01"]));
+    assert_eq!(without, guard_key("claude-code", None, "toolu_01"));
+    assert_eq!(body["session_key"], "");
+}
+
+#[test]
+fn a_guard_answer_with_no_call_id_or_a_plain_pass_accepted_into_the_view_is_caught() {
+    let mut no_call = answered(Some("s1"));
+    no_call.as_object_mut().unwrap().remove("call");
+    let mut pass = answered(Some("s1"));
+    pass["outcome"] = json!("pass");
+    let mut empty_session = answered(Some("s1"));
+    empty_session["session"] = json!("");
+    for payload in [no_call, pass, empty_session, json!("not an object")] {
+        let error = GuardProjector::new()
+            .apply(&event("guard.answered", 4, payload.clone()), &[])
+            .expect_err(&format!("{payload} must be refused"));
+        assert!(error.0.contains("guard.answered at seq 4"), "{}", error.0);
+    }
+}
+
+/// A stored `guard` document for a call from `/r` in `/r/sub`.
+fn stored(outcome: &str, reason: &str) -> Value {
+    json!({
+        "host": "claude-code",
+        "session_key": "s1",
+        "call": "toolu_01",
+        "input_digest": "d1",
+        "project_directory": "/r",
+        "cwd": "/r/sub",
+        "outcome": outcome,
+        "reason": reason,
+        "seq": 3,
+    })
+}
+
+#[test]
+fn a_replay_that_changes_the_answer_kind_or_reason_is_caught() {
+    for (outcome, reason, expected) in [
+        ("ask", "asked", Answer::Ask("asked".into())),
+        ("deny", "denied", Answer::Deny("denied".into())),
+        (
+            "pass-on-failure",
+            "unchecked",
+            Answer::PassOnFailure("unchecked".into()),
+        ),
+    ] {
+        assert_eq!(
+            redelivery(Some(&stored(outcome, reason)), "d1", Some("/r"), "/r/sub"),
+            Redelivery::Replay(expected)
+        );
+    }
+}
+
+#[test]
+fn a_redelivery_accepting_another_input_project_directory_or_cwd_is_caught() {
+    let document = stored("deny", "denied");
+    for (digest, directory, cwd) in [
+        ("d2", Some("/r"), "/r/sub"),
+        ("d1", Some("/q"), "/r/sub"),
+        ("d1", None, "/r/sub"),
+        ("d1", Some("/r"), "/r"),
+    ] {
+        assert_eq!(
+            redelivery(Some(&document), digest, directory, cwd),
+            Redelivery::Clash,
+            "{digest} {directory:?} {cwd}"
+        );
+    }
+    let mut absent = document.clone();
+    absent["project_directory"] = Value::Null;
+    assert_eq!(
+        redelivery(Some(&absent), "d1", Some("/r"), "/r/sub"),
+        Redelivery::Clash
+    );
+    assert_eq!(
+        redelivery(Some(&absent), "d1", None, "/r/sub"),
+        Redelivery::Replay(Answer::Deny("denied".into()))
+    );
+}
+
+#[test]
+fn an_unreadable_recorded_answer_replayed_instead_of_clashing_is_caught() {
+    assert_eq!(
+        redelivery(Some(&stored("pass", "x")), "d1", Some("/r"), "/r/sub"),
+        Redelivery::Clash
+    );
+    let mut no_reason = stored("ask", "x");
+    no_reason.as_object_mut().unwrap().remove("reason");
+    assert_eq!(
+        redelivery(Some(&no_reason), "d1", Some("/r"), "/r/sub"),
+        Redelivery::Clash
+    );
+}
+
+#[test]
+fn a_call_with_no_recorded_answer_judged_as_a_replay_or_clash_is_caught() {
+    assert_eq!(
+        redelivery(None, "d1", Some("/r"), "/r/sub"),
+        Redelivery::NoRecord
+    );
 }

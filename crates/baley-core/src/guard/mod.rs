@@ -6,6 +6,7 @@ mod answer;
 mod event;
 pub mod reason;
 mod recording;
+mod redelivery;
 mod remembered;
 mod scan;
 mod settings;
@@ -20,6 +21,7 @@ pub use event::{
     input_digest, policy_recorded_payload, register_guard_events,
 };
 pub use recording::{AuditPrecondition, record_answer};
+pub use redelivery::{GUARD_VIEW, GuardProjector, Redelivery, guard_key, guard_spec, redelivery};
 pub use remembered::DenialParts;
 pub use scan::{GitVerb, git_verb};
 pub use settings::{GuardSettings, SettingsInput};
