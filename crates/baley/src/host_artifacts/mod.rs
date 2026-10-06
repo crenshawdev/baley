@@ -44,5 +44,6 @@
 
 pub mod executable;
 pub mod hook;
+pub mod placement;
 pub mod registration;
 pub mod stubs;
