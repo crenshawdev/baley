@@ -1,6 +1,8 @@
 //! The schema understood by this CLI. Only the per-session server's open
 //! runs the startup `quick_check`; every command-line open leaves it off.
+//! Only the guard's open bounds its storage waits.
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use baley_core::capture::{CaptureProjector, register_capture_events};
 use baley_core::catalog::{ModelCatalogProjector, register_model_events};
@@ -42,6 +44,25 @@ pub(crate) fn options() -> Options {
 pub(crate) fn server_options() -> Options {
     Options {
         startup_check: true,
+        ..options()
+    }
+}
+
+/// The registry of `options()` for the guard hook's open, with
+/// `storage_time`, the storage wait the guard's budget has left, as its
+/// guard storage time. The store then waits for nothing past it, answering
+/// `StoreError::Busy`, and answers views behind this binary's as
+/// `StoreError::NeedsRebuild` instead of rebuilding them. It is built from
+/// `options()` so the two never disagree on events, views or the view set
+/// version, and the startup `quick_check` stays off. Build 3 T10's guard
+/// hook is its caller.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Build 3 T10's guard hook is its first caller")
+)]
+pub(crate) fn guard_options(storage_time: Duration) -> Options {
+    Options {
+        guard_storage_time: Some(storage_time),
         ..options()
     }
 }
@@ -117,20 +138,123 @@ mod tests {
         }
     }
 
+    /// The names of the views the options declare, in order.
+    fn view_names(options: &Options) -> Vec<String> {
+        options
+            .projectors
+            .iter()
+            .map(|projector| projector.spec().name.clone())
+            .collect()
+    }
+
     // Catches a server open that declares other views or another view set
     // version than the command line, which would fence one or the other.
     #[test]
     fn the_server_variant_declares_a_different_view_set_from_options() {
-        let names = |options: &Options| -> Vec<String> {
-            options
-                .projectors
-                .iter()
-                .map(|projector| projector.spec().name.clone())
-                .collect()
-        };
         let (cli, server) = (options(), server_options());
         assert_eq!(server.view_set_version, cli.view_set_version);
-        assert_eq!(names(&server), names(&cli));
+        assert_eq!(view_names(&server), view_names(&cli));
+    }
+
+    /// A clock that always reads the same, so a guard store's storage time
+    /// never runs out here, and a pause that returns at once.
+    struct Fixed;
+
+    impl baley_store_sqlite::Timing for Fixed {
+        fn now(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+
+        fn pause(&self, _duration: Duration) {}
+    }
+
+    /// The guard's options with 1.5 s of storage time on the fixed clock.
+    fn guard() -> Options {
+        Options {
+            timing: std::sync::Arc::new(Fixed),
+            ..guard_options(Duration::from_millis(1_500))
+        }
+    }
+
+    fn seed_request() -> baley_store::RequestId {
+        baley_store::RequestId("00000000-0000-4000-8000-000000000001".into())
+    }
+
+    // Catches a guard open that declares other events, views or another
+    // view set version than the command line, which would fence one or the
+    // other.
+    #[test]
+    fn the_guard_variant_declares_a_different_view_set_from_options() {
+        use baley_core::capture::{CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION};
+
+        let (cli, guard) = (options(), guard_options(Duration::from_millis(1_500)));
+        assert_eq!(guard.view_set_version, cli.view_set_version);
+        assert_eq!(view_names(&guard), view_names(&cli));
+        assert!(
+            guard
+                .schema
+                .reads(CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION)
+        );
+    }
+
+    // Catches a guard open that runs the startup check, or loses the storage
+    // time it was given.
+    #[test]
+    fn the_guard_variant_runs_the_startup_check_or_drops_its_storage_time() {
+        let guard = guard_options(Duration::from_millis(1_500));
+        assert!(!guard.startup_check);
+        assert_eq!(guard.guard_storage_time, Some(Duration::from_millis(1_500)));
+    }
+
+    // Catches guard options that open a normal store, which rebuilds
+    // `user`'s views inline on the hook's path, or an answer that flips them.
+    #[test]
+    fn a_guard_open_rebuilds_user_views_left_at_view_set_5() {
+        use crate::models;
+        use baley_core::catalog::{HINT_VERSION, USER_PROJECT};
+        use baley_store::{ProjectId, StoreError};
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let old = store(&home, T0, view_set_5()).unwrap();
+        models::create_user(&old, T0).unwrap();
+        models::record_seed(&old, seed_request(), T0).unwrap();
+        drop(old);
+
+        let guarded = store(&home, T1, guard()).unwrap();
+        assert_eq!(
+            models::observe_hint_version(&guarded),
+            Err(StoreError::NeedsRebuild {
+                project: ProjectId(USER_PROJECT.into())
+            })
+        );
+        drop(guarded);
+        let old = store(&home, T1, view_set_5()).unwrap();
+        assert_eq!(models::observe_hint_version(&old), Ok(Some(HINT_VERSION)));
+        drop(old);
+        let current = store(&home, T1, options()).unwrap();
+        assert_eq!(
+            models::observe_hint_version(&current),
+            Ok(Some(HINT_VERSION))
+        );
+    }
+
+    // Catches guard options that refuse a new `user`, which has no views to
+    // rebuild, as needing a rebuild, so every guarded ask would be denied.
+    #[test]
+    fn a_new_user_under_guard_options_needs_a_rebuild() {
+        use crate::models;
+        use baley_core::catalog::HINT_VERSION;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let guarded = store(&home, T0, guard()).unwrap();
+        assert_eq!(models::create_user(&guarded, T0), Ok(true));
+        assert_eq!(models::record_seed(&guarded, seed_request(), T0), Ok(true));
+        assert_eq!(
+            models::observe_hint_version(&guarded),
+            Ok(Some(HINT_VERSION))
+        );
     }
 
     // Catches the command line running the startup check.
