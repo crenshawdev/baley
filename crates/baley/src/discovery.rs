@@ -17,7 +17,7 @@ pub struct Ancestor {
     pub path: PathBuf,
     /// Whether `baley.toml` is present or its presence cannot be determined.
     pub has_project_file: bool,
-    /// Whether the folder holds a `.git` entry of any kind.
+    /// Whether `.git` is present, of any kind, or its presence cannot be determined.
     pub has_git: bool,
 }
 
@@ -101,11 +101,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_not_found_is_absent_and_unusable_entries_still_bind() {
+    fn only_not_found_is_absent() {
         assert!(!entry_present::<()>(Err(io::ErrorKind::NotFound)));
-        for kind in ["regular file", "directory", "dangling link"] {
-            assert!(entry_present(Ok(kind)), "{kind}");
-        }
+        assert!(entry_present(Ok(())));
         for error in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
             assert!(entry_present::<()>(Err(error)), "{error:?}");
         }
@@ -118,6 +116,28 @@ mod tests {
         fs::create_dir(root.join(".git")).unwrap();
         fs::write(root.join(PROJECT_FILE), b"outer").unwrap();
         fs::create_dir_all(root.join("a/baley.toml")).unwrap();
+
+        assert_eq!(
+            discover(&[observe(&root.join("a")), observe(&root)]),
+            Discovery::Managed {
+                folder: root.join("a"),
+                root,
+            }
+        );
+    }
+
+    #[test]
+    fn a_dangling_project_link_does_not_fall_back_to_the_outer_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(
+            root.join(PROJECT_FILE),
+            b"[project]\nid = \"6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f\"\nname = \"outer\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("a")).unwrap();
+        std::os::unix::fs::symlink("missing.toml", root.join("a/baley.toml")).unwrap();
 
         assert_eq!(
             discover(&[observe(&root.join("a")), observe(&root)]),

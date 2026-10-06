@@ -309,6 +309,27 @@ mod tests {
     }
 
     #[test]
+    fn readers_refuse_a_dangling_global_link_instead_of_omitting_the_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = global_path(&Folders {
+            config: dir.path().into(),
+            home: dir.path().into(),
+        });
+        symlink("missing.toml", &path).unwrap();
+
+        for result in [read(&path), read_for_guard(&path)] {
+            let refusal = result.unwrap_err();
+            assert_eq!(
+                refusal.to_string(),
+                format!(
+                    "config-unavailable: cannot read {}: it is a link to a missing file",
+                    path.display()
+                )
+            );
+        }
+    }
+
+    #[test]
     fn a_guard_gather_reading_a_large_file_whole_is_caught() {
         let dir = tempfile::tempdir().unwrap();
         let large = dir.path().join("config.toml");
