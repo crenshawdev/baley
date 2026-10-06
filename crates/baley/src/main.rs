@@ -93,7 +93,7 @@ enum Command {
     },
 }
 
-fn main()->std::process::ExitCode{
+fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Serve => run_serve(),
