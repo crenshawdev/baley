@@ -46,6 +46,24 @@ fn guard_busy_timeout(deadline: Duration, now: Duration) -> Duration {
     deadline.saturating_sub(now)
 }
 
+/// `conn`, ready for its next statement. With a guard's `deadline`, its
+/// busy timeout is first set to the time left at this reading of `timing`,
+/// zero once spent, so the statement meeting a lock answers `Busy` rather
+/// than wait past it. SQLite starts its wait afresh for each statement, so
+/// a guard sets this before every one, never once for several. A normal
+/// store passes `None`, reads no clock and keeps the timeout it has.
+fn bounded<'c>(
+    conn: &'c Connection,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<&'c Connection, StoreError> {
+    if let Some(deadline) = deadline {
+        conn.busy_timeout(guard_busy_timeout(deadline, timing.now()))
+            .map_err(sql)?;
+    }
+    Ok(conn)
+}
+
 /// The page size every store is created with. It cannot change once the
 /// write-ahead log is on.
 const PAGE_SIZE: i64 = 8192;
@@ -196,8 +214,9 @@ impl SqliteStore {
     /// `Refusal::UnsafeHome`, naming each fault. It then creates the lock
     /// files and an empty `baley.db` with mode 0600 when missing.
     /// With `Options::guard_storage_time` set, open reads the timing once
-    /// first, the store's waits end that long after the reading, and both
-    /// connections open with the time left as their busy timeout. Creating
+    /// first, and the store's waits end that long after the reading. Every
+    /// statement open runs, the connections' own settings included, has the
+    /// time left when it starts as its busy timeout. Creating
     /// the schema and declaring views wait no longer either: when the time
     /// runs out, open answers `StoreError::Busy` rather than return a store
     /// left without them.
@@ -205,12 +224,7 @@ impl SqliteStore {
         let deadline = options
             .guard_storage_time
             .map(|time| guard_deadline(options.timing.now(), time));
-        // A normal open reads no clock for it.
-        let busy_timeout = || {
-            deadline.map_or(BUSY_TIMEOUT, |deadline| {
-                guard_busy_timeout(deadline, options.timing.now())
-            })
-        };
+        let timing = options.timing.as_ref();
         match checks::judge(&checks::gather(home)?) {
             Judgement::Safe => {}
             Judgement::Unsafe(faults) => {
@@ -246,13 +260,13 @@ impl SqliteStore {
                 .open(&path)
                 .map(drop),
         )?;
-        let writer = connect(&path, busy_timeout())?;
+        let writer = connect(&path, deadline, timing)?;
 
-        let existing = stored_epoch(&writer)?;
+        let existing = stored_epoch(&writer, deadline, timing)?;
         let schema_existed = existing.is_some();
         let epoch = match existing {
             Some(epoch) if epoch == EPOCH => {
-                let digest = writer
+                let digest = bounded(&writer, deadline, timing)?
                     .query_row(
                         "SELECT value FROM schema_meta WHERE key = 'schema_digest'",
                         [],
@@ -267,8 +281,8 @@ impl SqliteStore {
             }
             Some(epoch) => epoch,
             None => {
-                create(&writer, &queue, deadline, options.timing.as_ref(), at)?;
-                stored_epoch(&writer)?
+                create(&writer, &queue, deadline, timing, at)?;
+                stored_epoch(&writer, deadline, timing)?
                     .ok_or_else(|| StoreError::Unavailable("the schema was not created".into()))?
             }
         };
@@ -278,15 +292,15 @@ impl SqliteStore {
             )));
         }
         // Opened after creation, so it reads the file as created.
-        let reader = connect(&path, busy_timeout())?;
+        let reader = connect(&path, deadline, timing)?;
         if epoch == EPOCH {
-            check_file_settings(&writer)?;
+            check_file_settings(&writer, deadline, timing)?;
         }
         // Only a store this binary writes is checked, and a schema this open
         // created has nothing to check. It runs before the view declarations
         // so a damaged file is not written to.
         let health = if epoch == EPOCH && runs_quick_check(options.startup_check, schema_existed) {
-            judge_quick_check(quick_check(&writer))
+            judge_quick_check(quick_check(bounded(&writer, deadline, timing)?))
         } else {
             StartupHealth::NotChecked
         };
@@ -596,16 +610,22 @@ impl SqliteStore {
     }
 }
 
-/// A connection with the design's per-connection settings and the busy
-/// timeout given, `BUSY_TIMEOUT` but on a guard store. None of them writes
-/// to the database file.
-pub(crate) fn connect(path: &Path, busy_timeout: Duration) -> Result<Connection, StoreError> {
+/// A connection with the design's per-connection settings and a busy
+/// timeout of `BUSY_TIMEOUT`, or the time left before a guard's `deadline`
+/// as `bounded` sets it. None of them writes to the database file, but
+/// `synchronous` reads the schema, so it may wait.
+pub(crate) fn connect(
+    path: &Path,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<Connection, StoreError> {
     let conn = Connection::open(path).map_err(sql)?;
-    conn.busy_timeout(busy_timeout).map_err(sql)?;
-    conn.execute_batch(
-        "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
-    )
-    .map_err(sql)?;
+    conn.busy_timeout(BUSY_TIMEOUT).map_err(sql)?;
+    bounded(&conn, deadline, timing)?
+        .execute_batch(
+            "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
+        )
+        .map_err(sql)?;
     Ok(conn)
 }
 
@@ -625,9 +645,14 @@ pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
     Ok(conn)
 }
 
-/// The stored epoch, or `None` when there is no schema yet. Reads only.
-fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
-    let exists = conn
+/// The stored epoch, or `None` when there is no schema yet. Reads only,
+/// each statement `bounded` by a guard's `deadline`.
+fn stored_epoch(
+    conn: &Connection,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<Option<u32>, StoreError> {
+    let exists = bounded(conn, deadline, timing)?
         .query_row(
             "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_meta'",
             [],
@@ -639,13 +664,14 @@ fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
     if !exists {
         return Ok(None);
     }
-    conn.query_row(
-        "SELECT value FROM schema_meta WHERE key = 'epoch'",
-        [],
-        |row| row.get(0),
-    )
-    .map(Some)
-    .map_err(sql)
+    bounded(conn, deadline, timing)?
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = 'epoch'",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .map_err(sql)
 }
 
 fn schema_digest() -> String {
@@ -670,7 +696,7 @@ fn take_turn<'l>(
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
 /// With a guard's `deadline`, the queue is waited for as `take_turn` waits,
-/// and `conn` then runs under the time left as its busy timeout. A `Busy`
+/// and each statement up to `BEGIN IMMEDIATE` is `bounded` by it. A `Busy`
 /// answer leaves no schema.
 pub(crate) fn create(
     conn: &Connection,
@@ -680,18 +706,15 @@ pub(crate) fn create(
     at: &str,
 ) -> Result<(), StoreError> {
     let _turn = take_turn(queue, deadline, timing)?;
-    if let Some(deadline) = deadline {
-        conn.busy_timeout(guard_busy_timeout(deadline, timing.now()))
-            .map_err(sql)?;
-    }
-    if stored_epoch(conn)?.is_some() {
+    if stored_epoch(conn, deadline, timing)?.is_some() {
         return Ok(());
     }
     // The page size takes only before the first table and before the log
     // is switched on.
-    conn.execute_batch(&format!("PRAGMA page_size = {PAGE_SIZE};"))
+    bounded(conn, deadline, timing)?
+        .execute_batch(&format!("PRAGMA page_size = {PAGE_SIZE};"))
         .map_err(sql)?;
-    let mode: String = conn
+    let mode: String = bounded(conn, deadline, timing)?
         .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
         .map_err(sql)?;
     if !mode.eq_ignore_ascii_case("wal") {
@@ -699,9 +722,13 @@ pub(crate) fn create(
             "this filesystem refused the write-ahead log (journal mode {mode})"
         )));
     }
-    conn.execute_batch("BEGIN IMMEDIATE;").map_err(sql)?;
+    bounded(conn, deadline, timing)?
+        .execute_batch("BEGIN IMMEDIATE;")
+        .map_err(sql)?;
     let created = (|| {
-        if stored_epoch(conn)?.is_some() {
+        // The transaction holds the write lock, so nothing in it waits and
+        // no deadline reaches it.
+        if stored_epoch(conn, None, timing)?.is_some() {
             return Ok(());
         }
         conn.execute_batch(SCHEMA).map_err(sql)?;
@@ -722,9 +749,14 @@ pub(crate) fn create(
 }
 
 /// A store at this binary's epoch that is not in write-ahead-log mode with
-/// 8 KiB pages was not made by Baley, or was changed behind its back.
-fn check_file_settings(conn: &Connection) -> Result<(), StoreError> {
-    let mode: String = conn
+/// 8 KiB pages was not made by Baley, or was changed behind its back. Each
+/// statement is `bounded` by a guard's `deadline`.
+fn check_file_settings(
+    conn: &Connection,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<(), StoreError> {
+    let mode: String = bounded(conn, deadline, timing)?
         .query_row("PRAGMA journal_mode", [], |row| row.get(0))
         .map_err(sql)?;
     if !mode.eq_ignore_ascii_case("wal") {
@@ -732,7 +764,7 @@ fn check_file_settings(conn: &Connection) -> Result<(), StoreError> {
             "the store's journal mode is {mode}, not the write-ahead log"
         )));
     }
-    let page_size: i64 = conn
+    let page_size: i64 = bounded(conn, deadline, timing)?
         .query_row("PRAGMA page_size", [], |row| row.get(0))
         .map_err(sql)?;
     if page_size != PAGE_SIZE {
@@ -1468,6 +1500,53 @@ mod tests {
         let home = crate::checks::private_folder();
         let store = guard_on(home.path(), Scripted::still(), ms(1_500));
         assert_eq!(busy_timeouts(&store), (1_500, 1_500));
+    }
+
+    // Catches a guard open whose statements after the writer connects keep
+    // the busy timeout set at connect, so their waits add up past the
+    // deadline, or that leaves a timeout in place once the time is spent.
+    // A store a newer binary stamped declares no views, so nothing after
+    // open's own statements sets either connection's timeout.
+    #[test]
+    fn a_guard_opens_later_statements_keep_the_busy_timeout_from_connect() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        raw(home.path())
+            .execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])
+            .expect("stamp");
+        let timing = Scripted::still();
+        // The deadline's reading and the writer's connect, then every
+        // reading after is at the deadline.
+        timing.script(&[ms(0), ms(0), ms(1_500)]);
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing,
+                guard_storage_time: Some(ms(1_500)),
+                ..Options::default()
+            },
+        )
+        .expect("guard open");
+        assert_eq!(busy_timeouts(&store), (0, 0));
+    }
+
+    // Catches a guard's schema creation whose statements after its queue
+    // turn share one busy timeout, so each lock they meet restarts the wait.
+    #[test]
+    fn a_guard_schema_creation_keeps_the_busy_timeout_from_its_turn() {
+        let home = crate::checks::private_folder();
+        let conn = raw(home.path());
+        let queue = FileLock::open(&home.path().join("baley.db.writer")).expect("queue");
+        let timing = Scripted::stepping(ms(100));
+        create(&conn, &queue, Some(ms(1_500)), timing.as_ref(), AT).expect("create");
+        // Readings 100 ms apart: the turn's try, then one before each of
+        // the epoch query, the page size, the journal mode and `BEGIN
+        // IMMEDIATE`, which is the fifth at 500 ms.
+        let busy: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("busy timeout");
+        assert_eq!(busy, 1_000);
     }
 
     /// Runs `call` on its own thread while the test holds `held`, and gives
