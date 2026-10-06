@@ -752,7 +752,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `policy` | (project, checkout, host) | | The latest `policy.effective` per checkout and host, with its version |
 | `checkout` | (project, path) | path | Each checkout's latest `checkout.seen`, its root commit and remote URL, which checkout admission judges a fork against |
 | `guard` | (`user`, host, session, call id) | | The confirmed answer to one hook call, with its input digest, project directory and working directory, for a redelivery ([0010](0010-guard.md), GRD-R10) |
-| `guard_policy` | (`user`, session project root, target checkout root, host) | | The denials of the last complete policy for that key, never an allow, read when the settings are torn ([0010](0010-guard.md), GRD-R7) |
+| `guard_policy` | (`user`, session project root, target checkout root, host) | | The denials of the last complete policy recorded with an answer for that key, never an allow, read when the settings are torn ([0010](0010-guard.md), GRD-R7) |
 | `capture` | (project, recording sequence) | capture id | Each capture's kind, phase, size, time and short text, or a long text's body hash with its purge state |
 | `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
 | `claim_scope` | (project, scope token) | | The open claim holding each scope token, for the scope check |
