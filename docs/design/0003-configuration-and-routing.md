@@ -331,8 +331,9 @@ Called by the work order composer for every dispatch, never by a host.
 | top level | `escalate_on_failure`; any `both`-scoped setting |
 | `[roles.<role>]` | `model`, `effort` for the six roles |
 | `[host.<name>]` and `[host.<name>.roles.<role>]` | The same settings, applied only when that host is connected |
-| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]` | Settings owned by [0008](0008-review.md) and [0009](0009-risk.md) |
-| `[planning]`, `[debug]` | Settings owned by [0014](0014-support-families.md) |
+| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]` | Settings owned by [0005](0005-context-plans-and-acceptance.md), [0008](0008-review.md) and [0009](0009-risk.md) |
+| `[planning]` | Settings owned by [0005](0005-context-plans-and-acceptance.md) and [0014](0014-support-families.md) |
+| `[debug]` | Settings owned by [0014](0014-support-families.md) |
 
 ### The project file `baley.toml` (TOML)
 
@@ -724,6 +725,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.max_prompt_tokens` | integer, min 1 | 120000 | both | [0008](0008-review.md) | Bound on review prompt size |
 | `review.providers.<p>.tiers.<flagship,balanced,cheap>` | model name | absent | both | [0008](0008-review.md) | The model each tier maps to per provider; checked against the catalog (CFG-R14) |
 | `review.triggers.<plan,diff,risk_surface>.gate` | `off`, `advisory`, `deferred`, `blocking`, `adjudicated` | plan `advisory`, diff `off`, risk_surface `blocking` | both | [0008](0008-review.md) | How strictly each trigger's review holds work; the plan gate is also the plan checker's switch ([0005](0005-context-plans-and-acceptance.md), PLN-R16) |
+| `review.triggers.plan.recheck` | `full`, `diff` | `full` | both | [0005](0005-context-plans-and-acceptance.md) | The reading scope of round 2 for a plan check or plan review: `full` reads the whole revised plan; `diff` reads every addition, modification and deletion with before-and-after context. Both scopes check closure: every first-round blocker for the checker (PLN-R16), and every finding the owner ruled `fix` for a plan review (REV-R10). Both may report new defects. It does not control `diff` or `risk_surface` reviews. |
 | `review.triggers.<t>.tier` | `flagship`, `balanced`, `cheap` | `cheap` | both | [0008](0008-review.md) | Which provider tier reviews |
 | `review.triggers.<t>.effort` | `minimal`, `low`, `medium`, `high` | plan `low`, diff `minimal`, risk_surface `low` | both | [0008](0008-review.md) | The effort of a provider review |
 | `review.triggers.risk_surface.surfaces` | list of `auth`, `migrations`, `billing`, `concurrency`, `destructive`, `secrets`, `api_contract`, `untrusted_input` | absent | project | [0009](0009-risk.md) | Which risk surfaces the project declares |
