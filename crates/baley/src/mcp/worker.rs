@@ -37,6 +37,8 @@ struct State {
     queue: Queue<Job>,
     // The job the queue promoted that the worker has not picked up yet.
     start: Option<Job>,
+    // The finished decision keeps drain pending until its answer is sent.
+    answer_in_flight: bool,
 }
 
 struct Shared {
@@ -46,6 +48,10 @@ struct Shared {
 }
 
 impl State {
+    fn is_drained(&self) -> bool {
+        drain_complete(self.queue.is_drained(), self.answer_in_flight)
+    }
+
     /// Closes the queue and takes every decision that has not begun: the
     /// waiting ones, and the one the queue promoted that the worker has not
     /// picked up yet, whose slot is freed so the queue can drain.
@@ -57,6 +63,11 @@ impl State {
         }
         (waiting, unstarted)
     }
+}
+
+/// Closing or abandoning admission cannot make an unsent answer complete.
+fn drain_complete(queue_empty: bool, answer_in_flight: bool) -> bool {
+    queue_empty && !answer_in_flight
 }
 
 impl Shared {
@@ -85,11 +96,21 @@ pub struct Worker {
 impl Worker {
     /// Starts the worker thread.
     pub fn start() -> std::io::Result<Self> {
+        Self::start_with_sender(|reply, answer| {
+            // A caller that stopped waiting no longer wants the answer.
+            let _ = reply.send(answer);
+        })
+    }
+
+    fn start_with_sender(
+        send: impl FnMut(oneshot::Sender<Answer>, Answer) + Send + 'static,
+    ) -> std::io::Result<Self> {
         let (drained, _) = watch::channel(true);
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 queue: Queue::new(),
                 start: None,
+                answer_in_flight: false,
             }),
             wake: Condvar::new(),
             drained,
@@ -97,7 +118,7 @@ impl Worker {
         let thread = Arc::clone(&shared);
         std::thread::Builder::new()
             .name("baley-decisions".into())
-            .spawn(move || work(&thread))?;
+            .spawn(move || work(&thread, send))?;
         Ok(Self { shared })
     }
 
@@ -143,7 +164,7 @@ impl Worker {
     pub fn close(&self) {
         let mut state = self.shared.lock();
         state.queue.close();
-        self.shared.drained.send_replace(state.queue.is_drained());
+        self.shared.drained.send_replace(state.is_drained());
         self.shared.wake.notify_one();
     }
 
@@ -155,7 +176,7 @@ impl Worker {
         let (waiting, unstarted) = {
             let mut state = self.shared.lock();
             let (waiting, unstarted) = state.abandon();
-            self.shared.drained.send_replace(state.queue.is_drained());
+            self.shared.drained.send_replace(state.is_drained());
             self.shared.wake.notify_one();
             (waiting, unstarted)
         };
@@ -176,7 +197,7 @@ impl Drop for Worker {
     }
 }
 
-fn work(shared: &Shared) {
+fn work(shared: &Shared, mut send: impl FnMut(oneshot::Sender<Answer>, Answer)) {
     loop {
         let job = {
             let mut state = shared.lock();
@@ -184,7 +205,7 @@ fn work(shared: &Shared) {
                 if let Some(job) = state.start.take() {
                     break job;
                 }
-                if state.queue.is_closed() && state.queue.is_drained() {
+                if state.queue.is_closed() && state.is_drained() {
                     return;
                 }
                 state = shared
@@ -206,13 +227,13 @@ fn work(shared: &Shared) {
         // again the moment it is answered finds the room back.
         {
             let mut state = shared.lock();
+            state.answer_in_flight = true;
             state.start = state.queue.finish();
         }
-        // A caller that stopped waiting dropped its receiver. The decision has
-        // run, so the answer is simply not wanted.
-        let _ = reply.send(answer);
-        let state = shared.lock();
-        shared.drained.send_replace(state.queue.is_drained());
+        send(reply, answer);
+        let mut state = shared.lock();
+        state.answer_in_flight = false;
+        shared.drained.send_replace(state.is_drained());
     }
 }
 
@@ -507,6 +528,7 @@ mod tests {
         let mut state = State {
             queue: Queue::new(),
             start: None,
+            answer_in_flight: false,
         };
         let Ok(Placed::Started(first)) = state.queue.admit(job(0), 10) else {
             panic!("an idle queue starts the job");
@@ -519,6 +541,65 @@ mod tests {
         assert!(state.start.is_none());
         assert!(state.queue.is_closed());
         assert!(state.queue.is_drained());
+    }
+
+    #[test]
+    fn an_empty_queue_drains_with_an_unsent_answer_after_close_or_abandon() {
+        for stop in [Queue::close, |queue: &mut Queue<()>| {
+            queue.abandon();
+        }] {
+            let mut queue = Queue::new();
+            queue.admit((), 1).unwrap();
+            stop(&mut queue);
+            for answer_in_flight in [false, true] {
+                assert!(!drain_complete(queue.is_drained(), answer_in_flight));
+            }
+            queue.finish();
+            assert!(!drain_complete(queue.is_drained(), true));
+            assert!(drain_complete(queue.is_drained(), false));
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_an_empty_queue_announces_drain_before_its_answer_is_sent() {
+        let (unsent_tx, unsent) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let worker = Worker::start_with_sender(move |reply, answer| {
+            unsent_tx.send(()).unwrap();
+            next(&release_rx);
+            reply.send(answer).unwrap();
+        })
+        .unwrap();
+        let mut reply = receiver(put(&worker, quick(7)));
+        let mut drained = worker.drained();
+        next(&unsent);
+        assert!(worker.shared.lock().queue.is_drained());
+        worker.close();
+        assert!(matches!(
+            reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(
+            !*drained.borrow(),
+            "close published drain before sending the answer"
+        );
+        worker.abandon();
+        assert!(
+            !*drained.borrow(),
+            "abandon published drain before sending the answer"
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            drained.wait_for(|drained| *drained),
+        )
+        .await
+        .expect("the worker did not drain after sending the answer")
+        .unwrap();
+        assert_eq!(
+            label_of(reply.try_recv().expect("drain must follow the answer")),
+            7
+        );
     }
 
     #[tokio::test]
