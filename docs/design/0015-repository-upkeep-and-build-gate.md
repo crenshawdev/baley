@@ -116,7 +116,7 @@ The retained historical passages are:
 | Heritage | [PRD:166](prd/baley.md#L166) | Keep the explanation of the working loop's origin |
 | Story design context | [ADR 0017:14](../adr/0017-stories-and-sprints.md#L14) | Keep the accepted decision's body |
 | Review design context | [ADR 0019:14](../adr/0019-reviews-adjudicated-and-ruled.md#L14) | Keep the accepted decision's body |
-| README lineage | [README:45](../../README.md#L45) | Keep the name, repository link and attribution before the `baley-start` tag |
+| README lineage | [README lineage](../../README.md#lineage) | Keep the name, repository link and attribution before the `baley-start` tag |
 
 Outside this document, a case-insensitive tracked-content search for `cadence` finds eight occurrences on six lines in four files: the five passages in `docs` above and three occurrences on the README lineage line. `crates` and `.github` contain zero matches; `scripts` is absent. The old `cad-` instruction prefix has zero matches outside this document. This document's explanatory mentions and registration boundary are also permitted, without establishing aliases. No active identifier is exempted as history.
 
@@ -197,22 +197,22 @@ UPK-R10 and UPK-Q3 require the measurement specified in section 5, full per-file
 | Wiki | Disabled | GitHub repository settings |
 | Product status | Designed and being built, not ready to use; no release is implied by accepting a design | [README:5](../../README.md#L5) |
 | Host scope | Claude Code | [README:23](../../README.md#L23), ADR 0033 |
-| Contributions | Issues welcome; pull requests by invitation | [README:37](../../README.md#L37) |
-| CI description | Names the checks actually required on `main` | [README:33](../../README.md#L33) |
+| Contributions | Issues welcome; pull requests by invitation | [README contribution policy](../../README.md#issues-and-contributions) |
+| CI description | Names the checks actually required on `main` | [README required checks](../../README.md#following-the-work) |
 
 ### Labels
 
-The all-state GitHub issue collection, including pull requests, gives these assignments on 2026-10-06. Open and closed counts below exclude pull requests, which have their own column. There are thirteen labels.
+The all-state GitHub issue collection, including pull requests, gives these assignments on 2026-10-06. Open and closed counts below exclude pull requests, which have their own column. Six labels remain.
 
 | Label | Open issues | Closed issues | Pull requests | Use |
 |---|---:|---:|---:|---|
-| `design` | 2 | 11 | 10 | Active |
+| `design` | 1 | 12 | 10 | Active |
 | `bug` | 7 | 2 | 0 | Active |
 | `question` | 0 | 0 | 0 | Active; the [question form:3](../../.github/ISSUE_TEMPLATE/question.yml#L3) applies it |
 | `dependencies` | 0 | 0 | 6 | Active |
 | `rust` | 1 | 0 | 6 | Active |
 | `enhancement` | 0 | 53 | 0 | Keep these assignments; not used for new work |
-| `accessibility`, `documentation`, `duplicate`, `good first issue`, `help wanted`, `invalid`, `wontfix` | 0 each | 0 each | 0 each | Remove only while unused |
+| `accessibility`, `documentation`, `duplicate`, `good first issue`, `help wanted`, `invalid`, `wontfix` | 0 each | 0 each | 0 each | Removed; none was assigned |
 
 The 53 `enhancement` assignments are closed issues 73 through 126, excluding 93. Removal covers seven labels and relabels no issue. UPK-R8 requires a fresh inventory of assignments before deletion, including closed issues and pull requests.
 
@@ -242,16 +242,17 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | UPK-R2 | Not built | The CLI has no installer ([main.rs:23-94](../../crates/baley/src/main.rs#L23)). [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) settles delivery and the binary's ownership of wiring; [Build 3 T14 to T17](../roadmap.md#build-3-hosts) implement it. T15 must establish artifact ownership before replacing a registration |
 | UPK-R3 | Built | The definitions in section 6 remain; services are parked at [inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1) |
 | UPK-R4 | Built | The six retained passages and unnamed benchmark material are cited in section 6 |
-| UPK-R5, UPK-Q2 | Not built | [test.yml:15-119](../../.github/workflows/test.yml#L15) defines three jobs and no `fmt`; applied rules require only those three contexts |
-| UPK-R6 | Not built | Exact toolchain at [rust-toolchain.toml:11](../../rust-toolchain.toml#L11); [test.yml](../../.github/workflows/test.yml) has no format job that installs its `rustfmt` component and runs the check |
-| UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#how-it-works), [required checks](../../README.md#following-the-work), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary and its unbuilt removal](../../README.md#api-keys-and-outside-review-risks). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
-| UPK-R8 | Not built | Section 9's inventory has thirteen labels; [#50](https://github.com/crenshawdev/baley/issues/50) owns removal of the seven unused labels, preserving `enhancement` on its 53 closed issues without using it for new work |
-| UPK-R9 | Not built | [bug.yml:1-25](../../.github/ISSUE_TEMPLATE/bug.yml#L1) has no impact field |
+| UPK-R5 | Built | [test.yml:121-140](../../.github/workflows/test.yml#L121) runs `fmt` beside the three other jobs, and the applied rules require all four from one producer with strict checks, as the note below records |
+| UPK-R6 | Built | [test.yml:127-140](../../.github/workflows/test.yml#L127) reads the exact channel from [rust-toolchain.toml:11](../../rust-toolchain.toml#L11), installs and selects it, explicitly adds its `rustfmt` component and runs `cargo fmt --all --check` |
+| UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#how-it-works), [four required checks](../../README.md#following-the-work), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary and its unbuilt removal](../../README.md#api-keys-and-outside-review-risks). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
+| UPK-R8 | Built | Section 9's six labels remain; the seven no issue or pull request used are removed, and `enhancement` keeps its 53 closed issues without being used for new work |
+| UPK-R9 | Built | [bug.yml:12-21](../../.github/ISSUE_TEMPLATE/bug.yml#L12) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [5-11](../../.github/ISSUE_TEMPLATE/bug.yml#L5) and [22-35](../../.github/ISSUE_TEMPLATE/bug.yml#L22) |
 | UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
-| UPK-R11 | Partly built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets eight build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) sets six test threads; [test.yml:60,89](../../.github/workflows/test.yml#L60) omits explicit build and test limits. [#49](https://github.com/crenshawdev/baley/issues/49) owns the six-job build default and the explicit nextest and clippy limits |
+| UPK-R11 | Built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets six build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) keeps six test threads; nextest at [test.yml:60](../../.github/workflows/test.yml#L60) explicitly sets `--build-jobs 6 --test-threads 6`, and clippy at [test.yml:89](../../.github/workflows/test.yml#L89) sets `-j 6` |
 | UPK-Q1 | Built | Section 6 classifies every retained match; no active source uses an old name |
+| UPK-Q2 | Built | The check-only command at [test.yml:140](../../.github/workflows/test.yml#L140) failed on a disposable misformatted commit and passed on its correction ([#210](https://github.com/crenshawdev/baley/pull/210), closed unmerged), a documentation-only pull request produces it, and the applied rules require its exact context |
 
-The applied `main` rules, read on 2026-10-06, come from ruleset `23995653`. They require `cargo-test`, `clippy` and `cargo-deny`, each from integration `15368`, with `strict_required_status_checks_policy: true` and `do_not_enforce_on_create: false`. The endpoint also reports deletion and non-fast-forward protection, required signatures, and a pull-request rule with resolved review threads, dismissed stale approvals, zero required approving reviews, and merge or squash. It does not establish bypass configuration.
+The applied `main` rules, read on 2026-10-06, come from ruleset `23995653`. They require `cargo-test`, `clippy`, `cargo-deny` and `fmt`, each from integration `15368`, with `strict_required_status_checks_policy: true` and `do_not_enforce_on_create: false`. The endpoint also reports deletion and non-fast-forward protection, required signatures, and a pull-request rule with resolved review threads, dismissed stale approvals, zero required approving reviews, and merge or squash. Its bypass list is empty.
 
 The workflow pins nextest 0.9.144 at [test.yml:55](../../.github/workflows/test.yml#L55) and cargo-deny 0.20.2 at [test.yml:115](../../.github/workflows/test.yml#L115).
 

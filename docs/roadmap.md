@@ -1,10 +1,10 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `7ceab752`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its implementation belongs to #49, #50 and #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T14 to T17 are planned, no longer held for a decision. Removal of the built key reader, `baley exec` and HTTPS model lister is unassigned; John Crenshaw must assign its build. Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `1009030a`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T14 to T17 are planned, no longer held for a decision. Removal of the built key reader, `baley exec` and HTTPS model lister is unassigned; John Crenshaw must assign its build. Each build pull request updates this roadmap.
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190), [#194](https://github.com/crenshawdev/baley/issues/194), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201) and [#203](https://github.com/crenshawdev/baley/issues/203), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201) and [#203](https://github.com/crenshawdev/baley/issues/203), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -17,7 +17,7 @@ flowchart TB
     B7["Build 7: Next action and progress<br/>#28"]
     B8["Build 8: Search, why and support work<br/>#29"]
     B9["Build 9: Removal<br/>#30"]
-    OTHER["10 other open issues:<br/>upkeep, docs, bugs"]
+    OTHER["8 other open issues:<br/>upkeep, docs, bugs"]
     R1["Release design<br/>#14"]
     R2["Live acceptance run on Claude Code"]
     R3["Publish and install"]
@@ -37,7 +37,7 @@ flowchart TB
     class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Once #47 closes with design 0015, 10 other issues block the release design; the six Build 3 findings left once T10 closes #194 are listed below but have no GitHub dependency link to it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the six open Build 3 findings are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -337,8 +337,6 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#44](https://github.com/crenshawdev/baley/issues/44) | Start the architecture overview | Evidence | None |
-| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI; set six-job build and test limits | Encyclopedists | None |
-| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | None |
 | [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | None |
 
 ### Bugs
@@ -365,12 +363,12 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 
 ## Milestones
 
-Counts from GitHub on 2026-10-06, with #194 counted as closed when Build 3 T10 lands. Evidence therefore shows 33 closed and 14 open issues.
+Counts from GitHub on 2026-10-06, after #49 and #50 closed. Evidence shows 33 closed and 14 open issues, and Encyclopedists six closed and one open.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
 | [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 33 | 14 | Builds 3 to 9, bug #40, #44 and findings #184, #186, #190, #200 and #201 | Open |
-| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 4 | 3 | #49, #50, #54 | Open |
+| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 6 | 1 | #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
 | [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
 | [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its stories, revise a truth or a story, keeping every earlier version on record. | 1 | 0 | None | Closed |
