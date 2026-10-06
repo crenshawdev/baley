@@ -10,23 +10,20 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
                 domain = component "Domain areas" "The rules of each process area: planning, execution, verification, review, risk, landing and the rest."
                 composer = component "Work order composer" "Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the record."
                 policy = component "Policy" "Reads the global and project settings, resolves the values in effect and records which applied."
-                keys = component "Keys" "Reads provider API keys from keys.env for one command or one detection; never writes the file."
-                catalog = component "Model catalog" "The models each host and provider offers, seeded from the binary and refreshed by detection."
+                catalog = component "Model catalog" "The models each host and provider offers, seeded from the binary, changed by the owner and refreshed from imported lists."
                 ports = component "Ports and adapters" "Storage, git and test runner, forge and host adapters. The core sees only these ports."
             }
             ledger = container "Ledger" "One append-only, hash-chained record per user, outside any checkout." "SQLite" "Database"
             settings = container "Settings" "One global file and one file per project." "TOML" "File"
-            keysFile = container "Keys file" "keys.env in Baley's config folder: one NAME=value line per key, written by the owner, read only by Baley." "Text" "File"
         }
 
         host = softwareSystem "Host" "Claude Code: the owner's session, which relays Baley's work orders and adjudicates. The session's workers are its subagents, and they run inside Claude Code's sandbox." "External"
         repo = softwareSystem "Repository" "The project's git checkout." "External"
         forge = softwareSystem "Forge" "GitHub: chain anchors, pull requests, issues." "External"
-        reviewers = softwareSystem "Outside reviewers" "Model providers such as OpenAI, Gemini and DeepSeek." "External"
+        reviewers = softwareSystem "Outside reviewers" "OpenAI and DeepSeek, reached by the session through their APIs." "External"
 
         owner -> host "Works in"
         owner -> hostInterface "Uses the command line"
-        owner -> keysFile "Writes provider keys by hand"
         host -> hostInterface "Work orders, results, questions" "MCP over stdio"
         host -> hostInterface "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
         # Explicit, so the context and container views show the hook beside
@@ -34,7 +31,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         host -> baley "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
         host -> binary "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
         host -> repo "Workers edit source and commit"
-        host -> reviewers "Outside review calls, with prompts built by Baley"
+        host -> reviewers "Review and model-list API calls with the owner's environment keys"
         hostInterface -> hardin "Asks what may happen next"
         hardin -> domain "Applies the area's rules"
         domain -> composer "Requests work orders"
@@ -48,10 +45,6 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         policy -> ports "Records the effective policy and each route"
         hostInterface -> policy "Settings commands"
         hostInterface -> catalog "Model commands"
-        hostInterface -> keys "Injects a key into one command"
-        keys -> keysFile "Reads"
-        catalog -> keys "Key for detection"
-        catalog -> reviewers "Lists models"
         catalog -> ports "Records seeds, owner changes and detections"
         domain -> ports "Records and acts through"
         ports -> ledger "Appends events, reads views"
@@ -76,7 +69,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         }
 
         component binary "configuration" {
-            include hostInterface composer policy keys catalog ports settings keysFile ledger reviewers owner
+            include hostInterface composer policy catalog ports settings ledger reviewers owner host
             autolayout lr
         }
 

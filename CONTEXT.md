@@ -60,14 +60,12 @@ Two notes on history:
 | Route | The model and rung resolved for one role and one dispatch, with the settings that decided them ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model choice, routing table |
 | Model catalog | The model names Baley accepts, per host and per provider, with the source each name came from ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model list, registry |
 | Host alias | A short model name a host resolves itself, such as `opus` in Claude Code ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | nickname, shorthand |
-| Provider | An outside model vendor reached by API key or its own command-line login: OpenAI and DeepSeek are reached by key, and Anthropic only through the Claude Code login ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | vendor, backend |
-| Detection | Asking a provider's list endpoint, with the owner's key, which model names that key can use ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | discovery, probing |
+| Provider | An outside model vendor reached by the session through its API: OpenAI or DeepSeek. Anthropic is reached through the Claude Code login, in the host catalog ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | vendor, backend |
+| Detection | Parsing, classifying, tagging and recording a provider model list fetched by the session or owner; Baley never fetches it ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | discovery, probing |
 | Hint table | A table compiled into Baley that tags known model names with a tier and whether they accept high effort ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model database |
 | Tier | A model class, `flagship`, `balanced` or `cheap`, mapped to a model name per provider ([0003](docs/design/0003-configuration-and-routing.md#2-terms), [0008](docs/design/0008-review.md#2-terms)). | size, rank, rung (a rung is effort) |
-| Config folder | Baley's own folder under the crenshawdev vendor folder, holding the global file and the keys file ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | home directory, dotfolder |
-| Keys file | `keys.env` in the config folder: one `NAME=value` line per provider API key, written by the owner and only read by Baley ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | secrets file, vault, keychain |
-| Key name | The name on the left of a line in the keys file, such as `OPENAI_API_KEY` ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | environment variable |
-| Keys | The part of Baley that reads a key from the keys file for one use ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | secret store, key manager |
+| Config folder | Baley's own folder under the crenshawdev vendor folder, holding the global settings file and no credentials ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | home directory, dotfolder |
+| Key name | The environment variable name a work order tells the session to use, such as `OPENAI_API_KEY`; Baley never looks up its value ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | key value, credential |
 
 ## Scope and the roadmap
 
