@@ -5,6 +5,7 @@ use crate::checks::{self, Judgement};
 use crate::health::{StartupHealth, judge_quick_check, runs_quick_check};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::num::NonZeroU32;
 use std::os::unix::fs::OpenOptionsExt;
@@ -20,12 +21,48 @@ use baley_store::{
 };
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
-use crate::queue::{FileLock, Monotonic, Timing, Turn, pause_for};
+use crate::queue::{FileLock, Monotonic, Taken, Timing, Turn, acquire, pause_for};
 use crate::schema::{EPOCH, SCHEMA};
 use crate::view::ViewSet;
 
 /// How long a store's connections wait on a lock held by another process.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
+
+/// The longest a guard store waits in all, for its locks, its connections
+/// and SQLite's busy handler together. A guard open's storage time is cut
+/// to it, and the guard's budget gives storage no more.
+pub const GUARD_STORAGE_CAP: Duration = Duration::from_millis(2000);
+
+/// The reading after which a guard store opened at reading `now` with
+/// storage time `time` waits for nothing: never more than the cap later.
+fn guard_deadline(now: Duration, time: Duration) -> Duration {
+    now + time.min(GUARD_STORAGE_CAP)
+}
+
+/// The busy timeout a guard store's connection runs its statements under
+/// at reading `now`: the storage time left before `deadline`, zero once it
+/// is spent, so SQLite waits no longer than the store would.
+fn guard_busy_timeout(deadline: Duration, now: Duration) -> Duration {
+    deadline.saturating_sub(now)
+}
+
+/// `conn`, ready for its next statement. With a guard's `deadline`, its
+/// busy timeout is first set to the time left at this reading of `timing`,
+/// zero once spent, so the statement meeting a lock answers `Busy` rather
+/// than wait past it. SQLite starts its wait afresh for each statement, so
+/// a guard sets this before every one, never once for several. A normal
+/// store passes `None`, reads no clock and keeps the timeout it has.
+fn bounded<'c>(
+    conn: &'c Connection,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<&'c Connection, StoreError> {
+    if let Some(deadline) = deadline {
+        conn.busy_timeout(guard_busy_timeout(deadline, timing.now()))
+            .map_err(sql)?;
+    }
+    Ok(conn)
+}
 
 /// The page size every store is created with. It cannot change once the
 /// write-ahead log is on.
@@ -56,11 +93,19 @@ pub struct Options {
     /// on an existing schema, and a failure fences every write while reads go
     /// on. Command-line and guard opens leave it off.
     pub startup_check: bool,
+    /// Set only by the guard's open: the storage time its call may still
+    /// spend waiting, cut to `GUARD_STORAGE_CAP`. Open reads `timing` once,
+    /// and every later wait for the writer queue, the maintenance lock or a
+    /// connection ends that long after, answering `StoreError::Busy`. Each
+    /// connection's busy timeout is set to the time left before its
+    /// statements run. `None` waits as long as it takes, with SQLite's busy
+    /// timeout at 5,000 ms.
+    pub guard_storage_time: Option<Duration>,
 }
 
 impl Default for Options {
     /// No domain projectors, store view set version 2, a schema that reads none of the
-    /// core's types, and the monotonic clock.
+    /// core's types, the monotonic clock, and no guard storage time.
     fn default() -> Self {
         Self {
             trace_cap: 10_000,
@@ -70,6 +115,7 @@ impl Default for Options {
             timing: Arc::new(Monotonic),
             queue_wait: None,
             startup_check: false,
+            guard_storage_time: None,
         }
     }
 }
@@ -86,6 +132,7 @@ impl fmt::Debug for Options {
             .field("projectors", &views)
             .field("view_set_version", &self.view_set_version)
             .field("startup_check", &self.startup_check)
+            .field("guard_storage_time", &self.guard_storage_time)
             .finish_non_exhaustive()
     }
 }
@@ -123,6 +170,9 @@ pub struct SqliteStore {
     /// Held for a whole rebuild or view verification.
     maintenance_lock: FileLock,
     timing: Arc<dyn Timing>,
+    /// The reading of `timing` after which a guard store waits for nothing.
+    /// `None` on a normal store, which waits as long as it takes.
+    deadline: Option<Duration>,
     queue_wait: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
     trace_cap: u64,
     views: ViewSet,
@@ -163,7 +213,18 @@ impl SqliteStore {
     /// beyond 0700 for the home or 0600 for a file. It refuses with
     /// `Refusal::UnsafeHome`, naming each fault. It then creates the lock
     /// files and an empty `baley.db` with mode 0600 when missing.
+    /// With `Options::guard_storage_time` set, open reads the timing once
+    /// first, and the store's waits end that long after the reading. Every
+    /// statement open runs, the connections' own settings included, has the
+    /// time left when it starts as its busy timeout. Creating
+    /// the schema and declaring views wait no longer either: when the time
+    /// runs out, open answers `StoreError::Busy` rather than return a store
+    /// left without them.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
+        let deadline = options
+            .guard_storage_time
+            .map(|time| guard_deadline(options.timing.now(), time));
+        let timing = options.timing.as_ref();
         match checks::judge(&checks::gather(home)?) {
             Judgement::Safe => {}
             Judgement::Unsafe(faults) => {
@@ -199,13 +260,13 @@ impl SqliteStore {
                 .open(&path)
                 .map(drop),
         )?;
-        let writer = connect(&path)?;
+        let writer = connect(&path, deadline, timing)?;
 
-        let existing = stored_epoch(&writer)?;
+        let existing = stored_epoch(&writer, deadline, timing)?;
         let schema_existed = existing.is_some();
         let epoch = match existing {
             Some(epoch) if epoch == EPOCH => {
-                let digest = writer
+                let digest = bounded(&writer, deadline, timing)?
                     .query_row(
                         "SELECT value FROM schema_meta WHERE key = 'schema_digest'",
                         [],
@@ -220,8 +281,8 @@ impl SqliteStore {
             }
             Some(epoch) => epoch,
             None => {
-                create(&writer, &queue, at)?;
-                stored_epoch(&writer)?
+                create(&writer, &queue, deadline, timing, at)?;
+                stored_epoch(&writer, deadline, timing)?
                     .ok_or_else(|| StoreError::Unavailable("the schema was not created".into()))?
             }
         };
@@ -231,15 +292,15 @@ impl SqliteStore {
             )));
         }
         // Opened after creation, so it reads the file as created.
-        let reader = connect(&path)?;
+        let reader = connect(&path, deadline, timing)?;
         if epoch == EPOCH {
-            check_file_settings(&writer)?;
+            check_file_settings(&writer, deadline, timing)?;
         }
         // Only a store this binary writes is checked, and a schema this open
         // created has nothing to check. It runs before the view declarations
         // so a damaged file is not written to.
         let health = if epoch == EPOCH && runs_quick_check(options.startup_check, schema_existed) {
-            judge_quick_check(quick_check(&writer))
+            judge_quick_check(quick_check(bounded(&writer, deadline, timing)?))
         } else {
             StartupHealth::NotChecked
         };
@@ -249,6 +310,7 @@ impl SqliteStore {
             queue,
             maintenance_lock,
             timing: options.timing,
+            deadline,
             queue_wait: options.queue_wait,
             trace_cap: options.trace_cap,
             views,
@@ -272,6 +334,12 @@ impl SqliteStore {
             }
         }
         Ok(store)
+    }
+
+    /// Whether the store was opened with a guard storage time, so it waits
+    /// for nothing past its deadline and rebuilds no views inline.
+    pub(crate) fn bounded(&self) -> bool {
+        self.deadline.is_some()
     }
 
     /// Whether a failed startup `quick_check` fences every write.
@@ -346,9 +414,43 @@ impl SqliteStore {
     }
 
     /// Waits for this thread's turn at a rebuild or view verification, in
-    /// this process and then across processes.
+    /// this process and then across processes, on a guard store no later
+    /// than its deadline.
     pub(crate) fn hold_maintenance(&self) -> Result<Turn<'_>, StoreError> {
-        self.maintenance_lock.wait().map_err(io)
+        self.turn(&self.maintenance_lock)
+    }
+
+    /// A turn of `lock`, taken as `take_turn` takes it for this store.
+    fn turn<'s>(&'s self, lock: &'s FileLock) -> Result<Turn<'s>, StoreError> {
+        take_turn(lock, self.deadline, self.timing())
+    }
+
+    /// One of the store's two connections, taken as `turn` takes a lock. On
+    /// a guard store its busy timeout is then set to the time left, so its
+    /// statements wait in SQLite no longer than the store may. A guard whose
+    /// time ran out while it took the connection answers `Busy` and lets go
+    /// of it, so nothing begins past the deadline.
+    fn connection<'s>(
+        &'s self,
+        conn: &'s Mutex<Connection>,
+    ) -> Result<MutexGuard<'s, Connection>, StoreError> {
+        let Ok(taken) = acquire(self.deadline, self.timing(), || {
+            Ok::<_, Infallible>(try_lock(conn))
+        });
+        match taken {
+            Taken::Held(conn) => {
+                if let Some(deadline) = self.deadline {
+                    let left = guard_busy_timeout(deadline, self.timing.now());
+                    if left.is_zero() {
+                        return Err(StoreError::Busy);
+                    }
+                    conn.busy_timeout(left).map_err(sql)?;
+                }
+                Ok(conn)
+            }
+            Taken::Block => Ok(lock(conn)),
+            Taken::Busy => Err(StoreError::Busy),
+        }
     }
 
     /// Runs `action` each time a turn of this store's writer queue has
@@ -405,7 +507,7 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
     ) -> Result<T, StoreError> {
-        let conn = lock(&self.reader);
+        let conn = self.connection(&self.reader)?;
         f(&conn).map_err(sql)
     }
 
@@ -415,7 +517,7 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
-        let conn = lock(&self.reader);
+        let conn = self.connection(&self.reader)?;
         // Dropped unfinished, which ends the read; there is nothing to keep.
         let tx = conn.unchecked_transaction().map_err(sql)?;
         f(&tx)
@@ -425,13 +527,15 @@ impl SqliteStore {
     /// `BEGIN IMMEDIATE`, then the epoch, then `f`, then commit. Anything
     /// that fails, or panics, rolls back. `synchronous=FULL` makes the
     /// commit survive power loss (EVD-R20); that rests on SQLite's
-    /// documented behaviour and is not tested.
+    /// documented behaviour and is not tested. A guard store past its
+    /// deadline answers `Busy` with nothing written, but once `BEGIN
+    /// IMMEDIATE` succeeds no deadline interrupts the transaction.
     pub(crate) fn write<T>(
         &self,
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         let waiting = self.queue_wait.as_ref().map(|_| self.timing.now());
-        let _turn = self.queue.wait().map_err(io)?;
+        let _turn = self.turn(&self.queue)?;
         if let (Some(observer), Some(waiting)) = (&self.queue_wait, waiting) {
             observer(self.timing.now().saturating_sub(waiting));
         }
@@ -449,7 +553,7 @@ impl SqliteStore {
         f: impl FnOnce(&rusqlite::Transaction<'_>, Duration) -> Result<T, StoreError>,
         after: impl FnOnce(T) -> Result<U, StoreError>,
     ) -> Result<U, StoreError> {
-        let turn = self.queue.wait().map_err(io)?;
+        let turn = self.turn(&self.queue)?;
         let acquired = self.timing.now();
         let result = self.transaction(|tx| f(tx, acquired)).and_then(after);
         drop(turn);
@@ -466,7 +570,7 @@ impl SqliteStore {
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.check_fence()?;
-        let mut conn = lock(&self.writer);
+        let mut conn = self.connection(&self.writer)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
@@ -496,13 +600,7 @@ impl SqliteStore {
     /// or `None` when both are in use. It never waits. A poisoned mutex is
     /// usable, as `lock` treats it.
     pub(crate) fn try_connection(&self) -> Option<MutexGuard<'_, Connection>> {
-        [&self.writer, &self.reader]
-            .into_iter()
-            .find_map(|conn| match conn.try_lock() {
-                Ok(guard) => Some(guard),
-                Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-                Err(TryLockError::WouldBlock) => None,
-            })
+        [&self.writer, &self.reader].into_iter().find_map(try_lock)
     }
 
     /// Holds the writer queue and write connection for maintenance outside a transaction.
@@ -511,28 +609,36 @@ impl SqliteStore {
         f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.check_fence()?;
-        let _turn = self.queue.wait().map_err(io)?;
-        let mut conn = lock(&self.writer);
+        let _turn = self.turn(&self.queue)?;
+        let mut conn = self.connection(&self.writer)?;
         f(&mut conn)
     }
 }
 
-/// A connection with the design's per-connection settings. None of them
-/// writes to the database file.
-pub(crate) fn connect(path: &Path) -> Result<Connection, StoreError> {
+/// A connection with the design's per-connection settings and a busy
+/// timeout of `BUSY_TIMEOUT`, or the time left before a guard's `deadline`
+/// as `bounded` sets it. None of them writes to the database file, but
+/// `synchronous` reads the schema, so it may wait.
+pub(crate) fn connect(
+    path: &Path,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<Connection, StoreError> {
     let conn = Connection::open(path).map_err(sql)?;
     conn.busy_timeout(BUSY_TIMEOUT).map_err(sql)?;
-    conn.execute_batch(
-        "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
-    )
-    .map_err(sql)?;
+    bounded(&conn, deadline, timing)?
+        .execute_batch(
+            "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
+        )
+        .map_err(sql)?;
     Ok(conn)
 }
 
 /// A connection that can only read the existing database file: opened
 /// read-only, so a missing file is an error and never created. Only the
 /// busy timeout is set; the write settings `connect` applies have nothing
-/// to do on it.
+/// to do on it. It is `BUSY_TIMEOUT` on a guard store too, because the
+/// guard opens no read-only connection.
 pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open_with_flags(
         path,
@@ -545,9 +651,14 @@ pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
     Ok(conn)
 }
 
-/// The stored epoch, or `None` when there is no schema yet. Reads only.
-fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
-    let exists = conn
+/// The stored epoch, or `None` when there is no schema yet. Reads only,
+/// each statement `bounded` by a guard's `deadline`.
+fn stored_epoch(
+    conn: &Connection,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<Option<u32>, StoreError> {
+    let exists = bounded(conn, deadline, timing)?
         .query_row(
             "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_meta'",
             [],
@@ -559,31 +670,57 @@ fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
     if !exists {
         return Ok(None);
     }
-    conn.query_row(
-        "SELECT value FROM schema_meta WHERE key = 'epoch'",
-        [],
-        |row| row.get(0),
-    )
-    .map(Some)
-    .map_err(sql)
+    bounded(conn, deadline, timing)?
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = 'epoch'",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .map_err(sql)
 }
 
 fn schema_digest() -> String {
     Hash(Sha256::digest(SCHEMA.as_bytes()).into()).to_hex()
 }
 
+/// A turn of `lock`: waited for as long as it takes with no `deadline`, and
+/// otherwise taken by nonblocking tries until that reading of `timing`,
+/// then refused as `Busy`.
+fn take_turn<'l>(
+    lock: &'l FileLock,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<Turn<'l>, StoreError> {
+    match acquire(deadline, timing, || lock.try_wait()).map_err(io)? {
+        Taken::Held(turn) => Ok(turn),
+        Taken::Block => lock.wait().map_err(io),
+        Taken::Busy => Err(StoreError::Busy),
+    }
+}
+
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
-pub(crate) fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
-    let _turn = queue.wait().map_err(io)?;
-    if stored_epoch(conn)?.is_some() {
+/// With a guard's `deadline`, the queue is waited for as `take_turn` waits,
+/// and each statement up to `BEGIN IMMEDIATE` is `bounded` by it. A `Busy`
+/// answer leaves no schema.
+pub(crate) fn create(
+    conn: &Connection,
+    queue: &FileLock,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+    at: &str,
+) -> Result<(), StoreError> {
+    let _turn = take_turn(queue, deadline, timing)?;
+    if stored_epoch(conn, deadline, timing)?.is_some() {
         return Ok(());
     }
     // The page size takes only before the first table and before the log
     // is switched on.
-    conn.execute_batch(&format!("PRAGMA page_size = {PAGE_SIZE};"))
+    bounded(conn, deadline, timing)?
+        .execute_batch(&format!("PRAGMA page_size = {PAGE_SIZE};"))
         .map_err(sql)?;
-    let mode: String = conn
+    let mode: String = bounded(conn, deadline, timing)?
         .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
         .map_err(sql)?;
     if !mode.eq_ignore_ascii_case("wal") {
@@ -591,9 +728,13 @@ pub(crate) fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<()
             "this filesystem refused the write-ahead log (journal mode {mode})"
         )));
     }
-    conn.execute_batch("BEGIN IMMEDIATE;").map_err(sql)?;
+    bounded(conn, deadline, timing)?
+        .execute_batch("BEGIN IMMEDIATE;")
+        .map_err(sql)?;
     let created = (|| {
-        if stored_epoch(conn)?.is_some() {
+        // The transaction holds the write lock, so nothing in it waits and
+        // no deadline reaches it.
+        if stored_epoch(conn, None, timing)?.is_some() {
             return Ok(());
         }
         conn.execute_batch(SCHEMA).map_err(sql)?;
@@ -614,9 +755,14 @@ pub(crate) fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<()
 }
 
 /// A store at this binary's epoch that is not in write-ahead-log mode with
-/// 8 KiB pages was not made by Baley, or was changed behind its back.
-fn check_file_settings(conn: &Connection) -> Result<(), StoreError> {
-    let mode: String = conn
+/// 8 KiB pages was not made by Baley, or was changed behind its back. Each
+/// statement is `bounded` by a guard's `deadline`.
+fn check_file_settings(
+    conn: &Connection,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<(), StoreError> {
+    let mode: String = bounded(conn, deadline, timing)?
         .query_row("PRAGMA journal_mode", [], |row| row.get(0))
         .map_err(sql)?;
     if !mode.eq_ignore_ascii_case("wal") {
@@ -624,7 +770,7 @@ fn check_file_settings(conn: &Connection) -> Result<(), StoreError> {
             "the store's journal mode is {mode}, not the write-ahead log"
         )));
     }
-    let page_size: i64 = conn
+    let page_size: i64 = bounded(conn, deadline, timing)?
         .query_row("PRAGMA page_size", [], |row| row.get(0))
         .map_err(sql)?;
     if page_size != PAGE_SIZE {
@@ -652,6 +798,16 @@ fn quick_check(conn: &Connection) -> Result<Vec<String>, String> {
 /// transaction left it: rolled back. Nothing to repair.
 pub(crate) fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     conn.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The connection if it is free now, never waiting. A poisoned mutex is
+/// usable, as `lock` treats it.
+fn try_lock(conn: &Mutex<Connection>) -> Option<MutexGuard<'_, Connection>> {
+    match conn.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 pub(crate) fn sql(error: rusqlite::Error) -> StoreError {
@@ -683,6 +839,7 @@ mod tests {
     use baley_store::Admin;
 
     use super::*;
+    use crate::queue::scripted::Scripted;
 
     const AT: &str = "2026-09-25T18:00:00Z";
 
@@ -1248,6 +1405,317 @@ mod tests {
         release.send(()).expect("release");
         handle.join().expect("writer thread").expect("write");
         assert_eq!(rows, Ok(Ok(0)));
+    }
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    /// A guard store given `time` of storage time on `timing`, over a home
+    /// a normal open made.
+    fn guard_on(home: &Path, timing: Arc<Scripted>, time: Duration) -> SqliteStore {
+        drop(open(home));
+        SqliteStore::open(
+            home,
+            AT,
+            Options {
+                timing,
+                guard_storage_time: Some(time),
+                ..Options::default()
+            },
+        )
+        .expect("guard open")
+    }
+
+    /// A guard store with 1.5 s of storage time on a timing that steps
+    /// 100 ms a reading, so a bounded wait ends after a few readings and no
+    /// real time.
+    fn guard(home: &Path) -> Arc<SqliteStore> {
+        Arc::new(guard_on(home, Scripted::stepping(ms(100)), ms(1_500)))
+    }
+
+    /// `PRAGMA busy_timeout` of the write and the read connection, in ms.
+    fn busy_timeouts(store: &SqliteStore) -> (i64, i64) {
+        let read = |conn: &Mutex<Connection>| {
+            lock(conn)
+                .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .expect("busy timeout")
+        };
+        (read(&store.writer), read(&store.reader))
+    }
+
+    // Catches a guard store whose statements keep the 5,000 ms busy timeout,
+    // or one past the storage time given.
+    #[test]
+    fn a_guard_stores_statements_wait_past_its_storage_time() {
+        let home = crate::checks::private_folder();
+        let store = guard_on(home.path(), Scripted::still(), ms(1_500));
+        store.record_trace(&trace("write")).expect("guard write");
+        store.epoch().expect("guard read");
+        assert_eq!(busy_timeouts(&store), (1_500, 1_500));
+    }
+
+    // Catches the 2 s cap skipped, so a guard given more waits past it.
+    #[test]
+    fn a_guard_given_three_seconds_waits_past_the_cap() {
+        let home = crate::checks::private_folder();
+        let store = guard_on(home.path(), Scripted::still(), ms(3_000));
+        store.record_trace(&trace("write")).expect("guard write");
+        store.epoch().expect("guard read");
+        assert_eq!(busy_timeouts(&store), (2_000, 2_000));
+    }
+
+    // Catches a busy timeout set once at open, which a later write still
+    // runs under after time has passed.
+    #[test]
+    fn a_later_guard_write_keeps_the_busy_timeout_from_open() {
+        let home = crate::checks::private_folder();
+        let timing = Scripted::still();
+        let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
+        timing.script(&[ms(500)]);
+        store.record_trace(&trace("write")).expect("guard write");
+        assert_eq!(busy_timeouts(&store).0, 1_000);
+    }
+
+    // Catches a guard write that starts once its storage time is spent.
+    #[test]
+    fn a_guard_write_starts_after_its_storage_time_is_spent() {
+        let home = crate::checks::private_folder();
+        let timing = Scripted::still();
+        let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
+        timing.script(&[ms(1_500)]);
+        assert_eq!(store.record_trace(&trace("late")), Err(StoreError::Busy));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a guard write that begins once its time ran out while it took
+    // the write connection, after its queue turn and the connection were
+    // both taken with time left.
+    #[test]
+    fn a_guard_write_begins_when_its_time_runs_out_taking_the_connection() {
+        let home = crate::checks::private_folder();
+        let timing = Scripted::still();
+        let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
+        // The queue turn's try, the connection's try, then the reading its
+        // busy timeout would be set from.
+        timing.script(&[ms(1_000), ms(1_000), ms(1_500)]);
+        assert_eq!(store.record_trace(&trace("late")), Err(StoreError::Busy));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a spent storage time that leaves SQLite waiting, or a busy
+    // timeout past the cap.
+    #[test]
+    fn a_guard_busy_timeout_outlasts_the_time_left_or_the_cap() {
+        let opened_with = |opened, time, now| guard_busy_timeout(guard_deadline(opened, time), now);
+        assert_eq!(opened_with(ms(0), ms(1_500), ms(2_000)), Duration::ZERO);
+        assert_eq!(opened_with(ms(0), ms(1_500), ms(1_500)), Duration::ZERO);
+        assert_eq!(opened_with(ms(1_000), ms(10_000), ms(1_000)), ms(2_000));
+        assert_eq!(opened_with(ms(1_000), ms(1_500), ms(1_500)), ms(1_000));
+    }
+
+    // Catches a guard open whose writer connects under the 5,000 ms busy
+    // timeout, or any of its statements that runs under the timeout an
+    // earlier one set: either skips a reading, so the last ones read later.
+    #[test]
+    fn a_guard_open_runs_a_statement_under_the_normal_or_an_earlier_busy_timeout() {
+        let home = crate::checks::private_folder();
+        let store = guard_on(home.path(), Scripted::stepping(ms(100)), ms(1_500));
+        // Readings 100 ms apart, the deadline 1,500 ms after the first. One
+        // each before the writer's connect, the epoch's two queries, the
+        // digest, the reader's connect and the two file settings, so the
+        // writer's last is the eighth, with 800 ms left. The view check's
+        // try and busy timeout leave the reader 600 ms.
+        assert_eq!(busy_timeouts(&store), (800, 600));
+    }
+
+    // Catches a guard open whose statements after the writer connects keep
+    // the busy timeout set at connect, so their waits add up past the
+    // deadline, or that leaves a timeout in place once the time is spent.
+    // A store a newer binary stamped declares no views, so nothing after
+    // open's own statements sets either connection's timeout.
+    #[test]
+    fn a_guard_opens_later_statements_keep_the_busy_timeout_from_connect() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        raw(home.path())
+            .execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])
+            .expect("stamp");
+        let timing = Scripted::still();
+        // The deadline's reading and the writer's connect, then every
+        // reading after is at the deadline.
+        timing.script(&[ms(0), ms(0), ms(1_500)]);
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing,
+                guard_storage_time: Some(ms(1_500)),
+                ..Options::default()
+            },
+        )
+        .expect("guard open");
+        assert_eq!(busy_timeouts(&store), (0, 0));
+    }
+
+    // Catches a guard's schema creation whose statements after its queue
+    // turn share one busy timeout, so each lock they meet restarts the wait.
+    #[test]
+    fn a_guard_schema_creation_keeps_the_busy_timeout_from_its_turn() {
+        let home = crate::checks::private_folder();
+        let conn = raw(home.path());
+        let queue = FileLock::open(&home.path().join("baley.db.writer")).expect("queue");
+        let timing = Scripted::stepping(ms(100));
+        create(&conn, &queue, Some(ms(1_500)), timing.as_ref(), AT).expect("create");
+        // Readings 100 ms apart: the turn's try, then one before each of
+        // the epoch query, the page size, the journal mode and `BEGIN
+        // IMMEDIATE`, which is the fifth at 500 ms.
+        let busy: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("busy timeout");
+        assert_eq!(busy, 1_000);
+    }
+
+    /// Runs `call` on its own thread while the test holds `held`, and gives
+    /// back its answer, or `None` when none came in time, so a call that
+    /// blocks fails instead of hanging the suite. `held` is released before
+    /// the thread is joined.
+    fn answer_holding<H, T: Send + 'static>(
+        held: H,
+        call: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (send, answer) = mpsc::channel();
+        let handle = thread::spawn(move || send.send(call()).expect("send"));
+        let answered = answer.recv_timeout(Duration::from_secs(5)).ok();
+        drop(held);
+        handle.join().expect("call thread");
+        answered
+    }
+
+    /// `answer_holding` for a call through `store`.
+    fn answer_while<H, T: Send + 'static>(
+        store: &Arc<SqliteStore>,
+        held: H,
+        call: impl FnOnce(&SqliteStore) -> T + Send + 'static,
+    ) -> Option<T> {
+        let caller = Arc::clone(store);
+        answer_holding(held, move || call(&caller))
+    }
+
+    /// Guard options at `view_set_version` with 1.5 s of storage time on a
+    /// timing that steps 100 ms a reading.
+    fn guard_options(view_set_version: u32) -> Options {
+        Options {
+            view_set_version: NonZeroU32::new(view_set_version).expect("nonzero"),
+            timing: Scripted::stepping(ms(100)),
+            guard_storage_time: Some(ms(1_500)),
+            ..Options::default()
+        }
+    }
+
+    // Catches a guard open of a fresh home that waits for the writer queue
+    // to create the schema, or returns a store without one.
+    #[test]
+    fn a_guard_open_of_a_fresh_home_waits_for_the_queue() {
+        let home = crate::checks::private_folder();
+        let path = home.path().join("baley.db.writer");
+        crate::checks::private_file(&path);
+        let queue = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("queue file");
+        queue.lock().expect("hold the queue");
+        let opening = home.path().to_path_buf();
+        let answer = answer_holding(queue, move || {
+            SqliteStore::open(&opening, AT, guard_options(2)).err()
+        });
+        assert_eq!(answer, Some(Some(StoreError::Busy)));
+        let schema: Option<i64> = raw(home.path())
+            .query_row(
+                "SELECT 1 FROM sqlite_schema WHERE name = 'schema_meta'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("schema");
+        assert_eq!(schema, None);
+    }
+
+    // Catches a guard open that returns without the view set it declares
+    // when the writer queue is taken, as a read-only open may.
+    #[test]
+    fn a_guard_open_without_its_new_view_set_succeeds() {
+        let home = crate::checks::private_folder();
+        let other = open(home.path());
+        let held = other.queue.wait().expect("turn");
+        let opening = home.path().to_path_buf();
+        let answer = answer_holding(held, move || {
+            SqliteStore::open(&opening, AT, guard_options(3)).err()
+        });
+        assert_eq!(answer, Some(Some(StoreError::Busy)));
+    }
+
+    // Catches a guard `create_project` that waits for the writer queue, or
+    // records the project past its storage time.
+    #[test]
+    fn a_guard_create_project_waits_for_the_queue() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let other = open(home.path());
+        let held = other.queue.wait().expect("turn");
+        let project = ProjectId("7f0c2a4e-8d1b-4c3a-9e5f-2b6d8a1c4e70".into());
+        let answer = answer_while(&store, held, move |store| {
+            store.create_project(&project, "user", AT)
+        });
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(other.projects().expect("projects"), []);
+    }
+
+    // Catches a guard write that blocks on the write connection's mutex
+    // while another thread of its process holds it.
+    #[test]
+    fn a_guard_write_blocks_on_a_held_write_connection() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let held = lock(&store.writer);
+        let answer = answer_while(&store, held, |store| store.record_trace(&trace("late")));
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a guard read that blocks on the read connection's mutex.
+    #[test]
+    fn a_guard_read_blocks_on_a_held_read_connection() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let held = lock(&store.reader);
+        let answer = answer_while(&store, held, SqliteStore::epoch);
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+    }
+
+    // Catches a guard write that blocks on the in-process lock while another
+    // thread of the same store holds a queue turn.
+    #[test]
+    fn a_guard_write_blocks_on_its_own_stores_queue_turn() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let held = store.queue.wait().expect("turn");
+        let answer = answer_while(&store, held, |store| store.record_trace(&trace("late")));
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a guard write that blocks in `flock` while a second store on
+    // the same home, with its own open lock file, holds the writer queue.
+    #[test]
+    fn a_guard_write_blocks_on_another_stores_queue_turn() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let other = open(home.path());
+        let held = other.queue.wait().expect("turn");
+        let answer = answer_while(&store, held, |store| store.record_trace(&trace("late")));
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(trace_rows(home.path()), 0);
     }
 
     // With a gap in the ids, as a purge leaves, the trace still keeps its

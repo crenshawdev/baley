@@ -1,17 +1,12 @@
-use super::{Caller, Error, deadline, finish, launch};
-use crate::process::Output;
-use std::{ffi::OsString, io, time::Duration};
+use super::{Caller, Deadline, Error, Limit, deadline, finish, guard_launch, launch, run};
+use crate::guard_budget::Budget;
+use crate::process::{Output, Recorded};
+use std::{io, time::Duration};
 
 #[test]
 fn git_subprocesses_run_under_a_deadline() {
     let rows: &[(Caller, &[&str], &str, u64)] = &[
         (Caller::AnchorForge, &["remote"], "git remote", 60),
-        (
-            Caller::GuardBranch,
-            &["symbolic-ref", "--quiet", "--short", "HEAD"],
-            "git symbolic-ref --quiet --short HEAD",
-            9,
-        ),
         (
             Caller::ExecutionOutput,
             &["show", "HEAD"],
@@ -105,8 +100,11 @@ fn git_subprocesses_run_under_a_deadline() {
         ),
     ];
     for &(caller, args, command, seconds) in rows {
-        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
-        let error = finish(caller, &args, Err(io::ErrorKind::TimedOut.into())).unwrap_err();
+        let error = finish(
+            &launch(caller).args(args),
+            Err(io::ErrorKind::TimedOut.into()),
+        )
+        .unwrap_err();
         let Error::Limit(limit) = error else {
             panic!("{caller:?}: expected named limit, got {error}");
         };
@@ -117,63 +115,114 @@ fn git_subprocesses_run_under_a_deadline() {
             format!("{command} exceeded git deadline of {seconds} seconds")
         );
     }
-    let args = [OsString::from("status")];
+    let status = launch(Caller::PauseRead).args(["status"]);
     for output in [
         Output::exited(0, "kept", "notice"),
         Output::exited(128, "", "ordinary failure"),
         Output::signaled(9),
     ] {
-        assert_eq!(
-            finish(Caller::PauseRead, &args, Ok(output.clone())).unwrap(),
-            output
-        );
+        assert_eq!(finish(&status, Ok(output.clone())).unwrap(), output);
     }
     assert!(matches!(
-        finish(Caller::PauseRead, &args, Err(io::ErrorKind::PermissionDenied.into())),
+        finish(&status, Err(io::ErrorKind::PermissionDenied.into())),
         Err(Error::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied
     ));
 }
 
 #[test]
 fn registered_callers_select_their_deadlines() {
-    for (caller, nominal, work) in [
-        (Caller::GuardBranch, 10, 9),
-        (Caller::ExecutionOutput, 60, 60),
-        (Caller::ExecutionStatus, 60, 60),
-        (Caller::PauseRead, 60, 60),
-        (Caller::PauseIndex, 60, 60),
-        (Caller::WhyRead, 60, 60),
-        (Caller::WhyInput, 60, 60),
-        (Caller::ExecutionRunner, 60, 60),
-        (Caller::PauseMergeBase, 60, 60),
-        (Caller::RailRead, 60, 60),
-        (Caller::RailCommitInput, 60, 60),
-        (Caller::RailConfig, 60, 60),
-        (Caller::RecallHistory, 60, 60),
-        (Caller::ReadDocumentHead, 60, 60),
-        (Caller::LandingGit, 60, 60),
-        (Caller::ProjectHead, 60, 60),
-        (Caller::CheckoutFacts, 60, 60),
+    for caller in [
+        Caller::ExecutionOutput,
+        Caller::ExecutionStatus,
+        Caller::PauseRead,
+        Caller::PauseIndex,
+        Caller::WhyRead,
+        Caller::WhyInput,
+        Caller::ExecutionRunner,
+        Caller::PauseMergeBase,
+        Caller::RailRead,
+        Caller::RailCommitInput,
+        Caller::RailConfig,
+        Caller::RecallHistory,
+        Caller::ReadDocumentHead,
+        Caller::LandingGit,
+        Caller::AnchorForge,
+        Caller::ProjectHead,
+        Caller::CheckoutFacts,
     ] {
         assert_eq!(
-            deadline(caller).nominal,
-            Duration::from_secs(nominal),
-            "{caller:?}"
-        );
-        assert_eq!(
-            deadline(caller).work,
-            Duration::from_secs(work),
+            deadline(caller),
+            Deadline::Exact(Duration::from_secs(60)),
             "{caller:?}"
         );
         let launch = launch(caller);
+        assert_eq!(launch.timeout, Some(Duration::from_secs(60)), "{caller:?}");
+        assert!(launch.own_group);
+        assert!(!launch.inherit);
+        assert!(!launch.die_with_parent);
+        assert_eq!(launch.limit, usize::MAX);
+    }
+    for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        assert_eq!(
+            deadline(caller),
+            Deadline::Guard(Duration::from_secs(5)),
+            "{caller:?}"
+        );
+        // 5.6 s in, the work time left is 2.4 s, under git's 5 s.
+        let grant = Budget::with_clock(|| Duration::from_millis(5_600))
+            .git()
+            .expect("time is left");
+        let launch = guard_launch(caller, &grant);
+        assert_eq!(launch.git_caller(), Some(caller));
         assert_eq!(
             launch.timeout,
-            Some(Duration::from_secs(work)),
+            Some(Duration::from_millis(2_400)),
             "{caller:?}"
         );
         assert!(launch.own_group);
         assert!(!launch.inherit);
         assert!(!launch.die_with_parent);
-        assert_eq!(launch.limit, usize::MAX);
+    }
+}
+
+#[test]
+fn a_guard_timeout_states_the_time_it_ran_under_not_gits_cap() {
+    // 5.6 s in, the work time left is 2.4 s, under git's 5 s.
+    let grant = Budget::with_clock(|| Duration::from_millis(5_600))
+        .git()
+        .expect("time is left");
+    let launch = guard_launch(Caller::GuardBranch, &grant).args([
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "HEAD",
+    ]);
+    let mut fake = Recorded::new().unavailable(io::ErrorKind::TimedOut.into());
+
+    let error = run(&launch, &mut fake).unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "git symbolic-ref --quiet --short HEAD exceeded git deadline of 2.4 seconds"
+    );
+}
+
+#[test]
+fn a_limit_states_its_bound_to_the_millisecond_not_in_whole_seconds() {
+    for (millis, seconds) in [
+        (60_000, "60"),
+        (2_400, "2.4"),
+        (1_250, "1.25"),
+        (750, "0.75"),
+        (4_999, "4.999"),
+    ] {
+        let limit = Limit {
+            command: "git status".into(),
+            bound: Duration::from_millis(millis),
+        };
+        assert_eq!(
+            limit.to_string(),
+            format!("git status exceeded git deadline of {seconds} seconds")
+        );
     }
 }

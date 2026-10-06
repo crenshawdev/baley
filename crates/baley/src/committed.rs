@@ -1,12 +1,14 @@
 //! HEAD's copy of the project file, read through git (design 0003, CFG-R3;
 //! EVD-R17, file half). The project's settings come from this copy, so an
 //! edit nobody has committed cannot change the policy agents run under.
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use baley_core::policy::{Fault, SettingsFile, Unavailable};
 
 use crate::git_process::{self, Caller};
+use crate::guard_budget::Budget;
 use crate::process::{Launch, Output, Process};
 use crate::settings;
 
@@ -63,6 +65,65 @@ pub fn read(
     working: &SettingsFile,
     process: &mut dyn Process,
 ) -> Result<Committed, Unavailable> {
+    sequence(root, working, &mut |args| {
+        let launch = git(git_process::launch(Caller::ProjectHead), root, args);
+        let ran = git_process::run(&launch, process);
+        Ok((launch, ran))
+    })
+}
+
+/// Bytes kept of each stream of a guard launch. A project file larger than
+/// this is refused as incomplete output.
+const GUARD_OUTPUT_LIMIT: usize = 1 << 20;
+
+/// Bytes kept of git's first stderr line in a guard read's error, so the
+/// error cannot carry a flood of output or any later line.
+const GUARD_EXCERPT_LIMIT: usize = 256;
+
+/// Reads HEAD's copy of `working` as [`read`] does, on the guard's budget.
+///
+/// Each of its up to three launches runs under the guard's own caller on the
+/// time `budget` grants it and is charged for the time it took, so together
+/// they share git's one allowance with the branch lookup. With no time left
+/// nothing launches and the read is refused. Each stream keeps at most
+/// `GUARD_OUTPUT_LIMIT` bytes (1 MiB), and an error keeps at most
+/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line.
+///
+/// It has no caller yet: Build 3's recording guard reads it after the branch
+/// lookup, on the same budget.
+pub fn read_for_guard(
+    root: &Path,
+    working: &SettingsFile,
+    process: &mut dyn Process,
+    budget: &mut Budget,
+) -> Result<Committed, Unavailable> {
+    sequence(root, working, &mut |args| {
+        let grant = budget
+            .git()
+            .ok_or_else(|| "the guard's git time is spent".to_owned())?;
+        let launch = git(
+            git_process::guard_launch(Caller::GuardProjectHead, &grant),
+            root,
+            args,
+        )
+        .limit(GUARD_OUTPUT_LIMIT);
+        let ran = git_process::run(&launch, process).map(first_line_excerpt);
+        budget.charge_git(grant);
+        Ok((launch, ran))
+    })
+}
+
+/// Starts one git launch of the sequence with these arguments and runs it,
+/// or says why it could not start one.
+type Step<'a> = dyn FnMut(&[&OsStr]) -> Result<(Launch, Ran), String> + 'a;
+
+/// `rev-parse`, then `ls-tree`, then `cat-file`, each judged before the next
+/// runs.
+fn sequence(
+    root: &Path,
+    working: &SettingsFile,
+    run: &mut Step<'_>,
+) -> Result<Committed, Unavailable> {
     let refuse = |cause: String| Unavailable {
         path: working.path.clone(),
         fault: Fault::Unreadable {
@@ -76,16 +137,23 @@ pub fn read(
         ))
     })?;
 
-    let head = git(root, &["rev-parse", "--verify", "-q", "HEAD"]);
-    if !born(&head, git_process::run(&head, process)).map_err(refuse)? {
+    let (head, ran) =
+        run(&["rev-parse", "--verify", "-q", "HEAD"].map(OsStr::new)).map_err(refuse)?;
+    if !born(&head, ran).map_err(refuse)? {
         return Ok(Committed {
             layer: None,
             pending: None,
         });
     }
 
-    let tree = git(root, &["ls-tree", "HEAD", "--"]).arg(relative);
-    let Some(oid) = entry(&tree, git_process::run(&tree, process)).map_err(refuse)? else {
+    let (tree, ran) = run(&[
+        OsStr::new("ls-tree"),
+        OsStr::new("HEAD"),
+        OsStr::new("--"),
+        relative.as_os_str(),
+    ])
+    .map_err(refuse)?;
+    let Some(oid) = entry(&tree, ran).map_err(refuse)? else {
         return Ok(Committed {
             layer: None,
             pending: Some(Pending::Absent {
@@ -94,8 +162,9 @@ pub fn read(
         });
     };
 
-    let cat = git(root, &["cat-file", "blob"]).arg(&oid);
-    let bytes = blob(&cat, git_process::run(&cat, process)).map_err(refuse)?;
+    let (cat, ran) =
+        run(&[OsStr::new("cat-file"), OsStr::new("blob"), OsStr::new(&oid)]).map_err(refuse)?;
+    let bytes = blob(&cat, ran).map_err(refuse)?;
     // The digest is of the bytes, never the object id, so both file layers
     // carry one digest kind.
     let layer = settings::file(&working.path, bytes);
@@ -103,6 +172,16 @@ pub fn read(
         pending: differs(working, &layer),
         layer: Some(layer),
     })
+}
+
+/// Keeps only the start of git's first stderr line, cut on a character
+/// boundary, for a guard read's error text.
+fn first_line_excerpt(mut output: Output) -> Output {
+    let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
+    let text = String::from_utf8_lossy(first);
+    let end = text.floor_char_boundary(GUARD_EXCERPT_LIMIT);
+    output.stderr = text.as_bytes()[..end].to_vec();
+    output
 }
 
 /// The note for a working-tree file whose bytes are not HEAD's. Both digests
@@ -115,8 +194,8 @@ fn differs(working: &SettingsFile, head: &SettingsFile) -> Option<Pending> {
 
 /// One git launch at the root, read-only: no index lock, no lazy fetch from a
 /// promisor remote, a path that matches only itself, and no prompt.
-fn git(root: &Path, args: &[&str]) -> Launch {
-    git_process::launch(Caller::ProjectHead)
+fn git(launch: Launch, root: &Path, args: &[&OsStr]) -> Launch {
+    launch
         .cwd(root)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -451,5 +530,152 @@ mod tests {
             let committed = read_at("/r/baley.toml", &mut fake).unwrap();
             assert_eq!(committed.pending, pending);
         }
+    }
+
+    /// The guard tests' clock: each launch the fake runs takes `step`.
+    struct Ticking {
+        recorded: Recorded,
+        now: std::rc::Rc<std::cell::Cell<std::time::Duration>>,
+        step: std::time::Duration,
+    }
+
+    impl Process for Ticking {
+        fn run(&mut self, launch: &Launch) -> std::io::Result<Output> {
+            self.now.set(self.now.get() + self.step);
+            self.recorded.run(launch)
+        }
+    }
+
+    fn secs(seconds: u64) -> std::time::Duration {
+        std::time::Duration::from_secs(seconds)
+    }
+
+    /// A budget whose clock stands still at `at`.
+    fn budget_at(at: std::time::Duration) -> Budget {
+        Budget::with_clock(move || at)
+    }
+
+    fn guard_read(fake: &mut dyn Process, budget: &mut Budget) -> Result<Committed, Unavailable> {
+        read_for_guard(Path::new(ROOT), &working("/r/baley.toml"), fake, budget)
+    }
+
+    #[test]
+    fn a_guard_read_launches_as_the_guard_on_one_shrinking_allowance_never_as_project_head() {
+        let now = std::rc::Rc::new(std::cell::Cell::new(secs(0)));
+        let clock = std::rc::Rc::clone(&now);
+        // The branch lookup before it used nothing.
+        let mut budget = Budget::with_clock(move || clock.get());
+        let mut fake = Ticking {
+            recorded: Recorded::new()
+                .out(HEAD)
+                .out(format!("100644 blob {OID}\tbaley.toml\n"))
+                .out("abc"),
+            now,
+            step: secs(2),
+        };
+
+        guard_read(&mut fake, &mut budget).unwrap();
+
+        let launches = fake.recorded.launches();
+        let timeouts: Vec<_> = launches.iter().map(|launch| launch.timeout).collect();
+        assert_eq!(timeouts, [Some(secs(5)), Some(secs(3)), Some(secs(1))]);
+        for launch in launches {
+            assert_eq!(
+                launch.git_caller(),
+                Some(Caller::GuardProjectHead),
+                "{launch:?}"
+            );
+            assert!(launch.own_group, "{launch:?}");
+            assert_eq!(launch.cwd.as_deref(), Some(Path::new(ROOT)), "{launch:?}");
+            assert_eq!(launch.limit, 1 << 20, "{launch:?}");
+            assert_eq!(
+                launch.env,
+                [
+                    ("GIT_OPTIONAL_LOCKS".to_owned(), Some("0".into())),
+                    ("GIT_NO_LAZY_FETCH".to_owned(), Some("1".into())),
+                    ("GIT_LITERAL_PATHSPECS".to_owned(), Some("1".into())),
+                    ("GIT_TERMINAL_PROMPT".to_owned(), Some("0".into())),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn spent_git_time_refuses_the_guard_read_rather_than_launch() {
+        let now = std::rc::Rc::new(std::cell::Cell::new(secs(0)));
+        let clock = std::rc::Rc::clone(&now);
+        let mut budget = Budget::with_clock(move || clock.get());
+        let lookup = budget.git().expect("a grant at the start");
+        now.set(secs(5));
+        budget.charge_git(lookup);
+        // No scripted answer: a launch would panic.
+        let mut fake = Recorded::new();
+
+        let refusal = guard_read(&mut fake, &mut budget).unwrap_err();
+
+        assert_eq!(
+            cause(&refusal),
+            "HEAD's copy: the guard's git time is spent"
+        );
+        assert!(fake.launches().is_empty());
+    }
+
+    #[test]
+    fn a_guard_read_error_keeps_only_a_bounded_start_of_gits_first_stderr_line() {
+        let prefix = format!("HEAD's copy: git cat-file blob {OID} exited with code 128: ");
+        let flood = format!("{}\ngit commit -m SENTINEL\n", "x".repeat(1 << 20));
+        // A three-byte character straddles byte 256, so the cut falls before it.
+        let wide = "€".repeat(100);
+        for (stderr, excerpt) in [(flood, "x".repeat(256)), (wide, "€".repeat(85))] {
+            let mut fake = Recorded::new()
+                .out(HEAD)
+                .out(format!("100644 blob {OID}\tbaley.toml\n"))
+                .fail(128, stderr);
+
+            let refusal = guard_read(&mut fake, &mut budget_at(secs(0))).unwrap_err();
+
+            let cause = cause(&refusal);
+            assert!(!cause.contains("SENTINEL"));
+            assert_eq!(cause.strip_prefix(prefix.as_str()), Some(excerpt.as_str()));
+        }
+    }
+
+    #[test]
+    fn a_guard_read_timeout_states_the_time_it_was_granted() {
+        // 5.6 s in, the work time left is 2.4 s, under git's 5 s.
+        let mut fake = Recorded::new().unavailable(std::io::ErrorKind::TimedOut.into());
+
+        let refusal = guard_read(
+            &mut fake,
+            &mut budget_at(std::time::Duration::from_millis(5_600)),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            cause(&refusal),
+            "HEAD's copy: git rev-parse --verify -q HEAD exceeded git deadline of 2.4 seconds"
+        );
+    }
+
+    #[test]
+    fn a_guard_read_takes_an_unborn_head_as_empty_and_a_regular_blob_as_the_layer() {
+        let mut unborn = Recorded::new().fail(1, "");
+        assert_eq!(
+            guard_read(&mut unborn, &mut budget_at(secs(0))).unwrap(),
+            Committed {
+                layer: None,
+                pending: None,
+            }
+        );
+
+        let mut regular = Recorded::new()
+            .out(HEAD)
+            .out(format!("100644 blob {OID}\tbaley.toml\n"))
+            .out("abc");
+        let committed = guard_read(&mut regular, &mut budget_at(secs(0))).unwrap();
+        assert_eq!(
+            committed.layer.map(|layer| layer.bytes),
+            Some(b"abc".to_vec())
+        );
     }
 }

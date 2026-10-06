@@ -57,6 +57,8 @@ pub mod discovery;
 pub mod exec;
 /// Platform configuration and ledger folders.
 pub mod folders;
+/// The guard's one time budget: git and storage allowances inside the hook timeout.
+pub mod guard_budget;
 /// Classifies one hook call's input for the guard: which tool it is and what it carries.
 pub mod hook_input;
 /// `baley init`: ties a repository to a ledger project.
