@@ -138,6 +138,17 @@ pub(super) fn judged<'a>(
     }
 }
 
+/// What the decision settled before the store finished its transaction.
+enum Settled {
+    /// Another process answered the call first. The decision failed on
+    /// purpose so nothing is appended, and this answer stands whatever the
+    /// store then returns.
+    AnsweredFirst(Answer, AuditPrecondition),
+    /// A new answer appended inside the transaction. It is recorded only
+    /// once the transaction commits.
+    Staged(Answer),
+}
+
 /// Records `judged`'s answer for the call `caller` made, creating `user`
 /// first when it is missing. It gives the answer to render and whether it is
 /// recorded.
@@ -149,7 +160,8 @@ pub(super) fn judged<'a>(
 /// Under torn settings the remembered denials are read and the commit judged
 /// again; under a complete policy a changed denial is appended as
 /// `guard.policy_recorded` beside the answer, never on its own. A store
-/// error is returned as it is.
+/// error is returned as it is, one after the answer was appended included,
+/// so a new answer counts as recorded only once its transaction commits.
 pub(super) fn record(
     store: &(impl Admin + Ledger),
     caller: &HookCaller,
@@ -186,9 +198,9 @@ pub(super) fn record(
         actor,
         caller: Some(Caller::Hook(caller.clone())),
     };
-    let mut outcome = None;
+    let mut settled = None;
     let result = store.transact(&command, &mut |tx| {
-        outcome = None;
+        settled = None;
         let stored = tx.get(GUARD_VIEW, &guard_key(host, session, call))?;
         match redelivery(
             stored.as_ref().map(|document| &document.body),
@@ -198,11 +210,14 @@ pub(super) fn record(
         ) {
             Redelivery::NoRecord => {}
             Redelivery::Replay(answer) => {
-                outcome = Some((answer, AuditPrecondition::Recorded));
+                settled = Some(Settled::AnsweredFirst(answer, AuditPrecondition::Recorded));
                 return Err(answered_first(call));
             }
             Redelivery::Clash => {
-                outcome = Some((judged.alone(), AuditPrecondition::Unrecordable));
+                settled = Some(Settled::AnsweredFirst(
+                    judged.alone(),
+                    AuditPrecondition::Unrecordable,
+                ));
                 return Err(answered_first(call));
             }
         }
@@ -235,7 +250,7 @@ pub(super) fn record(
             payload,
             attachments: vec![],
         })?;
-        outcome = Some((answer, AuditPrecondition::Recorded));
+        settled = Some(Settled::Staged(answer));
         Ok(Decision {
             kind: OutcomeKind::Done,
             answer: json!({ "recorded": true }),
@@ -244,9 +259,12 @@ pub(super) fn record(
             git: None,
         })
     });
-    match (result, outcome) {
-        (_, Some(outcome)) => Ok(outcome),
-        (Err(error), None) => Err(error),
+    match (result, settled) {
+        (_, Some(Settled::AnsweredFirst(answer, precondition))) => Ok((answer, precondition)),
+        (Ok(_), Some(Settled::Staged(answer))) => Ok((answer, AuditPrecondition::Recorded)),
+        // The projectors, `command.completed` or the commit can fail after
+        // the decision returned, and then nothing was recorded.
+        (Err(error), _) => Err(error),
         // A fresh request id is never answered before.
         (Ok(_), None) => Ok((judged.alone(), AuditPrecondition::Unrecordable)),
     }
@@ -387,8 +405,15 @@ mod tests {
         GUARD_POLICY_RECORDED, ToolInput, input_digest, reason, remembered_settings,
     };
     use baley_core::policy::OnProtected;
-    use baley_store::{CallSource, Event, PageRequest};
+    use baley_store::{
+        Anchor, AnchorCheck, CallSource, Claim, ClaimId, ClaimOwner, Claimed, Decide, DecideClaim,
+        DecideReconcile, Event, ExportReport, Hash, Head, Health, HistoryFilter, Page, PageRequest,
+        PayloadRef, PayloadReference, PurgeReport, RebuildReport, ReconcileAuthority, Recorded,
+        ScrubReport, VerifyReport, ViewsReport,
+    };
     use baley_store_sqlite::SqliteStore;
+    use std::collections::BTreeMap;
+    use std::ops::RangeInclusive;
 
     const T0: &str = "2026-10-06T10:00:00Z";
     const T1: &str = "2026-10-06T10:00:01Z";
@@ -584,6 +609,186 @@ mod tests {
 
         assert_eq!(reused, Ok((ask, AuditPrecondition::Unrecordable)));
         assert_eq!(events(&store, GUARD_ANSWERED).len(), 1);
+    }
+
+    /// The real store, whose transaction fails once the decision returned:
+    /// the window in which the projectors, `command.completed` or the commit
+    /// can fail. SQLite rolls the decision's appends back.
+    struct FailsAfterDecide<'a> {
+        store: &'a SqliteStore,
+    }
+
+    fn commit_failed() -> StoreError {
+        StoreError::Unavailable("the commit failed".into())
+    }
+
+    impl Ledger for FailsAfterDecide<'_> {
+        fn transact(
+            &self,
+            command: &Command,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::transact(self.store, command, &mut |tx| {
+                decide(tx)?;
+                Err(commit_failed())
+            })
+        }
+
+        fn claim(
+            &self,
+            command: &Command,
+            decide: &mut DecideClaim<'_>,
+        ) -> Result<Claimed, StoreError> {
+            Ledger::claim(self.store, command, decide)
+        }
+
+        fn renew_lease(
+            &self,
+            project: &ProjectId,
+            claim: &ClaimId,
+            owner: &ClaimOwner,
+            at: &str,
+        ) -> Result<(), StoreError> {
+            Ledger::renew_lease(self.store, project, claim, owner, at)
+        }
+
+        fn complete(
+            &self,
+            command: &Command,
+            owner: &ClaimOwner,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::complete(self.store, command, owner, decide)
+        }
+
+        fn reconcile(
+            &self,
+            command: &Command,
+            claim: &ClaimId,
+            authority: ReconcileAuthority,
+            decide: &mut DecideReconcile<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::reconcile(self.store, command, claim, authority, decide)
+        }
+
+        fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError> {
+            Ledger::open_claims(self.store, project)
+        }
+
+        fn stream(
+            &self,
+            project: &ProjectId,
+            stream: &StreamName,
+            from_version: u64,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::stream(self.store, project, stream, from_version, page)
+        }
+
+        fn history(
+            &self,
+            project: &ProjectId,
+            range: RangeInclusive<u64>,
+            filter: &HistoryFilter,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::history(self.store, project, range, filter, page)
+        }
+
+        fn head(&self, project: &ProjectId) -> Result<Option<Head>, StoreError> {
+            Ledger::head(self.store, project)
+        }
+
+        fn verify(
+            &self,
+            project: &ProjectId,
+            anchor: Option<&Anchor>,
+        ) -> Result<VerifyReport, StoreError> {
+            Ledger::verify(self.store, project, anchor)
+        }
+    }
+
+    impl Admin for FailsAfterDecide<'_> {
+        fn create_project(
+            &self,
+            project: &ProjectId,
+            name: &str,
+            at: &str,
+        ) -> Result<(), StoreError> {
+            Admin::create_project(self.store, project, name, at)
+        }
+
+        fn projects(&self) -> Result<Vec<(ProjectId, String)>, StoreError> {
+            Admin::projects(self.store)
+        }
+
+        fn export(
+            &self,
+            project: &ProjectId,
+            target: &Path,
+            at: &str,
+        ) -> Result<ExportReport, StoreError> {
+            Admin::export(self.store, project, target, at)
+        }
+
+        fn reduce(
+            &self,
+            command: &Command,
+            reference: &PayloadReference,
+        ) -> Result<PayloadRef, StoreError> {
+            Admin::reduce(self.store, command, reference)
+        }
+
+        fn purge(
+            &self,
+            command: &Command,
+            hashes: &[Hash],
+            reason: &str,
+        ) -> Result<PurgeReport, StoreError> {
+            Admin::purge(self.store, command, hashes, reason)
+        }
+
+        fn scrub(&self) -> Result<ScrubReport, StoreError> {
+            Admin::scrub(self.store)
+        }
+
+        fn rebuild(&self, project: &ProjectId) -> Result<RebuildReport, StoreError> {
+            Admin::rebuild(self.store, project)
+        }
+
+        fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError> {
+            Admin::verify_views(self.store, project)
+        }
+
+        fn doctor(
+            &self,
+            at: &str,
+            checks: &BTreeMap<ProjectId, AnchorCheck>,
+        ) -> Result<Health, StoreError> {
+            Admin::doctor(self.store, at, checks)
+        }
+    }
+
+    #[test]
+    fn an_ask_reported_recorded_when_its_transaction_fails_after_the_decision_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(&dir);
+        let failing = FailsAfterDecide { store: &store };
+        let ask = Answer::Ask(reason::push_ask());
+
+        let given = record(
+            &failing,
+            &caller("t1"),
+            &bash("git push", GitVerb::Push),
+            &Judged::Absent(ask),
+            request(1),
+            T1,
+        );
+
+        // The store error goes to the hook's store-failure path, which
+        // makes the ask unrecordable.
+        assert_eq!(given, Err(commit_failed()));
+        assert_eq!(events(&store, GUARD_ANSWERED).len(), 0);
     }
 
     #[test]
