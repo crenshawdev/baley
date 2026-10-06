@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `7ceab752`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its implementation belongs to #49, #50 and #54, while UPK-R2 waits on the held [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `7052dcea`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its implementation belongs to #49, #50 and #54, while UPK-R2 waits on the held [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). Each build pull request updates this roadmap.
 
 ## The path to the first release
 
@@ -338,7 +338,7 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#44](https://github.com/crenshawdev/baley/issues/44) | Start the architecture overview | Evidence | None |
-| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI; set six-job build and test limits | Encyclopedists | None |
+| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI; set six-job build and test limits | Encyclopedists | None. The `fmt` job and the six-job limits are built; requiring `fmt` in the `main` ruleset remains, once the job has passed on `main` |
 | [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | None |
 | [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | None |
 
