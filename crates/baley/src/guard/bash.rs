@@ -1,4 +1,5 @@
 //! Bash decisions use a short-lived writer, independent of the resident queue.
+use baley::guard_budget::Budget;
 use baley::process::Process;
 use baley::rail::branch::{self, Permission};
 use baley::store::model::digest;
@@ -154,20 +155,36 @@ fn read_policy(
     )
 }
 
+/// Bytes kept of each of the branch lookup's streams. A branch name is short,
+/// and a runaway git must not fill memory within its grant.
+const BRANCH_LIMIT: usize = 4096;
+
+/// Asks git for the current branch on the time the budget has left. With no
+/// time left nothing launches, and the caller falls back as after any git
+/// failure.
 fn branch_observation(
     cwd: &Path,
     process: &mut dyn Process,
+    budget: &mut Budget,
 ) -> (Option<String>, Vec<audit::Unavailable>) {
+    let Some(grant) = budget.git() else {
+        return (
+            None,
+            vec![unavailable("Git", "the guard's git time is spent")],
+        );
+    };
     let observed = baley::git_process::run(
-        &baley::git_process::launch(baley::git_process::Caller::GuardBranch)
+        &baley::git_process::guard_launch(baley::git_process::Caller::GuardBranch, &grant)
             .cwd(cwd)
             .unset("GIT_DIR")
             .unset("GIT_WORK_TREE")
             .unset("GIT_COMMON_DIR")
             .unset("GIT_NAMESPACE")
-            .args(["symbolic-ref", "--quiet", "--short", "HEAD"]),
+            .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .limit(BRANCH_LIMIT),
         process,
     );
+    budget.charge_git(grant);
     branch_answer(observed)
 }
 
@@ -179,7 +196,10 @@ fn branch_answer(
             (None, vec![unavailable("Git", limit.to_string())])
         }
         Ok(output) if output.success() => {
-            if let Ok(name) = String::from_utf8(output.stdout) {
+            // A name cut at the byte cap is not the branch.
+            if output.stdout_complete
+                && let Ok(name) = String::from_utf8(output.stdout)
+            {
                 let name = name.trim_end_matches('\n');
                 if !name.is_empty() {
                     return (Some(name.into()), vec![]);
@@ -275,10 +295,11 @@ fn commit_decision(
     mut failures: Vec<audit::Unavailable>,
     prior: Option<&baley::store::writer::View>,
     process: &mut dyn Process,
+    budget: &mut Budget,
 ) -> bool {
     let torn = !failures.is_empty();
     let torn_text = describe(&failures);
-    let (branch, observation_failures) = branch_observation(&audit.cwd, process);
+    let (branch, observation_failures) = branch_observation(&audit.cwd, process, budget);
     let observed = observation_failures.is_empty();
     failures.extend(observation_failures);
     let branch = branch.or_else(|| symbolic_head(&audit.cwd));
@@ -356,7 +377,7 @@ fn audit_failed(audit: &Audit, error: impl std::fmt::Display) -> ExitCode {
     }
 }
 
-pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
+pub(super) fn run(bytes: &[u8], process: &mut dyn Process, budget: &mut Budget) -> ExitCode {
     let Ok(event) = serde_json::from_slice::<Event>(bytes) else {
         return ExitCode::SUCCESS;
     };
@@ -413,7 +434,14 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
     }
     if audit.verb == Verb::Commit {
         let (policy, failures) = read_policy(&planning, global, prior.as_ref());
-        if !commit_decision(&mut audit, policy, failures, prior.as_ref(), process) {
+        if !commit_decision(
+            &mut audit,
+            policy,
+            failures,
+            prior.as_ref(),
+            process,
+            budget,
+        ) {
             return ExitCode::SUCCESS;
         }
     }
@@ -435,6 +463,41 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use baley::guard_budget::Budget;
+    use baley::process::{Output, Recorded};
+    use std::{path::Path, time::Duration};
+
+    #[test]
+    fn an_unbounded_or_truncated_branch_read_is_not_taken_as_the_branch() {
+        let mut fake = Recorded::new().answer(Output {
+            stdout_complete: false,
+            ..Output::exited(0, "main", "")
+        });
+        let mut budget = Budget::with_clock(|| Duration::ZERO);
+
+        let (branch, failures) = super::branch_observation(Path::new("/r"), &mut fake, &mut budget);
+
+        assert_eq!(fake.launch().limit, 4096);
+        assert_eq!(branch, None);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].input, "branch");
+    }
+
+    #[test]
+    fn spent_git_time_launches_no_branch_lookup_and_reads_as_git_unavailable() {
+        // No scripted answer: a launch would panic.
+        let mut fake = Recorded::new();
+        let mut budget = Budget::with_clock(|| Duration::from_secs(8));
+
+        let (branch, failures) = super::branch_observation(Path::new("/r"), &mut fake, &mut budget);
+
+        assert!(fake.launches().is_empty());
+        assert_eq!(branch, None);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].input, "Git");
+        assert_eq!(failures[0].reason, "the guard's git time is spent");
+    }
+
     #[test]
     fn a_branch_timeout_names_the_command_and_bound() {
         let (branch, failures) = super::branch_answer(Err(baley::git_process::Error::Limit(

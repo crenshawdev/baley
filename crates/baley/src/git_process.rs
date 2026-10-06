@@ -79,13 +79,16 @@ pub fn deadline(caller: Caller) -> Deadline {
     }
 }
 
-/// A registered launch for `caller` at its deadline. A guard caller's runs to
-/// its cap.
+/// A registered launch for `caller` at its exact deadline. A guard caller's
+/// carries no timeout, so the validator refuses it: its time comes only from
+/// a budget grant through [`guard_launch`], so its launches together never
+/// outrun git's one allowance.
 pub fn launch(caller: Caller) -> Launch {
-    let (Deadline::Exact(timeout) | Deadline::Guard(timeout)) = deadline(caller);
-    Launch::registered_git(Registration(caller))
-        .timeout(timeout)
-        .own_group()
+    let launch = Launch::registered_git(Registration(caller)).own_group();
+    match deadline(caller) {
+        Deadline::Exact(timeout) => launch.timeout(timeout),
+        Deadline::Guard(_) => launch,
+    }
 }
 
 /// A guard caller's launch on the time `grant` gives it.

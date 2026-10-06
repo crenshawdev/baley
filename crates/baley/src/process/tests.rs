@@ -100,11 +100,6 @@ fn git_launches_require_registered_deadlines() {
         Some(Duration::from_secs(60))
     );
     assert_eq!(validated.descriptor().args, ["status"]);
-    let guard = git_process::launch(Caller::GuardBranch);
-    assert_eq!(
-        validate_launch(&guard).unwrap().descriptor().timeout,
-        Some(Duration::from_secs(5))
-    );
     for program in ["sh", "gpg", "gh"] {
         let launch = Launch::new(program);
         assert_eq!(validate_launch(&launch).unwrap().descriptor(), &launch);
@@ -144,6 +139,18 @@ fn a_guard_launch_at_zero_past_five_seconds_or_sharing_a_group_is_refused() {
                 "{caller:?} {timeout:?}"
             );
         }
+    }
+}
+
+#[test]
+fn a_guard_launch_made_outside_the_budget_is_refused() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    use std::io::ErrorKind;
+
+    for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        let error = validate_launch(&git_process::launch(caller)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidInput, "{caller:?}");
     }
 }
 

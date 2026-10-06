@@ -103,6 +103,9 @@ enum Input {
 }
 
 pub fn run() -> ExitCode {
+    // The host's timeout counts from the start, so reading the input spends
+    // the budget too. The read is bounded by size only.
+    let mut budget = baley::guard_budget::Budget::start();
     let mut bytes = Vec::new();
     if let Err(error) = std::io::stdin()
         .lock()
@@ -114,7 +117,7 @@ pub fn run() -> ExitCode {
     match input(&bytes) {
         Input::Silent => ExitCode::SUCCESS,
         Input::Denied(reason) => write_denial(reason),
-        Input::Bash => bash::run(&bytes, &mut baley::process::System),
+        Input::Bash => bash::run(&bytes, &mut baley::process::System, &mut budget),
         Input::WriteEdit(event) => {
             let global = global_setting(
                 std::env::var_os("BALEY_GLOBAL_CONFIG"),
