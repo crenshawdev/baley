@@ -49,7 +49,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Recurring finding | A returned finding whose fingerprint, or the fingerprint of a finding merged with it, has a standing dismissal in the same project. Baley decides the match, never a model. |
 | Confirm, reverse | What the owner's ruling on a recurring finding does to the earlier dismissal: `dismiss` confirms it, `fix` or `track` reverses it. Either ruling cites the earlier one. |
 | Settlement | The state of a review once every finding of its current round has a ruling. |
-| Deferred queue | Reviews with a `deferred` gate awaiting settlement or close. |
+| Deferred queue | Reviews with a `deferred` gate whose rulings are still owed. |
 | Filing | Creating an issue on the forge for a finding the owner ruled `track`. |
 | Fingerprint | The stable identity of a finding, computed by Baley from its file, claim and failure scenario (REV-R21). Filing uses it to find an existing issue; adjudication uses it to find a standing dismissal. |
 
@@ -67,7 +67,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | REV-R8 | The owner rules on every surviving finding: `fix`, `track` (goes to filing) or `dismiss` with a reason. Each ruling is one `review.adjudicated` record naming the review, round, finding and reviewers, and citing any earlier dismissal the finding matched (REV-R23). Baley never applies a finding, reruns a review or re-plans on its own. | Who answers for the work decides what is done about it. | SYS-P5, REV-R23 | Active |
 | REV-R9 | A `fix` ruling produces work through the normal path. Plan review: the planner revises the plan and it is re-submitted, checked and approved (0005). Diff or risk review: Baley opens a gap plan (0006) holding the fix as tasks; the planner writes it, the owner approves it, the executor runs it under the lease. On-demand kinds: the ruling records the wanted change for the next phase planning; nothing runs from it. | A fix is planned and proven like any other change. | PLN-R14, EXE-R14 | Active |
 | REV-R10 | A `fix` ruling on a triggered review grants one more round over the revised material, recorded as used; there is never a third round. The second round's findings are adjudicated and ruled the same way. For a `plan` trigger, round 2 uses the plan scope defined by [0005](0005-context-plans-and-acceptance.md), PLN-R16, and `review.triggers.plan.recheck`, with the draft reviewed in round 1 as its baseline and the same versioned truths. Both plan scopes check each finding the owner ruled `fix`. For a `diff` or `risk_surface` trigger, round 2 reviews the entire revised target and checks each finding the owner chose to fix; the plan setting has no effect. The revised target includes the original reviewed changes and the completed fixes, with its original base, revised endpoint and exact included commits retained. These rounds may report new defects. | Review converges by the owner's decision, not by looping. | REV-R8 | Active |
-| REV-R11 | A `deferred` review stays in the deferred queue until settlement or close, including while round-2 preparation is interrupted. Landing ([0011](0011-milestones-landing-undo-pause.md)) refuses its external steps while the queue holds a review, and next action ([0013](0013-next-action-and-progress.md)) surfaces the queue in its order. Nothing beside the queue can hide a member. | Deferred means later, not never. | REV-R2 | Active |
+| REV-R11 | A `deferred` review stays in the deferred queue until every finding of its current round is ruled. Landing ([0011](0011-milestones-landing-undo-pause.md)) refuses its external steps while the queue holds an unruled review, and next action ([0013](0013-next-action-and-progress.md)) surfaces the queue in its order. Nothing beside the queue can hide a member. | Deferred means later, not never. | REV-R2 | Active |
 | REV-R12 | Except for the authorized second round under REV-R10, a review is a new request with a fresh id whenever the reviewer set, the material or the trigger differs; a retry of the same request is answered from the record. Changing the reviewers on the same material is a new review, never a replay. The authorized second round is a new request within the same review, linked to round 1 and consuming its one extra round; revised material does not reset that budget. A retry of that request preserves its scope and material. | A changed policy gets a fresh critique. | EVD-R26 | Active |
 | REV-R13 | A review whose required reviewer exited without returning, or failed without a usable replacement under REV-R3, is interrupted; it is neither closed nor rerun until the owner says so. This includes launch, transport and malformed-return failures, and any refusal that stops round 2 after eligibility (section 5). A valid late return that matches the request completes that reviewer's delivery. Failed delivery never counts as a successful empty return. | A killed process is never taken as success. | SYS-P7 | Active |
 | REV-R14 | On-demand reviews are one command with a kind: `minimalism` over a named file, a directory or a phase's range; `decision` over one recorded decision; `diagnosis` over a stuck debug episode ([0014](0014-support-families.md) SUP-R7): its symptom, its reproduction (the command, the symptom signature and the reproduction files by path and digest) and every run Baley recorded of it with exit code, bounded output and classification (SUP-R13, SUP-R14), its hypotheses, observations and named files. Each uses the `host` reviewer and the owner's chosen providers, the same findings, adjudication and rulings, and no gate. | One mechanism for every critique. | REV-R1 | Active |
@@ -156,7 +156,7 @@ After eligibility is established, any refusal that stops round 2 (`material-unav
 ### review queue
 
 - **Inputs:** the project.
-- **Outputs:** the deferred queue: each review awaiting settlement or close, its trigger, phase and the findings owed (REV-R11).
+- **Outputs:** the deferred queue: each unruled review, its trigger, phase and the findings owed (REV-R11).
 
 ### findings file (owner)
 
@@ -212,7 +212,7 @@ Per finding, from the host session: `holds` or `dropped` with the reason; merged
 
 ### review.settled, review.deferred (events)
 
-`review.settled`: round, label (`clean`, `ruled`), the extra round used or not. A refused or failed round never produces `review.settled`. `review.deferred`: queued at, and on settlement or close, removed.
+`review.settled`: round, label (`clean`, `ruled`), the extra round used or not. A refused or failed round never produces `review.settled`. `review.deferred`: queued at, and removed once every finding of its current round is ruled.
 
 ### finding.filed, finding.declined, finding.uncertain (events, `review/<id>` stream)
 
@@ -223,7 +223,7 @@ Per finding, from the host session: `holds` or `dropped` with the reason; merged
 | View | Key | Content |
 |---|---|---|
 | `review` | project, review | Trigger or kind, gate, target, reviewers and their state, findings with their fingerprints, adjudication, earlier dismissals matched and rulings, settlement, rounds with their scope and material references, filing state |
-| `review_queue` | project | Deferred reviews awaiting settlement or close, in the order next action uses |
+| `review_queue` | project | Deferred reviews with rulings owed, in the order next action uses |
 | `dismissal` | project, fingerprint | The standing dismissal of one fingerprint: the latest `dismiss` ruling covering it (review, round, finding, reason, owner, date) and the earlier dismissals that ruling confirmed. A `dismiss` ruling writes or replaces the row for each fingerprint it covers; a `fix` or `track` ruling removes it. Serves the match at adjudication (REV-R22, REV-R23) |
 
 The `review` projector reads the round-2 refusal from `review.failed` on `review/<id>` and moves the review to Interrupted with its refusal code. A rebuild derives that state from the same event.
@@ -249,7 +249,7 @@ stateDiagram-v2
   Settled --> [*]
 ```
 
-*Figure 1. States of a review. A `deferred` gate places the review in the queue from Delivered, with removal on settlement or close.*
+*Figure 1. States of a review. A `deferred` gate places the review in the queue while rulings on its current round are owed.*
 
 The required reviewers are the admitted reviewers, with any provider that cannot deliver replaced by the host under REV-R3. A provider named as not run or recorded as failed is covered only when that host reviewer returns a valid result. Every required reviewer must return a valid findings list, including an empty list after a real attempt, before the round is Delivered. A launch, transport or malformed-return failure without a usable replacement moves the review to Interrupted just as an exit does; the owner chooses `review continue rerun` or `review continue close`. Such a failure never counts as an empty return or settles the review. Covered provider failures remain visible as failures, and delivery rests on the successful host result.
 
