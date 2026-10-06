@@ -101,7 +101,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_not_found_is_absent() {
+    fn an_unreadable_entry_is_not_read_as_absent() {
         assert!(!entry_present::<()>(Err(io::ErrorKind::NotFound)));
         assert!(entry_present(Ok(())));
         for error in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {

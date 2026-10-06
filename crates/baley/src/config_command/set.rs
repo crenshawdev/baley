@@ -535,6 +535,30 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_project_set_outside_a_project_is_not_an_interview_conflict() {
+        assert!(matches!(
+            check_project_expected(FileLayer::Project, false, None),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn an_interview_in_a_project_that_still_exists_is_not_refused() {
+        assert!(matches!(
+            check_project_expected(FileLayer::Project, true, Some(&shown(Some("a")))),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn a_global_interview_outside_a_project_is_not_refused() {
+        assert!(matches!(
+            check_project_expected(FileLayer::Global, false, Some(&shown(None))),
+            Ok(())
+        ));
+    }
+
+    #[test]
     fn an_unchanged_interview_target_is_not_refused() {
         assert!(check_expected(&shown(Some("a")), Path::new("/r/baley.toml"), Some("a")).is_ok());
     }
