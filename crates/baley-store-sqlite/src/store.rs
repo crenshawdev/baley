@@ -5,6 +5,7 @@ use crate::checks::{self, Judgement};
 use crate::health::{StartupHealth, judge_quick_check, runs_quick_check};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::num::NonZeroU32;
 use std::os::unix::fs::OpenOptionsExt;
@@ -20,7 +21,7 @@ use baley_store::{
 };
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
-use crate::queue::{FileLock, Monotonic, Timing, Turn, pause_for};
+use crate::queue::{FileLock, Monotonic, Taken, Timing, Turn, acquire, pause_for};
 use crate::schema::{EPOCH, SCHEMA};
 use crate::view::ViewSet;
 
@@ -56,11 +57,16 @@ pub struct Options {
     /// on an existing schema, and a failure fences every write while reads go
     /// on. Command-line and guard opens leave it off.
     pub startup_check: bool,
+    /// Set only by the guard's open: the storage time its call may still
+    /// spend waiting. Open reads `timing` once, and every later wait for the
+    /// writer queue, the maintenance lock or a connection ends that long
+    /// after, answering `StoreError::Busy`. `None` waits as long as it takes.
+    pub guard_storage_time: Option<Duration>,
 }
 
 impl Default for Options {
     /// No domain projectors, store view set version 2, a schema that reads none of the
-    /// core's types, and the monotonic clock.
+    /// core's types, the monotonic clock, and no guard storage time.
     fn default() -> Self {
         Self {
             trace_cap: 10_000,
@@ -70,6 +76,7 @@ impl Default for Options {
             timing: Arc::new(Monotonic),
             queue_wait: None,
             startup_check: false,
+            guard_storage_time: None,
         }
     }
 }
@@ -86,6 +93,7 @@ impl fmt::Debug for Options {
             .field("projectors", &views)
             .field("view_set_version", &self.view_set_version)
             .field("startup_check", &self.startup_check)
+            .field("guard_storage_time", &self.guard_storage_time)
             .finish_non_exhaustive()
     }
 }
@@ -123,6 +131,9 @@ pub struct SqliteStore {
     /// Held for a whole rebuild or view verification.
     maintenance_lock: FileLock,
     timing: Arc<dyn Timing>,
+    /// The reading of `timing` after which a guard store waits for nothing.
+    /// `None` on a normal store, which waits as long as it takes.
+    deadline: Option<Duration>,
     queue_wait: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
     trace_cap: u64,
     views: ViewSet,
@@ -163,7 +174,12 @@ impl SqliteStore {
     /// beyond 0700 for the home or 0600 for a file. It refuses with
     /// `Refusal::UnsafeHome`, naming each fault. It then creates the lock
     /// files and an empty `baley.db` with mode 0600 when missing.
+    /// With `Options::guard_storage_time` set, open reads the timing once
+    /// first, and the store's waits end that long after the reading.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
+        let deadline = options
+            .guard_storage_time
+            .map(|time| options.timing.now() + time);
         match checks::judge(&checks::gather(home)?) {
             Judgement::Safe => {}
             Judgement::Unsafe(faults) => {
@@ -249,6 +265,7 @@ impl SqliteStore {
             queue,
             maintenance_lock,
             timing: options.timing,
+            deadline,
             queue_wait: options.queue_wait,
             trace_cap: options.trace_cap,
             views,
@@ -346,9 +363,36 @@ impl SqliteStore {
     }
 
     /// Waits for this thread's turn at a rebuild or view verification, in
-    /// this process and then across processes.
+    /// this process and then across processes, on a guard store no later
+    /// than its deadline.
     pub(crate) fn hold_maintenance(&self) -> Result<Turn<'_>, StoreError> {
-        self.maintenance_lock.wait().map_err(io)
+        self.turn(&self.maintenance_lock)
+    }
+
+    /// A turn of `lock`: waited for as long as it takes on a normal store,
+    /// and on a guard store taken by nonblocking tries until the deadline,
+    /// then refused as `Busy`.
+    fn turn<'s>(&'s self, lock: &'s FileLock) -> Result<Turn<'s>, StoreError> {
+        match acquire(self.deadline, self.timing(), || lock.try_wait()).map_err(io)? {
+            Taken::Held(turn) => Ok(turn),
+            Taken::Block => lock.wait().map_err(io),
+            Taken::Busy => Err(StoreError::Busy),
+        }
+    }
+
+    /// One of the store's two connections, taken as `turn` takes a lock.
+    fn connection<'s>(
+        &'s self,
+        conn: &'s Mutex<Connection>,
+    ) -> Result<MutexGuard<'s, Connection>, StoreError> {
+        let Ok(taken) = acquire(self.deadline, self.timing(), || {
+            Ok::<_, Infallible>(try_lock(conn))
+        });
+        match taken {
+            Taken::Held(conn) => Ok(conn),
+            Taken::Block => Ok(lock(conn)),
+            Taken::Busy => Err(StoreError::Busy),
+        }
     }
 
     /// Runs `action` each time a turn of this store's writer queue has
@@ -405,7 +449,7 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
     ) -> Result<T, StoreError> {
-        let conn = lock(&self.reader);
+        let conn = self.connection(&self.reader)?;
         f(&conn).map_err(sql)
     }
 
@@ -415,7 +459,7 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
-        let conn = lock(&self.reader);
+        let conn = self.connection(&self.reader)?;
         // Dropped unfinished, which ends the read; there is nothing to keep.
         let tx = conn.unchecked_transaction().map_err(sql)?;
         f(&tx)
@@ -425,13 +469,15 @@ impl SqliteStore {
     /// `BEGIN IMMEDIATE`, then the epoch, then `f`, then commit. Anything
     /// that fails, or panics, rolls back. `synchronous=FULL` makes the
     /// commit survive power loss (EVD-R20); that rests on SQLite's
-    /// documented behaviour and is not tested.
+    /// documented behaviour and is not tested. A guard store past its
+    /// deadline answers `Busy` with nothing written, but once `BEGIN
+    /// IMMEDIATE` succeeds no deadline interrupts the transaction.
     pub(crate) fn write<T>(
         &self,
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         let waiting = self.queue_wait.as_ref().map(|_| self.timing.now());
-        let _turn = self.queue.wait().map_err(io)?;
+        let _turn = self.turn(&self.queue)?;
         if let (Some(observer), Some(waiting)) = (&self.queue_wait, waiting) {
             observer(self.timing.now().saturating_sub(waiting));
         }
@@ -449,7 +495,7 @@ impl SqliteStore {
         f: impl FnOnce(&rusqlite::Transaction<'_>, Duration) -> Result<T, StoreError>,
         after: impl FnOnce(T) -> Result<U, StoreError>,
     ) -> Result<U, StoreError> {
-        let turn = self.queue.wait().map_err(io)?;
+        let turn = self.turn(&self.queue)?;
         let acquired = self.timing.now();
         let result = self.transaction(|tx| f(tx, acquired)).and_then(after);
         drop(turn);
@@ -466,7 +512,7 @@ impl SqliteStore {
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.check_fence()?;
-        let mut conn = lock(&self.writer);
+        let mut conn = self.connection(&self.writer)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql)?;
@@ -496,13 +542,7 @@ impl SqliteStore {
     /// or `None` when both are in use. It never waits. A poisoned mutex is
     /// usable, as `lock` treats it.
     pub(crate) fn try_connection(&self) -> Option<MutexGuard<'_, Connection>> {
-        [&self.writer, &self.reader]
-            .into_iter()
-            .find_map(|conn| match conn.try_lock() {
-                Ok(guard) => Some(guard),
-                Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-                Err(TryLockError::WouldBlock) => None,
-            })
+        [&self.writer, &self.reader].into_iter().find_map(try_lock)
     }
 
     /// Holds the writer queue and write connection for maintenance outside a transaction.
@@ -511,8 +551,8 @@ impl SqliteStore {
         f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.check_fence()?;
-        let _turn = self.queue.wait().map_err(io)?;
-        let mut conn = lock(&self.writer);
+        let _turn = self.turn(&self.queue)?;
+        let mut conn = self.connection(&self.writer)?;
         f(&mut conn)
     }
 }
@@ -652,6 +692,16 @@ fn quick_check(conn: &Connection) -> Result<Vec<String>, String> {
 /// transaction left it: rolled back. Nothing to repair.
 pub(crate) fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     conn.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The connection if it is free now, never waiting. A poisoned mutex is
+/// usable, as `lock` treats it.
+fn try_lock(conn: &Mutex<Connection>) -> Option<MutexGuard<'_, Connection>> {
+    match conn.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 pub(crate) fn sql(error: rusqlite::Error) -> StoreError {
@@ -1248,6 +1298,90 @@ mod tests {
         release.send(()).expect("release");
         handle.join().expect("writer thread").expect("write");
         assert_eq!(rows, Ok(Ok(0)));
+    }
+
+    /// A guard store over a home a normal open made, with 1.5 s of storage
+    /// time on a timing that steps 100 ms a reading, so a bounded wait ends
+    /// after a few readings and no real time.
+    fn guard(home: &Path) -> Arc<SqliteStore> {
+        drop(open(home));
+        Arc::new(
+            SqliteStore::open(
+                home,
+                AT,
+                Options {
+                    timing: crate::queue::scripted::Scripted::stepping(Duration::from_millis(100)),
+                    guard_storage_time: Some(Duration::from_millis(1_500)),
+                    ..Options::default()
+                },
+            )
+            .expect("guard open"),
+        )
+    }
+
+    /// Runs `call` through `store` on its own thread while the test holds
+    /// `held`, and gives back its answer, or `None` when none came in time,
+    /// so a call that blocks fails instead of hanging the suite. `held` is
+    /// released before the thread is joined.
+    fn answer_while<H, T: Send + 'static>(
+        store: &Arc<SqliteStore>,
+        held: H,
+        call: impl FnOnce(&SqliteStore) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (send, answer) = mpsc::channel();
+        let caller = Arc::clone(store);
+        let handle = thread::spawn(move || send.send(call(&caller)).expect("send"));
+        let answered = answer.recv_timeout(Duration::from_secs(5)).ok();
+        drop(held);
+        handle.join().expect("call thread");
+        answered
+    }
+
+    // Catches a guard write that blocks on the write connection's mutex
+    // while another thread of its process holds it.
+    #[test]
+    fn a_guard_write_blocks_on_a_held_write_connection() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let held = lock(&store.writer);
+        let answer = answer_while(&store, held, |store| store.record_trace(&trace("late")));
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a guard read that blocks on the read connection's mutex.
+    #[test]
+    fn a_guard_read_blocks_on_a_held_read_connection() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let held = lock(&store.reader);
+        let answer = answer_while(&store, held, SqliteStore::epoch);
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+    }
+
+    // Catches a guard write that blocks on the in-process lock while another
+    // thread of the same store holds a queue turn.
+    #[test]
+    fn a_guard_write_blocks_on_its_own_stores_queue_turn() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let held = store.queue.wait().expect("turn");
+        let answer = answer_while(&store, held, |store| store.record_trace(&trace("late")));
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a guard write that blocks in `flock` while a second store on
+    // the same home, with its own open lock file, holds the writer queue.
+    #[test]
+    fn a_guard_write_blocks_on_another_stores_queue_turn() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let other = open(home.path());
+        let held = other.queue.wait().expect("turn");
+        let answer = answer_while(&store, held, |store| store.record_trace(&trace("late")));
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(trace_rows(home.path()), 0);
     }
 
     // With a gap in the ids, as a purge leaves, the trace still keeps its

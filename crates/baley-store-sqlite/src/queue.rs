@@ -9,12 +9,17 @@
 //! start to end, so two of them never interleave, while commands, which do
 //! not take it, go on between their batches. `File::lock` is `flock` on
 //! Unix.
+//!
+//! A store opened for the guard never blocks on either lock. It tries the
+//! in-process lock and then `File::try_lock`, `flock` with `LOCK_NB`, and
+//! tries again after a short pause until its storage time is spent, when it
+//! answers `StoreError::Busy`.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 /// An exclusive lock shared by the threads of this process and by other
@@ -63,6 +68,25 @@ impl FileLock {
             lock: self,
             local: Some(local),
         })
+    }
+
+    /// This thread's turn if it is free now, in this process and then across
+    /// processes, or `None` when another holds it. It never waits.
+    pub(crate) fn try_wait(&self) -> io::Result<Option<Turn<'_>>> {
+        let local = match self.local.try_lock() {
+            Ok(local) => local,
+            // A panic during an earlier turn leaves nothing to repair here.
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return Ok(None),
+        };
+        match self.file.try_lock() {
+            Ok(()) => Ok(Some(Turn {
+                lock: self,
+                local: Some(local),
+            })),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(error)) => Err(error),
+        }
     }
 
     /// Runs `action` each time a turn of this lock has been released, in
@@ -154,10 +178,6 @@ pub(crate) fn pause_for(held: Duration) -> Duration {
 pub(crate) const RETRY_PAUSE: Duration = Duration::from_millis(10);
 
 /// What an acquisition that does not hold its lock yet does next.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the store's acquisitions are not routed here yet")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Next {
     /// Take it with the blocking call, as a normal store always has.
@@ -175,10 +195,6 @@ pub(crate) enum Next {
 /// `remaining` is the storage time left, `None` on a normal store, which
 /// waits as long as it takes and is never busy. A bounded store with no time
 /// left tries nothing, so no new turn begins after its deadline.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the store's acquisitions are not routed here yet")
-)]
 pub(crate) fn next(blocked: bool, remaining: Option<Duration>) -> Next {
     match remaining {
         None => Next::Block,
@@ -189,10 +205,6 @@ pub(crate) fn next(blocked: bool, remaining: Option<Duration>) -> Next {
 }
 
 /// What an acquisition came to.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the store's acquisitions are not routed here yet")
-)]
 pub(crate) enum Taken<T> {
     /// The lock, taken by a nonblocking try.
     Held(T),
@@ -206,10 +218,6 @@ pub(crate) enum Taken<T> {
 /// the lock is taken, as `next` directs. `deadline` is the reading of
 /// `timing` after which a bounded store tries no more. A normal store passes
 /// `None`, reads no clock, makes no try and is told to block.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the store's acquisitions are not routed here yet")
-)]
 pub(crate) fn acquire<T, E>(
     deadline: Option<Duration>,
     timing: &dyn Timing,
