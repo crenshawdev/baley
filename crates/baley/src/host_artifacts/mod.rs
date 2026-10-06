@@ -16,8 +16,10 @@
 //!   take;
 //! - `security`: the sandbox and deny-rule proposal that keeps agents out of
 //!   the home and config folder and off the placed files;
-//! - the coverage judge and the composition with existing settings, added by
-//!   the same task's second plan.
+//! - `coverage`: the judge of what each guarded tool can read and write in
+//!   the folders and the placed files, from a settings document;
+//! - the composition with existing settings, added by the same task's second
+//!   plan.
 //!
 //! Delivery is `baley install`'s (Build 3 T15): where each artifact goes, who
 //! owns the file and how it is written or removed are decided there, with
@@ -44,6 +46,7 @@
 //!   `powershell`), so an executable path in it is quoted for POSIX `sh`. A
 //!   hook `matcher` is a regular expression over tool names.
 
+pub mod coverage;
 pub mod executable;
 pub mod hook;
 pub mod placement;
