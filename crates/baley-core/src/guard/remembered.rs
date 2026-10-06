@@ -19,7 +19,7 @@ pub const GUARD_POLICY_VIEW: &str = "guard_policy";
 /// The first key field: the session project's canonical repository root.
 const PROJECT_FIELD: &str = "project_root";
 /// The second key field: the target checkout's canonical root, `""` when
-/// the cwd is in no checkout. It cannot be `checkout_root`, which the
+/// the commit target is in no checkout. It cannot be `checkout_root`, which the
 /// payload holds as `null` then.
 const CHECKOUT_KEY_FIELD: &str = "checkout_key";
 /// The third key field: the host's name.
@@ -196,7 +196,7 @@ impl Projector for GuardPolicyProjector {
         let (Some(project), Some(host)) = (text(PROJECT_FIELD), text(HOST_FIELD)) else {
             return Err(refuse("project_root or host is missing, not text or empty"));
         };
-        // A `""` checkout would take the key of a cwd in no checkout.
+        // A `""` checkout would take the key of a target in no checkout.
         let checkout = match payload.get("checkout_root") {
             Some(Value::Null) => None,
             Some(Value::String(checkout)) if !checkout.is_empty() => Some(checkout.as_str()),

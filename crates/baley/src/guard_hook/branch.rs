@@ -1,4 +1,4 @@
-//! The current branch at the hook's cwd (design 0010, GRD-R6): git on the
+//! The current branch at the commit's target (design 0010, GRD-R6): git on the
 //! guard's budget, and the bounded `.git/HEAD` read for when git fails.
 
 use crate::git_process::{self, Caller};
@@ -64,7 +64,7 @@ pub(super) fn branch(git: GitRead, head: Option<String>) -> BranchObservation {
         GitRead::Ran(Ok(output)) if output.code() == Some(1) => {
             "current branch is unresolvable or HEAD is detached".to_owned()
         }
-        GitRead::Ran(_) => "Git cannot read the cwd repository".to_owned(),
+        GitRead::Ran(_) => "Git cannot read the target repository".to_owned(),
     };
     match head {
         Some(name) => BranchObservation::Fallback { name, failure },
@@ -96,7 +96,7 @@ fn regular_text(path: &Path) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// The branch `.git/HEAD` names, read from the cwd's checkout without
+/// The branch `.git/HEAD` names, read from the target's checkout without
 /// following a link. Current symbolic identity only; a previous branch
 /// observation is never reused.
 pub(super) fn symbolic_head(cwd: &Path) -> Option<String> {
@@ -221,7 +221,7 @@ mod tests {
             branch(failed, Some("main".into())),
             BranchObservation::Fallback {
                 name: "main".into(),
-                failure: "Git cannot read the cwd repository".into(),
+                failure: "Git cannot read the target repository".into(),
             }
         );
         assert_eq!(

@@ -1,5 +1,5 @@
 //! The commit and push scanner (design 0010, GRD-R3). It reads a shell
-//! command as plain text and names the git verb it runs, or nothing.
+//! command as plain text and names the git verb and commit target, or nothing.
 
 /// A git verb the guard judges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,6 +10,36 @@ pub enum GitVerb {
     Push,
 }
 
+/// The checkout a commit names, before resolving paths at the hook's cwd.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitTarget {
+    /// No repository redirect: use the hook's working directory.
+    Cwd,
+    /// Git's `-C` operands, each relative to the directory before it.
+    Directory(Vec<String>),
+    /// The command does not establish one checkout for every commit.
+    Unestablished,
+}
+
+/// A judged git command, with the checkout when it is a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitCommand {
+    /// A commit aimed at this checkout.
+    Commit(CommitTarget),
+    /// Every push asks, without needing a checkout.
+    Push,
+}
+
+impl GitCommand {
+    /// The verb used by the answer and record.
+    pub fn verb(&self) -> GitVerb {
+        match self {
+            Self::Commit(_) => GitVerb::Commit,
+            Self::Push => GitVerb::Push,
+        }
+    }
+}
+
 /// The git verb a POSIX shell command runs, if it runs one the guard judges.
 ///
 /// The scan is linear and bounded. A command with shell structure it cannot
@@ -17,12 +47,20 @@ pub enum GitVerb {
 /// unclosed quote or a trailing backslash) is declined whole, and a declined
 /// command gives nothing. When a command runs both verbs, push wins.
 pub fn git_verb(command: &str) -> Option<GitVerb> {
+    git_command(command).map(|command| command.verb())
+}
+
+/// Scans the verb and commit target with the grammar of [`git_verb`].
+/// Recognised earlier directory or environment changes make a commit's
+/// target unknown. Other changes leave it at the hook's working directory.
+pub fn git_command(command: &str) -> Option<GitCommand> {
     let mut quote = None;
     let mut word = String::new();
     let mut started = false;
     let mut words = Vec::new();
     let mut push = false;
-    let mut commit = false;
+    let mut commit = None;
+    let mut changed = false;
     let mut chars = command.chars();
     let finish_word = |word: &mut String, started: &mut bool, words: &mut Vec<String>| {
         if *started {
@@ -30,29 +68,59 @@ pub fn git_verb(command: &str) -> Option<GitVerb> {
             *started = false;
         }
     };
-    let segment = |words: &mut Vec<String>, push: &mut bool, commit: &mut bool| {
+    let segment = |words: &mut Vec<String>,
+                   push: &mut bool,
+                   commit: &mut Option<CommitTarget>,
+                   changed: &mut bool| {
+        if changes_commit_target(words) {
+            *changed = true;
+        }
         if words
             .first()
             .is_some_and(|head| head == "git" || head.ends_with("/git"))
         {
             let mut i = 1;
+            let mut directories = Vec::new();
+            let mut unknown = *changed;
             while i < words.len() {
                 let word = &words[i];
-                if matches!(
+                if let Some(attached) = word.strip_prefix("-C") {
+                    let operand = if word == "-C" {
+                        i += 1;
+                        words.get(i).map(String::as_str).unwrap_or_default()
+                    } else {
+                        attached
+                    };
+                    unknown |= operand.is_empty()
+                        || operand.starts_with('~')
+                        || operand.contains(['*', '?', '[']);
+                    directories.push(operand.to_owned());
+                    i += 1;
+                } else if word == "--git-dir" || word.starts_with("--git-dir=") {
+                    unknown = true;
+                    i += if word == "--git-dir" { 2 } else { 1 };
+                } else if matches!(
                     word.as_str(),
-                    "-C" | "-c"
-                        | "--git-dir"
-                        | "--work-tree"
-                        | "--namespace"
-                        | "--exec-path"
-                        | "--config-env"
+                    "-c" | "--work-tree" | "--namespace" | "--exec-path" | "--config-env"
                 ) {
                     i += 2;
                 } else if word.starts_with('-') {
                     i += 1;
                 } else {
                     *push |= word == "push";
-                    *commit |= word == "commit";
+                    if word == "commit" {
+                        let target = if unknown {
+                            CommitTarget::Unestablished
+                        } else if directories.is_empty() {
+                            CommitTarget::Cwd
+                        } else {
+                            CommitTarget::Directory(directories)
+                        };
+                        *commit = Some(match commit.as_ref() {
+                            Some(previous) if previous != &target => CommitTarget::Unestablished,
+                            _ => target,
+                        });
+                    }
                     break;
                 }
             }
@@ -97,7 +165,7 @@ pub fn git_verb(command: &str) -> Option<GitVerb> {
             }
             ';' | '|' | '&' | '\n' => {
                 finish_word(&mut word, &mut started, &mut words);
-                segment(&mut words, &mut push, &mut commit);
+                segment(&mut words, &mut push, &mut commit, &mut changed);
             }
             '(' | ')' | '{' | '}' | '<' | '>' => return None,
             '#' if !started => return None,
@@ -112,12 +180,269 @@ pub fn git_verb(command: &str) -> Option<GitVerb> {
         return None;
     }
     finish_word(&mut word, &mut started, &mut words);
-    segment(&mut words, &mut push, &mut commit);
+    segment(&mut words, &mut push, &mut commit, &mut changed);
     if push {
-        Some(GitVerb::Push)
-    } else if commit {
-        Some(GitVerb::Commit)
+        Some(GitCommand::Push)
     } else {
-        None
+        commit.map(GitCommand::Commit)
+    }
+}
+
+fn changes_commit_target(words: &[String]) -> bool {
+    let mut command = words.iter().skip_while(|word| {
+        word.split_once('=').is_some_and(|(name, _)| {
+            let mut chars = name.chars();
+            chars
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+                && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        })
+    });
+    let Some(head) = command.next() else {
+        return !words.is_empty();
+    };
+    let mut command = std::iter::once(head)
+        .chain(command)
+        .skip_while(|word| matches!(word.as_str(), "builtin" | "command"));
+    match command.next().map(String::as_str) {
+        Some(
+            "cd" | "pushd" | "popd" | "chdir" | "export" | "eval" | "source" | "." | "declare"
+            | "typeset",
+        ) => true,
+        Some("set") => command.any(|word| {
+            word == "allexport"
+                || word
+                    .strip_prefix('-')
+                    .is_some_and(|flags| !flags.starts_with('-') && flags.contains('a'))
+        }),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(command: &str, target: CommitTarget) {
+        assert_eq!(
+            git_command(command),
+            Some(GitCommand::Commit(target)),
+            "{command}"
+        );
+    }
+
+    #[test]
+    fn a_commit_directory_discarded_as_cwd_is_caught() {
+        for command in ["git -C /r commit -m x", "git -C/r commit"] {
+            commit(command, CommitTarget::Directory(vec!["/r".into()]));
+        }
+    }
+
+    #[test]
+    fn chained_commit_directories_dropped_or_reordered_are_caught() {
+        commit(
+            "git -C a -C ../b commit",
+            CommitTarget::Directory(vec!["a".into(), "../b".into()]),
+        );
+    }
+
+    #[test]
+    fn a_commit_without_a_redirect_losing_cwd_is_caught() {
+        commit("git commit", CommitTarget::Cwd);
+    }
+
+    #[test]
+    fn a_commit_message_reuse_option_redirecting_cwd_is_caught() {
+        commit("git commit -C HEAD -m x", CommitTarget::Cwd);
+    }
+
+    #[test]
+    fn a_commit_message_reuse_option_replacing_the_global_directory_is_caught() {
+        commit(
+            "git -C /r commit -C HEAD",
+            CommitTarget::Directory(vec!["/r".into()]),
+        );
+    }
+
+    #[test]
+    fn a_wrapped_directory_change_judged_at_cwd_is_caught() {
+        for command in [
+            "builtin cd /r && git commit",
+            "command cd /r && git commit",
+            "X=1 builtin command cd /r; git commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn a_chdir_before_a_commit_judged_at_cwd_is_caught() {
+        commit("chdir /r && git commit", CommitTarget::Unestablished);
+    }
+
+    #[test]
+    fn an_assignment_prefix_hiding_a_directory_change_is_caught() {
+        commit("X=1 cd /r; git commit", CommitTarget::Unestablished);
+    }
+
+    #[test]
+    fn an_eval_before_a_commit_judged_at_cwd_is_caught() {
+        commit("eval cd /r; git commit", CommitTarget::Unestablished);
+    }
+
+    #[test]
+    fn a_sourced_script_before_a_commit_judged_at_cwd_is_caught() {
+        for command in ["source ./s.sh; git commit", ". ./s.sh; git commit"] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn an_environment_declaration_before_a_commit_judged_at_cwd_is_caught() {
+        for command in [
+            "declare -x GIT_DIR=/r/.git; git commit",
+            "typeset -x GIT_DIR=/r/.git; git commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn an_assignment_only_segment_before_a_commit_judged_at_cwd_is_caught() {
+        for command in [
+            "GIT_DIR=/r/.git; git commit",
+            "X=1 _GIT_DIR2=/r/.git; git commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn enabling_allexport_before_a_commit_judged_at_cwd_is_caught() {
+        for command in [
+            "set -a; git commit",
+            "set -ea; git commit",
+            "set -o allexport; git commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn ordinary_set_flags_poisoning_a_commit_target_are_caught() {
+        for command in ["set -e; git commit", "set -euo pipefail; git commit"] {
+            commit(command, CommitTarget::Cwd);
+        }
+    }
+
+    #[test]
+    fn a_command_lookup_poisoning_a_commit_target_is_caught() {
+        commit("command -v git && git commit", CommitTarget::Cwd);
+    }
+
+    #[test]
+    fn staging_files_poisoning_a_commit_target_is_caught() {
+        commit("git add . && git commit -m x", CommitTarget::Cwd);
+    }
+
+    #[test]
+    fn assignment_arguments_or_invalid_names_poisoning_a_commit_target_are_caught() {
+        for command in [
+            "X=1 echo cd /r; git commit",
+            "echo GIT_DIR=/r/.git; git commit",
+            "1X=value; git commit",
+            "bad-name=value; git commit",
+            "=value; git commit",
+        ] {
+            commit(command, CommitTarget::Cwd);
+        }
+    }
+
+    #[test]
+    fn an_explicit_git_dir_judged_at_cwd_is_caught() {
+        for command in [
+            "git --git-dir=/r/.git commit",
+            "git --git-dir /r/.git commit",
+            "git -C /r --git-dir .git commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn a_commit_after_a_directory_or_environment_change_judged_at_cwd_is_caught() {
+        for command in [
+            "cd /r && git commit",
+            "cd /r; git commit",
+            "pushd /r && git commit",
+            "popd; git commit",
+            "export GIT_DIR=/r/.git; git commit",
+            "cd /s && git -C /r commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn an_empty_or_expanding_directory_taken_as_literal_is_caught() {
+        for command in [
+            "git -C ~/r commit",
+            "git -C 'r*' commit",
+            "git -C 'r?' commit",
+            "git -C 'r[ab]' commit",
+            "git -C '' commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn a_work_tree_or_config_option_redirecting_the_checkout_is_caught() {
+        for command in [
+            "git --work-tree=/w commit",
+            "git --work-tree /w commit",
+            "git -c a=b commit",
+        ] {
+            commit(command, CommitTarget::Cwd);
+        }
+    }
+
+    #[test]
+    fn directory_changes_in_arguments_or_after_the_commit_poisoning_its_target_are_caught() {
+        for command in [
+            "echo cd /r; git commit",
+            "echo pushd /r; git commit",
+            "echo popd; git commit",
+            "echo export GIT_DIR=/r/.git; git commit",
+            "git commit; cd /r",
+        ] {
+            commit(command, CommitTarget::Cwd);
+        }
+    }
+
+    #[test]
+    fn commits_to_different_targets_judged_at_one_checkout_are_caught() {
+        for command in [
+            "git -C /r commit && git -C /s commit",
+            "git commit; git -C /r commit",
+        ] {
+            commit(command, CommitTarget::Unestablished);
+        }
+    }
+
+    #[test]
+    fn repeated_commits_to_the_same_target_losing_the_directory_are_caught() {
+        commit(
+            "git -C /r commit; git -C /r commit",
+            CommitTarget::Directory(vec!["/r".into()]),
+        );
+    }
+
+    #[test]
+    fn an_unknown_commit_target_overriding_a_push_is_caught() {
+        assert_eq!(
+            git_command("cd /r; git commit && git push"),
+            Some(GitCommand::Push)
+        );
     }
 }
