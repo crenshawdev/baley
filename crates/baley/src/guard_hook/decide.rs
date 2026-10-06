@@ -454,6 +454,35 @@ mod tests {
     }
 
     #[test]
+    fn a_read_grep_or_glob_target_resolved_from_anywhere_but_the_hook_cwd_is_caught() {
+        // From the hook's cwd these reach the config folder; from the
+        // project or the config folder they reach nothing that exists.
+        let config_file = format!("{CONFIG}/config.toml");
+        for (tool, path, reached) in [
+            (PathTool::Read, "baley/config.toml", config_file.as_str()),
+            (PathTool::Grep, "baley", CONFIG),
+            (PathTool::Glob, "baley", CONFIG),
+        ] {
+            let call = HookInput::Path {
+                envelope: envelope("/u/.config/crenshawdev"),
+                target: PathTarget {
+                    tool,
+                    path: Some(path.into()),
+                    pattern: None,
+                },
+            };
+            let decided = decided(next(&call, &context(Some("/p")), &Seen::default(), &disk()));
+            let Answer::Deny(reason) = &decided.answer else {
+                panic!("{} denied: {:?}", tool.name(), decided.answer);
+            };
+            assert!(
+                reason.contains(&format!("reaches {reached}, which")),
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
     fn a_monitor_watch_or_a_declined_command_selected_for_recording_is_caught() {
         let watch = HookInput::Watch(envelope("/q"));
         let declined = bash("git commit -m \"$(date)\"");

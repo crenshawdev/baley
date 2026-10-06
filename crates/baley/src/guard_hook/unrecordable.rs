@@ -140,6 +140,13 @@ mod tests {
     }
 
     #[test]
+    fn the_cwd_recorded_as_the_project_directory_when_none_was_given_is_caught() {
+        let recorded = caller(&envelope(), &Ok(None)).expect("recordable");
+        assert_eq!(recorded.project_directory(), None);
+        assert_eq!(recorded.working_directory(), "/q");
+    }
+
+    #[test]
     fn a_busy_or_unbuilt_store_read_as_recorded_or_naming_no_command_is_caught() {
         let (busy, line) = store_failure(&StoreError::Busy);
         assert_eq!(busy, AuditPrecondition::Unrecordable);
