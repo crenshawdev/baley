@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T9 merged, as of origin/main `d5666717`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T9 merged, as of main `4248c31a`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its implementation belongs to #49, #50 and #54. Each build pull request updates this roadmap.
 
 ## The path to the first release
 
@@ -17,7 +17,7 @@ flowchart TB
     B7["Build 7: Next action and progress<br/>#28"]
     B8["Build 8: Search, why and support work<br/>#29"]
     B9["Build 9: Removal<br/>#30"]
-    OTHER["11 other open issues:<br/>designs, upkeep, bugs"]
+    OTHER["10 other open issues:<br/>upkeep, docs, bugs"]
     R1["Release design<br/>#14"]
     R2["Live acceptance run on Claude Code"]
     R3["Publish and install"]
@@ -37,7 +37,7 @@ flowchart TB
     class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. The 11 other issues block the release design; the seven Build 3 findings are listed below but have no GitHub dependency link to it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. The 10 other issues remaining once #47 closes with this design's landing block the release design; the seven Build 3 findings are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -333,18 +333,14 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 Every issue here except the Build 3 findings blocks the release design #14. GitHub links none of the seven Build 3 findings to #14. "Carried by" means that build does the fix.
 
-### Designs
-
-The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) has landed in [0015](design/0015-repository-upkeep-and-build-gate.md). The release design #14 is covered above.
-
 ### Upkeep and docs
 
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#44](https://github.com/crenshawdev/baley/issues/44) | Start the architecture overview | Evidence | None |
-| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI | Encyclopedists | Design landed in [0015](design/0015-repository-upkeep-and-build-gate.md); formatting prerequisite #53 closed |
-| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | Design landed in [0015](design/0015-repository-upkeep-and-build-gate.md) |
-| [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | Design landed in [0015](design/0015-repository-upkeep-and-build-gate.md) |
+| [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI; set six-job build and test limits | Encyclopedists | None |
+| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | None |
+| [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | None |
 
 ### Bugs
 
@@ -371,7 +367,7 @@ The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/4
 
 ## Milestones
 
-Counts as of 2026-10-05, with #134 and #47 closed by their designs landing on 2026-10-06. Encyclopedists was rechecked on 2026-10-06 and includes #47's closure.
+Counts from GitHub on 2026-10-06, with #47 counted as closed when this design lands. Encyclopedists therefore shows four closed and three open issues.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
@@ -389,5 +385,5 @@ What the records leave open or do not say.
 
 - Builds 4 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
 - There is no first version number. The release design #14 picks it.
-- #44 was meant to land before Build 1 T10, which has merged. The #47 design has landed in [0015](design/0015-repository-upkeep-and-build-gate.md), satisfying the design prerequisite stated by #49, #50 and #54; GitHub has no dependency link for them. No order is given for bug #70.
+- #44 was meant to land before Build 1 T10, which has merged. No order is given for bug #70.
 - The board's Status field is set only on the build issues, #40 and #14.
