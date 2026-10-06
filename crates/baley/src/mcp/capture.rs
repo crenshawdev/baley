@@ -998,11 +998,12 @@ mod tests {
     /// The caller a capture with `arguments` is prepared under.
     fn prepared_caller(arguments: &Value) -> ServerCaller {
         let judged = judge_arguments(arguments).unwrap();
-        observe_preparation(&judged)
+        observe_preparation(&judged).0
     }
 
-    /// Observes preparation's caller without running its external operations.
-    fn observe_preparation(judged: &JudgedCapture) -> ServerCaller {
+    /// Observes the caller and the write request handed to preparation
+    /// without running its external operations.
+    fn observe_preparation(judged: &JudgedCapture) -> (ServerCaller, Option<WriteRequest>) {
         prepare_capture(
             judged,
             &caller(),
@@ -1011,7 +1012,7 @@ mod tests {
             Host::ClaudeCode,
             T1,
             &mut crate::process::Recorded::new(),
-            |_, selected, _, _, _, _, _| selected.clone(),
+            |_, selected, request, _, _, _, _| (selected.clone(), request.cloned()),
         )
     }
 
@@ -1053,7 +1054,7 @@ mod tests {
             instruction: Some(evidence.clone()),
         };
         // Observe the input at preparation, before it returns a domain command.
-        let observed = observe_preparation(&judged);
+        let (observed, _) = observe_preparation(&judged);
         assert_eq!(observed.instructions(), &[evidence]);
         assert_eq!(
             observed,
@@ -1061,6 +1062,16 @@ mod tests {
                 .with_instructions(judged.instruction.into_iter().collect())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn preparation_handed_no_write_request_or_another_captures_request_is_caught() {
+        let judged = judge_arguments(&arguments(json!({}))).unwrap();
+        let (_, request) = observe_preparation(&judged);
+        let request = request.expect("a capture is prepared as a write");
+        assert_eq!(request.kind, CommandKind(CAPTURE_COMMAND.into()));
+        assert_eq!(request.request_id, RequestId(REQUEST.into()));
+        assert_eq!(request, judged.request);
     }
 
     #[test]
