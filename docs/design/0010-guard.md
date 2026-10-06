@@ -22,7 +22,7 @@ This area decides what Baley does at the host's edge, before a tool call an agen
 
 It does not decide the lease itself or what an out-of-lease commit does at task close ([0006](0006-execution.md)); which branch work happens on or how landing pushes ([0011](0011-milestones-landing-undo-pause.md)); risk detection ([0009](0009-risk.md)); or how stubs are rendered and installed ([0012](0012-host-interface.md)).
 
-Hand-offs: 0003 gives the guard project discovery and the settings it reads; 0006 gives it the active lease; 0012 installs the hook and the sandbox configuration; the ledger (0001) stores every guard outcome.
+Hand-offs: 0003 gives the guard project discovery and the settings it reads; 0006 gives it the active lease; 0012 installs the hook and the sandbox configuration; the ledger (0001) stores every guard record, in the per-user project `user`.
 
 In the component view of [0002](0002-system-design.md) (Figure 4) the guard is the third way into the host interface, beside the MCP server and the command line.
 
@@ -70,7 +70,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | Owner | An `ask` put by the host | Yes or no, in the host | Not applicable |
 | Agent (any worker or the session) | A denied or held tool call with its reason | Nothing; it does not argue with the guard | Not applicable |
 | Baley guard | The hook input | pass, ask, deny, pass on failure | Not applicable |
-| Ledger | Guard records | | Not applicable |
+| Ledger | Guard records, in the per-user project `user` | The answer recorded under a call id, and the denials remembered for torn settings | Not applicable |
 
 No model is dispatched by this area.
 
@@ -99,13 +99,22 @@ No model is dispatched by this area.
   | `Write`, `Edit` | `file_path` |
   | `NotebookEdit` | `notebook_path` |
 
-- **Outputs:** nothing for pass and pass on failure; for ask and deny, Claude Code's permission form with the reason.
+  From its environment it reads `CLAUDE_PROJECT_DIR`, kept as given for the record.
+- **Project and target:** the policy comes from the session project at `CLAUDE_PROJECT_DIR`, found by the walk of GRD-R2. The hook's working directory gives the branch, read from the checkout it is in, and the base that tool targets resolve against. A second walk, from the working directory, finds that checkout's `baley.toml`, which the file guard protects beside the session project's.
+- **Policy reads:** only a commit in a project reads a policy, after its branch. The guard reads the global `config.toml` and the working tree's `baley.toml`, each to at most 1 MiB, and HEAD's copy of `baley.toml` at the session project's root through the bounded git reader, and merges them with Claude Code's `[host.claude-code]` sections. A file over the cap, a working-tree file it cannot read, and a config folder it cannot find each make the settings torn. It admits no checkout, runs no policy step and records no `policy.effective`.
+- **Recording:** a guard record is one `guard.record` command in the per-user project `user`, on stream `guard`, at policy version 0, by `baley`, with the hook form of the caller.
+  - A command with a `commit` or `push` verb, or a `PowerShell` call, in a project first looks up the answer recorded under its call id, on a short store open of its own before any git or policy read. A replay is answered from the record, with no git or policy read and nothing appended. With no `user` there is no record, and the lookup creates none.
+  - An answer to record takes a second short open for the audit transaction, which creates `user` when it is missing.
+  - Inside the transaction the call's `guard` document is read again before anything is appended, so a replay or a clash appends nothing.
+  - Under torn settings the remembered denials are read there, and only there, and the commit is judged again with them. Under a complete policy, `guard.policy_recorded` is appended beside `guard.answered` when the denials changed.
+  - A new answer counts as recorded only once the transaction commits.
+- **Outputs:** per the renderer (GRD-R12). An ask or deny is a `hookSpecificOutput` decision on stdout with exit 0. A plain pass prints nothing and exits 0. A pass on failure prints its reason on stderr and exits 0. When an ask or deny cannot be written to stdout, the guard exits 2 with the reason on stderr, which blocks the call. Each unrecordable decision adds one loud stderr line naming its cause.
 - **Refusals (as answers):**
 
   | Answer | When | Requirement |
   |---|---|---|
   | `ask` | push; protected commit under `ask`; torn settings; a `PowerShell` call in a project | GRD-R3, GRD-R4, GRD-R5, GRD-R7 |
-  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write, Edit or NotebookEdit to Baley's home or config folder, a protected `baley.toml` or a stub, or, once Build 5 supplies the lease, outside it during a dispatch; a `Read`, `Grep` or `Glob` call whose target or pattern reaches either folder, with or without a project; malformed, oversized or incomplete input for one of the six path tools; an unrecordable ask, a missing call id included | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11, GRD-R13, GRD-R14 |
+  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write, Edit or NotebookEdit to Baley's home or config folder, a protected `baley.toml` or a stub, or, once Build 5 supplies the lease, outside it during a dispatch; a `Read`, `Grep` or `Glob` call whose target or pattern reaches either folder, with or without a project; malformed, oversized or incomplete input for one of the six path tools; standard input that cannot be read at all; a path call when Baley's home and config folders cannot be found; an unrecordable ask: a write that fails, a guard store busy past its storage time, views that need a rebuild, no call id or a caller text that cannot be recorded as given, a call id answered before for other input, or Baley's home folder unresolved | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11, GRD-R13, GRD-R14 |
   | `pass on failure` | git or branch unreadable without hard fail | GRD-R6 |
   | `pass` | everything else, including a declined or unreadable command, a `Monitor` watch, and any `Bash`, `Monitor` or `PowerShell` call outside a project | GRD-R2, GRD-R3 |
 
@@ -115,7 +124,7 @@ No model is dispatched by this area.
   - storage waits at most 2 seconds in total, and never past the end of the work time.
   - at least 1 second after the work, for ending and reaping a child and writing the answer.
 - **Programs:** git is the only program the guard starts: `symbolic-ref` for the branch, and `rev-parse`, `ls-tree` and `cat-file` for HEAD's copy of `baley.toml`, each in its own process group and killed at its timeout. The launch validator accepts a guard launch only at the timeout its budget grant gave it, above zero and at most 5 seconds. Every other caller keeps its exact registered deadline.
-- **Storage:** the guard opens the ledger with a storage time. It takes the writer queue and its connections by nonblocking tries until that time is spent, and runs each statement with SQLite's busy timeout set to the storage time left when the statement starts. A wait past the storage time answers busy. A project whose views are behind this binary's answers needs-rebuild, and the guard never rebuilds them and never takes the maintenance lock. A project with no events gets its first stamps in the guard's own bounded writer turn. Busy and needs-rebuild both leave the decision unrecordable (GRD-R9). Once a write transaction has begun, it runs to commit or rollback, and no deadline interrupts it.
+- **Storage:** the guard opens the ledger at most twice, for the lookup and for the audit transaction, each time on the storage time its budget has left and charged the time the open and its work took, so no open is held while git runs. Each open takes the writer queue and its connections by nonblocking tries until that time is spent, and runs each statement with SQLite's busy timeout set to the storage time left when the statement starts. A wait past the storage time answers busy. A project whose views are behind this binary's answers needs-rebuild, and the guard never rebuilds them and never takes the maintenance lock. A project with no events gets its first stamps in the guard's own bounded writer turn. Busy and needs-rebuild both leave the decision unrecordable (GRD-R9). Once a write transaction has begun, it runs to commit or rollback, and no deadline interrupts it.
 
 ### baley doctor (the guard's part)
 
@@ -125,31 +134,47 @@ No model is dispatched by this area.
 
 ## 6. Records
 
-### guard.answered (event, `project` stream; `guard` stream for calls outside a project that still denied)
+### guard.answered (event, per-user project `user`, `guard` stream)
+
+One recorded answer: an ask, a deny or a pass on failure, version 1. It is appended by a `guard.record` command at policy version 0 by `baley`, whose caller is the hook form ([0012](0012-host-interface.md) section 6). The session project is a fact here and in the caller, never the ledger project, so recording needs no project in this machine's ledger.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `call` | session id, call id | The hook call, for redelivery |
-| `tool` | `bash`, `monitor`, `powershell`, `read`, `grep`, `glob`, `write`, `edit`, `notebookedit` | |
-| `command_digest` or `path` | digest, path | Never the command text |
-| `cwd` | path | |
-| `verb` | `commit`, `push`, absent | |
-| `branch` | name or unknown | |
-| `policy` | table | `on_protected`, `protected_branches`, `guard_hard_fail` as read, and which file each came from, or `torn` |
+| `host` | text | `claude-code` |
+| `session` | text or null | The host's own session id, null when the call had none |
+| `call` | text | The host's call id, `tool_use_id` |
+| `project_directory` | text or null | `CLAUDE_PROJECT_DIR` as the host gave it, null when unset |
+| `cwd` | path | The hook's working directory |
+| `tool` | `Bash`, `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob`, `Write`, `Edit`, `NotebookEdit` | The tool's name as the host gives it |
+| `input_digest` | hex SHA-256 | Of the canonical JSON of the tool's name and the input fields the guard read (section 5). Never the command text |
+| `target` | path or null | A path tool's resolved target, as text |
+| `verb` | `commit`, `push` or null | |
+| `branch` | name or null | The branch git read, or the one `.git/HEAD` named |
+| `settings` | object or null | A complete policy's `protected_branches`, `on_protected` and `hard_fail`; or `torn`, naming the torn file in Baley's words with git's excerpt replaced by `[redacted]`; or null when no settings were read, as for a push, a `PowerShell` ask or a path answer |
 | `outcome` | `ask`, `deny`, `pass-on-failure` | |
-| `reason` | text | |
-| `unavailable` | list | Inputs that could not be read |
+| `reason` | text | The reason, with git's excerpt redacted as in `settings` |
 
-### guard.policy_recorded (event, `project` stream)
+### guard.policy_recorded (event, per-user project `user`, `guard` stream)
 
-The last complete policy read, kept for GRD-R7. The `guard_policy` view holds the latest per project.
+The denials of the last complete policy for one session project, target checkout and host, kept for GRD-R7, version 1. It is appended only inside the transaction that appends a `guard.answered`, and only when the denials differ from those remembered under its key, so a newer complete policy with no denial clears an older `refuse`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `project_root` | path | The session project's canonical repository root |
+| `checkout_root` | path or null | The canonical root of the checkout the hook's working directory is in, null when it is in none |
+| `host` | text | `claude-code` |
+| `refuse` | bool | Whether `git.on_protected` was `refuse` |
+| `hard_fail` | bool | Whether `git.guard_hard_fail` was on |
+| `protected_branches` | list | `git.protected_branches`, kept only when `refuse` or `hard_fail` is set, and empty otherwise |
 
 ### Views
 
+Both views live in `user`, and each keeps the latest event for its key.
+
 | View | Key | Content |
 |---|---|---|
-| `guard` | project, call | The confirmed answer for redelivery |
-| `guard_policy` | project | The remembered policy, denials only |
+| `guard` | host, session (`""` for none), call id | The confirmed answer: input digest, project directory, working directory, outcome, reason and the event's sequence. Read before git for a redelivery, and again inside the audit transaction |
+| `guard_policy` | session project root, target checkout root (`""` for none), host | The remembered denials only: `refuse`, `hard_fail`, and the protected list when either is set. Read only under torn settings, inside the audit transaction |
 
 ## 7. States
 
@@ -157,23 +182,28 @@ The last complete policy read, kept for GRD-R7. The `guard_policy` view holds th
 stateDiagram-v2
   [*] --> Received: hook call
   Received --> Silent: no project (a PowerShell call included), or no commit or push verb, or a declined or unreadable command, or a Monitor watch
+  Received --> Replayed: in a project, an answer recorded under this call id for the same input, project directory and cwd
   Received --> Ask: PowerShell call in a project
   Received --> Deciding: project found, verb found
   Deciding --> Ask: push, or protected commit under ask, or torn settings
   Deciding --> Deny: protected commit under refuse, or hard fail, or remembered denial
   Deciding --> PassOnFailure: git or branch unreadable
   Deciding --> Pass: unprotected commit, or protected commit under allow
-  Ask --> Recorded: guard.answered
-  Deny --> Recorded: guard.answered
-  PassOnFailure --> Recorded: guard.answered
-  Ask --> Deny: decision cannot be recorded
+  Ask --> Recorded: guard.answered in user
+  Deny --> Recorded: guard.answered in user
+  PassOnFailure --> Recorded: guard.answered in user
+  Ask --> Unrecordable: the write fails, the store is busy or needs a rebuild, no call id or no home folder, or the call id was answered for other input
+  Deny --> Unrecordable: the same causes
+  PassOnFailure --> Unrecordable: the same causes
+  Unrecordable --> Answered: an ask becomes a deny, a deny or a pass on failure stands, with one loud stderr line
   Recorded --> Answered: host form rendered
+  Replayed --> Answered: the recorded answer rendered
   Silent --> [*]
   Pass --> [*]
   Answered --> [*]
 ```
 
-*Figure 1. States of one command guard call.*
+*Figure 1. States of one command guard call. A path call that the file or read guard denies is recorded and answered the same way. The lookup for a replay comes before any git or policy read, and the audit transaction looks again before it appends, so a call that another delivery answered first gets that answer instead of a second record.*
 
 ## 8. Workflows
 
@@ -185,26 +215,32 @@ sequenceDiagram
   participant L as Ledger
   participant O as Owner
   A->>H: Bash: git push origin main
-  H->>G: hook (tool, command, cwd, session, call id)
-  G->>G: walk up to baley.toml
+  H->>G: hook (tool, command, cwd, session, call id), with CLAUDE_PROJECT_DIR set
+  G->>G: walk up from CLAUDE_PROJECT_DIR to baley.toml
   alt no project
     G-->>H: nothing (pass)
     H->>A: runs
   else
     G->>G: scan: verb push
-    G->>L: guard.answered ask
-    alt record fails
-      G-->>H: deny, reason: could not record
-      H->>A: blocked
-    else
-      G-->>H: ask, reason
-      H->>O: allow this push?
-      O->>H: yes or no
+    G->>L: look up the call id in the guard view of user
+    alt answered before for the same input, project directory and cwd
+      L-->>G: the recorded answer
+      G-->>H: that answer, with no git or policy read
+    else not recorded yet
+      G->>L: in user, read the guard view again, then append guard.answered ask
+      alt the record fails, the store is busy or needs a rebuild, or the call id was answered for other input
+        G-->>H: deny, reason: could not record, with a loud stderr line
+        H->>A: blocked
+      else recorded
+        G-->>H: ask, reason
+        H->>O: allow this push?
+        O->>H: yes or no
+      end
     end
   end
 ```
 
-*Figure 2. A push through the guard.*
+*Figure 2. A push through the guard. The lookup and the record are two short store opens, and the record is one `guard.record` command in `user` at policy version 0. A call with no call id never reaches the record, and its ask is denied the same way.*
 
 ```mermaid
 sequenceDiagram
@@ -214,16 +250,24 @@ sequenceDiagram
   participant L as Ledger
   A->>H: Bash: git commit -S -m "feat(T3): ..."
   H->>G: hook
-  G->>G: project, verb commit, read settings
+  G->>G: project from CLAUDE_PROJECT_DIR, verb commit
+  G->>L: look up the call id in the guard view of user
+  break answered before for the same input, project directory and cwd
+    G-->>H: the recorded answer, with no git or policy read
+  end
+  G->>G: branch at the cwd, then the project's bounded settings with Claude Code's sections
   alt settings torn
-    G->>L: guard_policy view
+    G->>L: in the audit transaction, the guard_policy view for this project root, checkout root and host
     alt remembered denial for this branch
+      G->>L: guard.answered deny
       G-->>H: deny
     else
+      G->>L: guard.answered ask
       G-->>H: ask, naming the torn file
     end
   else branch unreadable
     alt guard_hard_fail and branch provably protected
+      G->>L: guard.answered deny
       G-->>H: deny
     else
       G->>L: guard.answered pass-on-failure
@@ -244,7 +288,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 3. A commit through the guard.*
+*Figure 3. A commit through the guard. Every record here is made in the audit transaction in `user`, after the call's `guard` document is read again. Under a complete policy the same transaction appends `guard.policy_recorded` when the policy's denials differ from those remembered for this project root, checkout root and host. A plain pass records nothing and remembers nothing. When a record cannot be made, an ask becomes a deny and a deny or a pass on failure stands, as in Figure 2.*
 
 ## 9. Settings
 
@@ -285,7 +329,7 @@ Not applicable. The guard gives no instructions; an agent sees only the host's o
 
 The guard's tool-input facts below are not yet measured on Claude Code. The host-matrix probe has observed only the `Bash` input's `command` field. Other names section 5 lists come from Claude Code tool calls seen in session transcripts, and the ones the first item names have not been seen at all. Build 3 T12 measures them live. Until then the guard applies the rule stated with each item.
 
-- **Field names.** No tool call seen so far shows the `tool_input` fields of `Monitor`'s WebSocket form, `PowerShell`, `NotebookEdit`, `Grep`'s `glob` or `Glob`'s `path`. Meanwhile the guard reads the names section 5 lists. A path tool that lacks a field it requires (`file_path`, `notebook_path` or `Glob`'s `pattern`) is denied, so a wrong name for one of those fails closed. `Grep`'s `path` and `glob` and `Glob`'s `path` are optional, so a wrong name for one of them is read as absent: the call is judged against the hook's working directory, or without its `glob`, and can pass. A `Monitor` input with no `command` is a watch and passes, so a wrong name for `Monitor`'s command field would pass a `Monitor` command unjudged. A `PowerShell` call is judged by its tool name and none of its input is read.
+- **Field names.** No tool call seen so far shows the `tool_input` fields of `Monitor`'s WebSocket form, `PowerShell`, `NotebookEdit`, `Grep`'s `glob` or `Glob`'s `path`. Meanwhile the guard reads the names section 5 lists. A path tool that lacks a field it requires (`file_path`, `notebook_path` or `Glob`'s `pattern`) is denied, so a wrong name for one of those fails closed. `Grep`'s `path` and `glob` and `Glob`'s `path` are optional, so a wrong name for one of them is read as absent: the call is judged against the hook's working directory, or without its `glob`, and can pass. A `Monitor` input with no `command` is a watch and passes, so a wrong name for `Monitor`'s command field would pass a `Monitor` command unjudged. A `PowerShell` call is judged by its tool name and none of its input is read, so its input digest holds that name alone. Claude Code's hooks reference, read on 2026-10-06, settles the documented names for two of these: `Monitor` sends `command` or `ws`, which matches how the guard tells a command from a watch, and `PowerShell` sends `command` with the same fields as `Bash`, which the guard leaves unread by design. Neither has been seen in a tool call yet.
 - **Pattern reach.** Whether a `Glob` `pattern` or a `Grep` `glob` can reach outside `path`, and whether either follows symbolic links inside a searched folder, is not known. Meanwhile the guard checks the folders a pattern names before its first wildcard whatever `path` is, refuses a `..` component after a wildcard, and does not look inside the searched folder. Links inside it are left to the sandbox and the `Read` deny rules (GRD-R13).
 - **Absent path.** Whether an absent `Grep` or `Glob` `path` means the hook's working directory is not known. Meanwhile the guard takes it as the working directory.
 - **On-disk case.** Whether `canonicalize` returns the on-disk case of a path on a case-insensitive macOS volume is not known. The identity check in GRD-R11 and GRD-R13 compares existing ancestors by (device, inode), so it covers either answer.
