@@ -176,7 +176,7 @@ flowchart TB
 | Term | Meaning |
 |---|---|
 | Event | One recorded fact. Immutable, typed, attributed, hash-chained. |
-| Stream | The events of one thing that changes over time, such as one plan or one dispatch. Named, for example `plan/5-2`. Each stream has its own version counter. |
+| Stream | The events of one thing that changes over time, such as one phase or one review. Named, for example `phase/5`. Each stream has its own version counter. |
 | Project sequence | The position of an event in its project's ledger. The hash chain follows this order. |
 | Anchor | A copy of a project's chain head (sequence and hash) pushed to the forge as an immutable tag. |
 | View | A keyed collection of documents computed from events, answering one kind of current-state question. |
@@ -406,7 +406,7 @@ Streams used by the record families:
 | `retention` | `payload.reduced`, `payload.purged` |
 | `models` | `models.seeded`, `models.owner_changed`, `models.detected`, `models.detection_failed`. The stream lives only in the reserved per-user project `user`, whose records carry policy version 0 ([0003](0003-configuration-and-routing.md)) |
 
-A plan check records its round-2 work order, scope, selecting policy version, first-check reference, original and revised digests, truth versions and material references in `plan.check_issued` before dispatch ([0005](0005-context-plans-and-acceptance.md), PLN-R16). `plan submit` writes that event on `phase/<n>`; the plan projector records the pending check and its binding. `plan.checked` records the result and completes the pending check. A review records each round's scope and material references in `review.issued` ([0008](0008-review.md), REV-R10). Scope and the work order's baseline, truth-version and policy bindings are inline facts, while source snapshots and review input are payload references. Replaying these records uses their recorded scope and references, without consulting current settings or source files or opening payload bodies. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged. Generated review input and prompts for reviews in 0008 use `material` references. Retention or purge can remove bodies without removing the recorded scope or references. A re-check that needs an unavailable body is refused. `plan.check_issued` is the only additional checker event; it uses the existing phase stream and plan view.
+A plan check records its round-2 work order, scope, selecting policy version, first-check reference, original and revised digests, truth versions and material references in `plan.check_issued` before dispatch ([0005](0005-context-plans-and-acceptance.md), PLN-R16). `plan submit` writes that event on `phase/<n>`; `plan.checked` records the result with its issued binding. Keying and reading a pending binding before a plan number exists, and closing a pending check on draft discard, remain open for Build 4 in 0005 section 12. A review records each round's scope and material references in `review.issued` ([0008](0008-review.md), REV-R10). Scope and the work order's baseline, truth-version and policy bindings are inline facts, while source snapshots and review input are payload references. Replaying these records uses their recorded scope and references, without consulting current settings or source files or opening payload bodies. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged. Generated review input and prompts for reviews in 0008 use `material` references. Retention or purge can remove bodies without removing the recorded scope or references. A re-check that needs an unavailable body is refused. `plan.check_issued` is the only additional checker event; it uses the existing phase stream.
 
 The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-from-the-current-store).
 
@@ -738,7 +738,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 |---|---|---|---|
 | `roadmap` | project | | The ordered phases and their declared stories |
 | `phase` | (project, phase) | status | Status, context, completion and whether it still applies |
-| `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness, and pending or completed check rounds with their work-order binding, scope and material references |
+| `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness, and completed check rounds with their work-order binding, scope and material references |
 | `evidence_map` | (project, phase, plan) | | The acceptance evidence a plan must produce |
 | `admission` | (project, phase) | checkout | What execution may touch, and in which checkout |
 | `dispatch` | (project, dispatch id) | phase, state | Active and ended dispatches, task and suite outcomes |
