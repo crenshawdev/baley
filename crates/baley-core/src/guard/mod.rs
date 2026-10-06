@@ -26,5 +26,5 @@ pub use remembered::{
     DenialParts, GUARD_POLICY_VIEW, GuardPolicyProjector, denial_parts, denials_changed,
     guard_policy_key, guard_policy_spec, remembered_settings,
 };
-pub use scan::{GitVerb, git_verb};
+pub use scan::{CommitTarget, GitCommand, GitVerb, git_command, git_verb};
 pub use settings::{GuardSettings, SettingsInput};
