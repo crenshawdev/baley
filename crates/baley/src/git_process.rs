@@ -2,7 +2,7 @@
 
 use crate::guard_budget::GitGrant;
 use crate::process::{Launch, Output, Process};
-use std::{ffi::OsString, fmt, io, time::Duration};
+use std::{fmt, io, time::Duration};
 
 /// The deadline of every caller that is not the guard's.
 pub const OTHER_GIT_DEADLINE: Duration = Duration::from_secs(60);
@@ -106,11 +106,15 @@ pub struct Limit {
 
 impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // To the millisecond: a guard launch runs on whatever its budget had
+        // left, which is rarely whole seconds.
+        let millis = self.bound.as_millis();
+        let seconds = format!("{}.{:03}", millis / 1000, millis % 1000);
+        let seconds = seconds.trim_end_matches('0').trim_end_matches('.');
         write!(
             f,
-            "{} exceeded git deadline of {} seconds",
-            self.command,
-            self.bound.as_secs()
+            "{} exceeded git deadline of {seconds} seconds",
+            self.command
         )
     }
 }
@@ -132,39 +136,26 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Interpret one completion; only an explicit timeout observation is a limit.
-pub fn finish(
-    caller: Caller,
-    args: &[OsString],
-    answer: io::Result<Output>,
-) -> Result<Output, Error> {
-    let (Deadline::Exact(bound) | Deadline::Guard(bound)) = deadline(caller);
-    answer.map_err(|error| {
-        if error.kind() == io::ErrorKind::TimedOut {
-            Error::Limit(Limit {
-                command: format!(
-                    "git {}",
-                    args.iter()
-                        .map(|arg| arg.to_string_lossy())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ),
-                bound,
-            })
-        } else {
-            Error::Io(error)
-        }
+/// Interpret one completion. Only an explicit timeout observation of a launch
+/// that had a timeout is a limit, stated at the timeout that launch ran under.
+pub fn finish(launch: &Launch, answer: io::Result<Output>) -> Result<Output, Error> {
+    answer.map_err(|error| match launch.timeout {
+        Some(bound) if error.kind() == io::ErrorKind::TimedOut => Error::Limit(Limit {
+            command: format!("git {}", launch.argument_text()),
+            bound,
+        }),
+        _ => Error::Io(error),
     })
 }
 
 pub fn run(launch: &Launch, process: &mut dyn Process) -> Result<Output, Error> {
-    let caller = launch.git_caller().ok_or_else(|| {
-        Error::Io(io::Error::new(
+    if launch.git_caller().is_none() {
+        return Err(Error::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             "git launch requires a registered caller",
-        ))
-    })?;
-    finish(caller, &launch.args, process.run(launch))
+        )));
+    }
+    finish(launch, process.run(launch))
 }
 
 #[cfg(test)]

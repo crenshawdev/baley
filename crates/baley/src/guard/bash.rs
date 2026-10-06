@@ -503,7 +503,7 @@ mod tests {
         let (branch, failures) = super::branch_answer(Err(baley::git_process::Error::Limit(
             baley::git_process::Limit {
                 command: "git symbolic-ref --quiet --short HEAD".into(),
-                bound: std::time::Duration::from_secs(9),
+                bound: Duration::from_millis(750),
             },
         )));
         assert_eq!(branch, None);
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(failures[0].input, "Git");
         assert_eq!(
             failures[0].reason,
-            "git symbolic-ref --quiet --short HEAD exceeded git deadline of 9 seconds"
+            "git symbolic-ref --quiet --short HEAD exceeded git deadline of 0.75 seconds"
         );
     }
 }
