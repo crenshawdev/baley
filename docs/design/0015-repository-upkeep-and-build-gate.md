@@ -128,13 +128,13 @@ The names below cover the public and stored surfaces of [#53](https://github.com
 
 | Surface | Names and current source |
 |---|---|
-| Package and executable | `baley`, in [Cargo.toml:2](../../crates/baley/Cargo.toml#L2) and [main.rs:18](../../crates/baley/src/main.rs#L18); Rust paths use `baley::` |
+| Package and executable | `baley`, in [Cargo.toml:2](../../crates/baley/Cargo.toml#L2) and [main.rs:17](../../crates/baley/src/main.rs#L17); Rust paths use `baley::` |
 | MCP server and tools | `baley`, `baley_version`, `baley_query`, `baley_apply`, in [mcp/tools.rs:58-63](../../crates/baley/src/mcp/tools.rs#L58) and [83-120](../../crates/baley/src/mcp/tools.rs#L83) |
-| Session startup and hook command | `baley serve`, in [main.rs:187-200](../../crates/baley/src/main.rs#L187); `baley guard`, in [hooks.json:9](../../hooks/hooks.json#L9) |
-| Inherited environment controls | `BALEY_GLOBAL_CONFIG`: four reads in [guard/mod.rs:123](../../crates/baley/src/guard/mod.rs#L123), [guard/bash.rs:403](../../crates/baley/src/guard/bash.rs#L403), [milestone/release.rs:410](../../crates/baley/src/milestone/release.rs#L410) and [milestone/prune.rs:223](../../crates/baley/src/milestone/prune.rs#L223). Debug-only controls: `BALEY_PRUNE_STOP` in [prune.rs:55](../../crates/baley/src/milestone/prune.rs#L55) and `BALEY_LANDING_EXIT_AFTER_EFFECT` in [landing_service.rs:360](../../crates/baley/src/landing_service.rs#L360) |
-| Inherited configuration paths | `~/.claude/baley/config.v4.json`, in [guard/mod.rs:184](../../crates/baley/src/guard/mod.rs#L184); `baley/providers.env`, in [review/provider/credentials.rs:66](../../crates/baley/src/review/provider/credentials.rs#L66) |
+| Session startup and hook command | `baley serve`, in [main.rs:186-199](../../crates/baley/src/main.rs#L186); `baley guard`, in [hooks.json:9](../../hooks/hooks.json#L9) |
+| Inherited environment controls | `BALEY_GLOBAL_CONFIG`: two reads, in [milestone/release.rs:410](../../crates/baley/src/milestone/release.rs#L410) and [milestone/prune.rs:223](../../crates/baley/src/milestone/prune.rs#L223). Debug-only controls: `BALEY_PRUNE_STOP` in [prune.rs:55](../../crates/baley/src/milestone/prune.rs#L55) and `BALEY_LANDING_EXIT_AFTER_EFFECT` in [landing_service.rs:360](../../crates/baley/src/landing_service.rs#L360) |
+| Inherited configuration paths | `baley/providers.env`, in [review/provider/credentials.rs:66](../../crates/baley/src/review/provider/credentials.rs#L66) |
 | Record markers and hash domain | `baley.rail.receipt.v1`, [rail/receipts.rs:400](../../crates/baley/src/rail/receipts.rs#L400); `baley.rail.observation.v1`, [rail/risk.rs:97](../../crates/baley/src/rail/risk.rs#L97); `baley.native_evidence.v1`, [evidence/persistence.rs:12](../../crates/baley/src/evidence/persistence.rs#L12); `baley.pause.risk-surface.v1`, [pause/risk.rs:14](../../crates/baley/src/pause/risk.rs#L14); `baley.lifecycle`, [derivation/memo.rs:4](../../crates/baley/src/derivation/memo.rs#L4) |
-| Serialized execution names | `baley-query` and `baley-apply`, in [store/writer.rs:2883-2884](../../crates/baley/src/store/writer.rs#L2883); `BALEY-PLAN-BODY`, in [execution/render.rs:583](../../crates/baley/src/execution/render.rs#L583). The hyphenated spellings are stored values, separate from MCP tool names |
+| Serialized execution names | `baley-query` and `baley-apply`, in [store/writer.rs:2853-2854](../../crates/baley/src/store/writer.rs#L2853); `BALEY-PLAN-BODY`, in [execution/render.rs:583](../../crates/baley/src/execution/render.rs#L583). The hyphenated spellings are stored values, separate from MCP tool names |
 | Temporary paths | `.baley-release-`, [milestone/release.rs:541](../../crates/baley/src/milestone/release.rs#L541); `.baley-prune-index-` and `.baley-undo-index-`, [rail/commit.rs:318](../../crates/baley/src/rail/commit.rs#L318) and [380](../../crates/baley/src/rail/commit.rs#L380); `baley-risk-index-`, [pause/git.rs:260](../../crates/baley/src/pause/git.rs#L260); `baley-task-`, [task/mod.rs:32](../../crates/baley/src/task/mod.rs#L32) |
 | Instructions and agent identities | The compiled instruction registry uses `bal-` at [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). The inherited role table contains six roles and thirty role/rung entries at [config/roles.rs:7-60](../../crates/baley/src/config/roles.rs#L7); that table does not prove stubs are installed |
 
@@ -238,9 +238,9 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 
 | Requirement | Status | Where |
 |---|---|---|
-| UPK-R1 | Built | Package, executable and session server: [Cargo.toml:2](../../crates/baley/Cargo.toml#L2), [main.rs:18](../../crates/baley/src/main.rs#L18), [mcp/tools.rs:58-120](../../crates/baley/src/mcp/tools.rs#L58). Instruction registry: [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). Installed stubs are not established by these definitions |
-| UPK-R2 | Not built | The CLI has no installer ([main.rs:24-95](../../crates/baley/src/main.rs#L24)); registration replacement under [0012, HST-R17](0012-host-interface.md#3-requirements) waits on the owner's delivery decision, carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) |
-| UPK-R3 | Built | The definitions in section 6 remain; services are parked at [inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1), and the guard still reads the inherited path at [guard/mod.rs:123](../../crates/baley/src/guard/mod.rs#L123) |
+| UPK-R1 | Built | Package, executable and session server: [Cargo.toml:2](../../crates/baley/Cargo.toml#L2), [main.rs:17](../../crates/baley/src/main.rs#L17), [mcp/tools.rs:58-120](../../crates/baley/src/mcp/tools.rs#L58). Instruction registry: [instruction/mod.rs:65-210](../../crates/baley/src/instruction/mod.rs#L65). Installed stubs are not established by these definitions |
+| UPK-R2 | Not built | The CLI has no installer ([main.rs:23-94](../../crates/baley/src/main.rs#L23)); registration replacement under [0012, HST-R17](0012-host-interface.md#3-requirements) waits on the owner's delivery decision, carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) |
+| UPK-R3 | Built | The definitions in section 6 remain; services are parked at [inherited.rs:1-4](../../crates/baley/src/inherited.rs#L1) |
 | UPK-R4 | Built | The six retained passages and unnamed benchmark material are cited in section 6 |
 | UPK-R5, UPK-Q2 | Not built | [test.yml:15-119](../../.github/workflows/test.yml#L15) defines three jobs and no `fmt`; applied rules require only those three contexts |
 | UPK-R6 | Not built | Exact toolchain at [rust-toolchain.toml:11](../../rust-toolchain.toml#L11); [test.yml](../../.github/workflows/test.yml) has no format job that installs its `rustfmt` component and runs the check |
@@ -261,12 +261,12 @@ These counts include only Rust source lines containing actual `#[test]` or `#[to
 
 | Crate | Test-attribute lines | Files containing those lines |
 |---|---:|---:|
-| `baley` | 2,245 | 172 |
-| `baley-core` | 409 | 14 |
+| `baley` | 2,263 | 177 |
+| `baley-core` | 430 | 14 |
 | `baley-store` | 105 | 11 |
 | `baley-store-sqlite` | 305 | 12 |
 | `baley-bench` | 5 | 2 |
-| Total | 3,069 | 211 |
+| Total | 3,108 | 216 |
 
 The count does not expand macros or resolve binary membership. For example, [ledger/tests.rs:16-22](../../crates/baley/src/ledger/tests.rs#L16) defines an attribute inside a macro, and the store's [conformance macro:249-352](../../crates/baley-store/src/conformance/mod.rs#L249) generates adapter cases. The test count and timing figures in older issues are not measurements of this tree. No compilation, formatter, test, lint or dependency-check execution is claimed by this document's static evidence.
 
