@@ -78,6 +78,7 @@ fn attempt(
         Discovery::Unmanaged { .. } | Discovery::Outside => None,
     };
 
+    check_project_expected(layer, found.is_some(), expected)?;
     let schema = Schema::standard();
     let named: Vec<(&str, &str)> = pairs
         .iter()
@@ -213,15 +214,41 @@ fn attempt(
     })
 }
 
+/// A vanished project after the interview began is a conflict, not a new project.
+fn check_project_expected(
+    layer: FileLayer,
+    has_project: bool,
+    expected: Option<&Expected>,
+) -> Result<(), Render> {
+    if let Some(expected) = expected
+        && layer == FileLayer::Project
+        && !has_project
+    {
+        return Err(changed_since_shown(&expected.path));
+    }
+    Ok(())
+}
+
+/// Names the shown file when its contents changed or it disappeared.
+fn changed_since_shown(path: &Path) -> Render {
+    refusal(format!(
+        "config-conflict: {} changed since it was shown; run the interview again",
+        path.display()
+    ))
+}
+
 /// Binds the interview to its target alone, before any store or write opens.
 fn check_expected(expected: &Expected, target: &Path, digest: Option<&str>) -> Result<(), Render> {
-    if expected.path == target && expected.digest.as_deref() == digest {
-        Ok(())
-    } else {
+    if expected.path != target {
         Err(refusal(format!(
-            "config-conflict: {} changed since it was shown; run the interview again",
+            "config-conflict: the target is now {}, not the {} that was shown; run the interview again",
+            target.display(),
             expected.path.display()
         )))
+    } else if expected.digest.as_deref() != digest {
+        Err(changed_since_shown(&expected.path))
+    } else {
+        Ok(())
     }
 }
 
@@ -496,6 +523,18 @@ mod tests {
     }
 
     #[test]
+    fn a_project_removed_since_shown_is_a_conflict_not_an_init_request() {
+        let expected = shown(Some("a"));
+        let refused =
+            check_project_expected(FileLayer::Project, false, Some(&expected)).unwrap_err();
+        assert_eq!(refused.code, 2);
+        assert_eq!(
+            refused.lines,
+            ["config-conflict: /r/baley.toml changed since it was shown; run the interview again"]
+        );
+    }
+
+    #[test]
     fn an_unchanged_interview_target_is_not_refused() {
         assert!(check_expected(&shown(Some("a")), Path::new("/r/baley.toml"), Some("a")).is_ok());
     }
@@ -520,6 +559,12 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(refused.code, 2);
+        assert_eq!(
+            refused.lines,
+            [
+                "config-conflict: the target is now /r/inner/baley.toml, not the /r/baley.toml that was shown; run the interview again"
+            ]
+        );
     }
 
     #[test]
@@ -532,6 +577,17 @@ mod tests {
         let refused =
             check_expected(&shown(None), Path::new("/r/baley.toml"), Some("a")).unwrap_err();
         assert_eq!(refused.code, 2);
+    }
+
+    #[test]
+    fn an_interview_does_not_recreate_a_file_deleted_since_it_was_shown() {
+        let refused =
+            check_expected(&shown(Some("a")), Path::new("/r/baley.toml"), None).unwrap_err();
+        assert_eq!(refused.code, 2);
+        assert_eq!(
+            refused.lines,
+            ["config-conflict: /r/baley.toml changed since it was shown; run the interview again"]
+        );
     }
 
     fn request(n: u8) -> RequestId {
