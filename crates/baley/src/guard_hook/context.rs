@@ -29,8 +29,8 @@ pub(super) struct HookContext {
     pub project_directory: Result<Option<String>, DirectoryFault>,
     /// The session project, or `None` when nothing is bound.
     pub project: Option<Bound>,
-    /// The root of the checkout the cwd is in, whose branch the hook reads,
-    /// and the checkout half of the remembered-policy key.
+    /// The root of the cwd's checkout, used for remembered denials when a
+    /// commit has no redirect. A redirected commit supplies its own walk.
     pub checkout: Option<PathBuf>,
     /// The paths path tools are judged against, or why Baley's folders could
     /// not be resolved.
@@ -63,7 +63,8 @@ pub(super) fn gather(cwd: &str) -> HookContext {
     )
 }
 
-fn walk(directory: &Path) -> Walk {
+/// Walks a directory for the session context or a commit's target checkout.
+pub(super) fn walk(directory: &Path) -> Walk {
     // A relative path would be walked from this process's own directory.
     if !directory.is_absolute() {
         return Err(format!("{} is not an absolute path", directory.display()));
