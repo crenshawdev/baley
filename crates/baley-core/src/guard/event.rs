@@ -97,7 +97,7 @@ pub enum SettingsFact<'a> {
     Complete(&'a GuardSettings),
     /// The settings file that gave no policy, in words.
     Torn(&'a str),
-    /// No settings were read: a push, a PowerShell ask or a path answer.
+    /// No settings were read, including a commit with an unestablished target.
     Absent,
 }
 
@@ -118,7 +118,7 @@ pub struct AnsweredFacts<'a> {
     pub tool: &'a str,
     /// The call's [`input_digest`]. The command itself is never recorded.
     pub input_digest: &'a str,
-    /// The resolved target path of a path tool, when it resolved.
+    /// A path tool's resolved target or a redirected commit's directory.
     pub target: Option<&'a str>,
     /// The git verb the command runs, when it runs one.
     pub verb: Option<GitVerb>,
@@ -162,7 +162,7 @@ pub fn answered_payload(facts: &AnsweredFacts<'_>, answer: &Answer) -> Option<Va
 }
 
 /// The payload of `guard.policy_recorded`: the key it is remembered under
-/// and the denials kept. `checkout_root` is absent when the cwd is in no
+/// and the denials kept. `checkout_root` is null when the commit target is in no
 /// checkout.
 pub fn policy_recorded_payload(
     project_root: &str,

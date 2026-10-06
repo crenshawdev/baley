@@ -11,6 +11,7 @@
 use super::context::HookContext;
 use super::decide::{Seen, Selected};
 use super::unrecordable::not_recorded;
+use crate::discovery::Discovery;
 use baley_core::catalog::USER_PROJECT;
 use baley_core::guard::{
     Answer, AnsweredFacts, AuditPrecondition, BranchObservation, GUARD_ANSWERED,
@@ -32,21 +33,20 @@ use std::path::Path;
 const REDACTED: &str = "[redacted]";
 
 /// Where a commit's remembered denials are kept: the session project's
-/// canonical root and the canonical root of the checkout the cwd is in.
+/// canonical root and the canonical root of the checkout the commit reaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PolicyKey<'a> {
     /// The session project's repository root.
     pub project_root: &'a str,
-    /// The target checkout's root, or `None` when the cwd is in none.
+    /// The target checkout's root, or `None` when the target is in none.
     pub checkout_root: Option<&'a str>,
 }
 
 /// How the answer to record was judged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Judged<'a> {
-    /// No settings were read: a push, a PowerShell ask or a path answer. It
-    /// is recorded as judged, and no remembered policy is read or written,
-    /// since nothing here is a complete policy.
+    /// No settings were read, including a commit with an unestablished
+    /// target. It is recorded as judged, with no remembered policy access.
     Absent(Answer),
     /// A commit judged under a complete policy. Its denials are remembered
     /// under `key` when they changed.
@@ -97,7 +97,8 @@ impl Judged<'_> {
 /// How `selected`'s answer is recorded, or the line saying why it cannot be.
 /// With no settings read it is recorded as judged. A commit's settings key
 /// its remembered denials by the session project's root and the root of the
-/// checkout the cwd is in, and a root that is not UTF-8 cannot key a record.
+/// checkout the commit reaches. A failed target walk or a root that is not
+/// UTF-8 cannot key a record.
 pub(super) fn judged<'a>(
     answer: Answer,
     selected: &'a Selected,
@@ -115,9 +116,21 @@ pub(super) fn judged<'a>(
         .project
         .as_ref()
         .ok_or_else(|| not_recorded("no session project is bound"))?;
+    let checkout = if selected.target.is_some() {
+        match &seen.target_checkout {
+            Some(Ok(Discovery::Managed { root, .. } | Discovery::Unmanaged { root })) => {
+                Some(root.as_path())
+            }
+            Some(Ok(Discovery::Outside)) => None,
+            Some(Err(cause)) => return Err(not_recorded(cause)),
+            None => return Err(not_recorded("the commit target checkout was not walked")),
+        }
+    } else {
+        context.checkout.as_deref()
+    };
     let key = PolicyKey {
         project_root: text(&project.root)?,
-        checkout_root: context.checkout.as_deref().map(text).transpose()?,
+        checkout_root: checkout.map(text).transpose()?,
     };
     match (settings, &seen.branch, selected.verb) {
         (SettingsInput::Complete(settings), _, _) => Ok(Judged::Complete {
@@ -507,6 +520,121 @@ mod tests {
             )
             .unwrap();
         stored.and_then(|document| remembered_settings(&document.body))
+    }
+
+    fn context() -> HookContext {
+        HookContext {
+            project_directory: Ok(Some(PROJECT_DIR.into())),
+            project: Some(super::super::context::Bound {
+                folder: "/p/policy".into(),
+                root: "/p".into(),
+            }),
+            checkout: Some("/q".into()),
+            protected: Err(crate::folders::FolderRefusal::UserHomeUnset),
+        }
+    }
+
+    #[test]
+    fn a_redirected_policy_key_borrowing_the_cwd_or_project_folder_is_caught() {
+        let context = context();
+        for (walk, expected) in [
+            (
+                Discovery::Managed {
+                    folder: "/r/policy".into(),
+                    root: "/r".into(),
+                },
+                Some("/r"),
+            ),
+            (Discovery::Unmanaged { root: "/r".into() }, Some("/r")),
+            (Discovery::Outside, None),
+        ] {
+            let seen = Seen {
+                branch: Some(BranchObservation::Read("main".into())),
+                target_checkout: Some(Ok(walk)),
+                ..Seen::default()
+            };
+            for settings in [
+                SettingsInput::Complete(refusing()),
+                SettingsInput::Torn(Unavailable {
+                    path: "/p/baley.toml".into(),
+                    fault: Fault::NotRegular,
+                }),
+            ] {
+                let selected = Selected {
+                    target: Some("/r/src".into()),
+                    settings: Some(settings),
+                    ..commit()
+                };
+                let judged =
+                    judged(Answer::Ask("check".into()), &selected, &seen, &context).unwrap();
+                let key = match judged {
+                    Judged::Complete { key, .. } | Judged::Torn { key, .. } => key,
+                    other => panic!("a commit's policy key: {other:?}"),
+                };
+                assert_eq!(
+                    key,
+                    PolicyKey {
+                        project_root: "/p",
+                        checkout_root: expected
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_target_walk_falling_back_to_a_remembered_key_is_caught() {
+        let selected = Selected {
+            target: Some("/r/src".into()),
+            settings: Some(SettingsInput::Complete(refusing())),
+            ..commit()
+        };
+        for target_checkout in [None, Some(Err("target cannot be walked".into()))] {
+            let seen = Seen {
+                target_checkout,
+                ..Seen::default()
+            };
+            assert!(judged(Answer::Deny("main".into()), &selected, &seen, &context()).is_err());
+        }
+    }
+
+    #[test]
+    fn a_storage_round_trip_losing_the_supplied_target_or_checkout_key_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(&dir);
+        let selected = Selected {
+            target: Some("/r/src".into()),
+            ..bash("git -C /r/src commit", GitVerb::Commit)
+        };
+        let key = PolicyKey {
+            project_root: "/p",
+            checkout_root: Some("/r"),
+        };
+        let refuse = refusing();
+        let given = record(
+            &store,
+            &caller("t1"),
+            &selected,
+            &refused_on_main(&refuse, key),
+            request(1),
+            T1,
+        );
+
+        assert_eq!(
+            given,
+            Ok((
+                Answer::Deny(reason::refuse_deny("main")),
+                AuditPrecondition::Recorded
+            ))
+        );
+        let answered = events(&store, GUARD_ANSWERED);
+        assert_eq!(answered[0].payload["target"], "/r/src");
+        assert_eq!(answered[0].payload["cwd"], CWD);
+        assert_eq!(answered[0].payload["project_directory"], PROJECT_DIR);
+        let policies = events(&store, GUARD_POLICY_RECORDED);
+        assert_eq!(policies[0].payload["checkout_root"], "/r");
+        assert_eq!(remembered(&store, key), Some(refuse));
+        assert_eq!(remembered(&store, KEY), None);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0010: Guard](../design/0010-guard.md), [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0040](0040-guard-commit-checkout.md), in part: the checkout used to key remembered denials |
 
 ## Context and problem
 

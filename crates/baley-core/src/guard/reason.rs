@@ -20,6 +20,12 @@ pub fn push_ask() -> String {
         .to_owned()
 }
 
+/// A commit whose target checkout cannot be established from the command.
+pub fn commit_target_ask() -> String {
+    "Baley guard: cannot tell which checkout this commit lands in. Approve only if you intend to commit there."
+        .to_owned()
+}
+
 /// A commit on a protected branch under `ask`.
 pub fn protected_ask(branch: &str) -> String {
     format!(

@@ -169,7 +169,7 @@ pub fn owner_request(catalog: Catalog, name: &str, change: OwnerChange) -> Value
 pub enum OwnerOutcome {
     /// Recorded; the catalog version after it.
     Changed {
-        /// Read once the command committed.
+        /// Read inside this command's transaction, after its event.
         version: u64,
     },
     /// Refused on the merits, with the refusal's `<code>: ...` text. Only
@@ -180,9 +180,10 @@ pub enum OwnerOutcome {
 /// Records one owner addition or removal of `name` in `catalog`. A removal
 /// of a name the catalog does not hold is refused inside the transaction,
 /// on the document read there. It assumes `user` exists: the seeding step
-/// runs first.
+/// runs first. The request id is fresh, and the returned version is read
+/// after the append inside this command's transaction.
 pub fn change(
-    store: &(impl Ledger + Views),
+    store: &impl Ledger,
     catalog: Catalog,
     name: &str,
     change: OwnerChange,
@@ -204,6 +205,7 @@ pub fn change(
         actor: Actor::Owner,
         caller: None,
     };
+    let mut committed_version = None;
     let recorded = store.transact(&command, &mut |tx| {
         if change == OwnerChange::Removed {
             let stored = tx.get(MODEL_CATALOG_VIEW, &catalog_key(catalog))?;
@@ -228,6 +230,9 @@ pub fn change(
             payload: owner_changed_payload(catalog, name, change, version),
             attachments: vec![],
         })?;
+        let after = tx.get(MODEL_CATALOG_VIEW, &state_key())?;
+        committed_version =
+            Some(read_state(after.as_ref().map(|document| &document.body)).catalog_version);
         Ok(Decision {
             kind: OutcomeKind::Done,
             answer: json!({ "recorded": true }),
@@ -248,9 +253,11 @@ pub fn change(
         let text = text.unwrap_or("the removal was refused; its answer cannot be read");
         return Ok(OwnerOutcome::Refused(text.into()));
     }
-    let state = store.get(&user(), MODEL_CATALOG_VIEW, &state_key())?;
-    let version = read_state(state.as_ref().map(|document| &document.body)).catalog_version;
-    Ok(OwnerOutcome::Changed { version })
+    committed_version
+        .map(|version| OwnerOutcome::Changed { version })
+        .ok_or_else(|| {
+            StoreError::Unavailable("a fresh catalog change request was answered before".into())
+        })
 }
 
 /// Arguments for `baley models`.
@@ -606,15 +613,20 @@ fn columns(header: [&str; 5], rows: &[[&str; 5]]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::RangeInclusive;
+
     use baley_core::catalog::{
         Catalog, EXACT_HINTS, MODEL_CATALOG_VIEW, Placement, Provider, Source, Tier, USER_PROJECT,
         accepted_names, catalog_key, listing, read_state, state_key,
     };
     use baley_core::policy::Host;
     use baley_store::{
-        Actor, Admin, Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind,
-        ProjectId, RequestId, StreamName, Views, request_digest,
+        Actor, Admin, Anchor, Claim, ClaimId, ClaimOwner, Claimed, Command, CommandKind, Decide,
+        DecideClaim, DecideReconcile, Decision, Event, Head, HistoryFilter, Ledger, NewEvent,
+        Observed, OutcomeKind, Page, PageRequest, ProjectId, ReconcileAuthority, Recorded,
+        RequestId, StoreError, StreamName, VerifyReport, Views, request_digest,
     };
+    use baley_store_sqlite::SqliteStore;
     use serde_json::{Value, json};
 
     use super::{
@@ -1003,6 +1015,139 @@ mod tests {
             "scope": [],
         });
         assert_eq!(cheap, request_digest(&expected).unwrap());
+    }
+
+    /// The real store, with an owner removal committed right after each
+    /// command commits and before the caller runs again: the window in
+    /// which another process can commit.
+    struct CommitsAfter<'a> {
+        store: &'a SqliteStore,
+        removes: &'a str,
+    }
+
+    impl Ledger for CommitsAfter<'_> {
+        fn transact(
+            &self,
+            command: &Command,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            let recorded = Ledger::transact(self.store, command, decide)?;
+            let removal = OwnerChange::Removed;
+            change(
+                self.store,
+                OPENAI,
+                self.removes,
+                removal,
+                request(9),
+                &at(9),
+            )?;
+            Ok(recorded)
+        }
+
+        fn claim(
+            &self,
+            command: &Command,
+            decide: &mut DecideClaim<'_>,
+        ) -> Result<Claimed, StoreError> {
+            Ledger::claim(self.store, command, decide)
+        }
+
+        fn renew_lease(
+            &self,
+            project: &ProjectId,
+            claim: &ClaimId,
+            owner: &ClaimOwner,
+            at: &str,
+        ) -> Result<(), StoreError> {
+            Ledger::renew_lease(self.store, project, claim, owner, at)
+        }
+
+        fn complete(
+            &self,
+            command: &Command,
+            owner: &ClaimOwner,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::complete(self.store, command, owner, decide)
+        }
+
+        fn reconcile(
+            &self,
+            command: &Command,
+            claim: &ClaimId,
+            authority: ReconcileAuthority,
+            decide: &mut DecideReconcile<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::reconcile(self.store, command, claim, authority, decide)
+        }
+
+        fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError> {
+            Ledger::open_claims(self.store, project)
+        }
+
+        fn stream(
+            &self,
+            project: &ProjectId,
+            stream: &StreamName,
+            from_version: u64,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::stream(self.store, project, stream, from_version, page)
+        }
+
+        fn history(
+            &self,
+            project: &ProjectId,
+            range: RangeInclusive<u64>,
+            filter: &HistoryFilter,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::history(self.store, project, range, filter, page)
+        }
+
+        fn head(&self, project: &ProjectId) -> Result<Option<Head>, StoreError> {
+            Ledger::head(self.store, project)
+        }
+
+        fn verify(
+            &self,
+            project: &ProjectId,
+            anchor: Option<&Anchor>,
+        ) -> Result<VerifyReport, StoreError> {
+            Ledger::verify(self.store, project, anchor)
+        }
+    }
+
+    #[test]
+    fn an_owner_change_does_not_report_a_catalog_version_committed_after_it() {
+        let (_dir, store) = open();
+        seed(&store, request(1), &at(1)).unwrap();
+        let racing = CommitsAfter {
+            store: &store,
+            removes: "gpt-test",
+        };
+
+        let outcome = change(
+            &racing,
+            OPENAI,
+            "gpt-test",
+            OwnerChange::Added(None),
+            request(2),
+            &at(2),
+        )
+        .unwrap();
+
+        let recorded = events(&store, "models");
+        let added = &recorded[1];
+        let removed = &recorded[2];
+        assert_eq!(added.payload["change"], "added");
+        assert_eq!(removed.payload["change"], "removed");
+        assert_eq!(
+            catalog_version(&store),
+            removed.seq,
+            "the racing removal landed"
+        );
+        assert_eq!(outcome, OwnerOutcome::Changed { version: added.seq });
     }
 
     #[test]

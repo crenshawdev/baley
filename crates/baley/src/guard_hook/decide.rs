@@ -6,19 +6,22 @@
 //! judged against the hook's cwd through a supplied [`Lookup`], whether or
 //! not a project is bound.
 
-use super::context::{Bound, HookContext};
+use super::context::{Bound, HookContext, Walk};
 use crate::hook_input::{CommandTool, Envelope, HookInput, PathTarget, PathTool};
 use crate::protected_paths::{Lease, Lookup, read_answer, resolve_target, write_answer};
 use baley_core::guard::{
-    Answer, BranchObservation, GitVerb, SettingsInput, ToolInput, commit_push_answer, git_verb,
-    input_digest, powershell_answer, reason,
+    Answer, BranchObservation, CommitTarget, GitCommand, GitVerb, SettingsInput, ToolInput,
+    commit_push_answer, git_command, input_digest, powershell_answer, reason,
 };
+use std::path::PathBuf;
 
 /// What the entry has gathered for the call so far.
 #[derive(Debug, Default)]
 pub(super) struct Seen {
-    /// The branch at the hook's cwd.
+    /// The branch at the commit's target directory.
     pub branch: Option<BranchObservation>,
+    /// The walk from the commit's target directory, for remembered denials.
+    pub target_checkout: Option<Walk>,
     /// The session project's settings.
     pub settings: Option<SettingsInput>,
     /// Git's stderr ending a torn HEAD copy's cause, which a record leaves
@@ -34,8 +37,8 @@ pub(super) enum Step {
     /// Look for the answer recorded under the call's id with this input
     /// digest, before any git or policy read.
     Lookup(String),
-    /// Read the branch at the hook's cwd.
-    Branch,
+    /// Read the branch at this commit's target directory.
+    Branch(PathBuf),
     /// Read this session project's policy.
     Policy(Bound),
 }
@@ -64,7 +67,7 @@ pub(super) struct Selected {
     pub tool: &'static str,
     /// The input digest over the fields the guard read.
     pub input_digest: String,
-    /// A path tool's resolved target, when it resolves to UTF-8 text.
+    /// A path tool's resolved target or a redirected commit's directory.
     pub target: Option<String>,
     /// The git verb a command runs.
     pub verb: Option<GitVerb>,
@@ -89,7 +92,11 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
             decide(powershell_answer(bound), facts)
         }
         HookInput::Path { envelope, target } => path(envelope, target, context, fs),
-        HookInput::Command { tool, text, .. } => {
+        HookInput::Command {
+            envelope,
+            tool,
+            text,
+        } => {
             let name = match tool {
                 CommandTool::Bash => "Bash",
                 CommandTool::Monitor => "Monitor",
@@ -98,20 +105,32 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
                 command: Some(text.as_str()),
                 ..ToolInput::default()
             };
-            let (Some(project), Some(verb)) = (&context.project, git_verb(text)) else {
+            let (Some(project), Some(command)) = (&context.project, git_command(text)) else {
                 return unrecorded(Answer::Pass);
             };
             let mut facts = Facts::new(name, input);
             if !seen.looked_up {
                 return Next::Do(Step::Lookup(facts.digest()));
             }
+            let verb = command.verb();
             facts.verb = Some(verb);
-            if verb == GitVerb::Push {
-                // Every push in a project asks, on no settings or git read.
-                return decide(Answer::Ask(reason::push_ask()), facts);
-            }
+            let at = match command {
+                GitCommand::Push => return decide(Answer::Ask(reason::push_ask()), facts),
+                GitCommand::Commit(CommitTarget::Unestablished) => {
+                    return decide(Answer::Ask(reason::commit_target_ask()), facts);
+                }
+                GitCommand::Commit(CommitTarget::Cwd) => PathBuf::from(&envelope.cwd),
+                GitCommand::Commit(CommitTarget::Directory(operands)) => {
+                    let at = operands
+                        .iter()
+                        .fold(PathBuf::from(&envelope.cwd), |at, operand| at.join(operand));
+                    // The cwd and operands are UTF-8, so the joined path is too.
+                    facts.target = at.to_str().map(str::to_owned);
+                    at
+                }
+            };
             let Some(branch) = &seen.branch else {
-                return Next::Do(Step::Branch);
+                return Next::Do(Step::Branch(at));
             };
             let Some(settings) = &seen.settings else {
                 return Next::Do(Step::Policy(project.clone()));
@@ -350,6 +369,108 @@ mod tests {
     }
 
     #[test]
+    fn a_redirected_commit_reading_the_branch_at_cwd_is_caught() {
+        assert_eq!(
+            match next(
+                &bash("git -C /r commit"),
+                &context(Some("/p")),
+                &looked_up(),
+                &disk()
+            ) {
+                Next::Do(step) => step,
+                other => panic!("a branch read: {other:?}"),
+            },
+            Step::Branch("/r".into())
+        );
+    }
+
+    #[test]
+    fn chained_directories_resolved_against_cwd_each_time_are_caught() {
+        for (command, expected) in [
+            ("git -C a -C ../b commit", "/q/a/../b"),
+            ("git -C a -C /r commit", "/r"),
+        ] {
+            assert!(
+                matches!(
+                    next(&bash(command), &context(Some("/p")), &looked_up(), &disk()),
+                    Next::Do(Step::Branch(at)) if at == std::path::Path::new(expected)
+                ),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redirected_commit_taking_policy_from_its_target_is_caught() {
+        let seen = Seen {
+            branch: Some(BranchObservation::Read("main".into())),
+            ..looked_up()
+        };
+        assert!(matches!(
+            next(&bash("git -C /r commit"), &context(Some("/p")), &seen, &disk()),
+            Next::Do(Step::Policy(project)) if project == Bound { folder: "/p".into(), root: "/p".into() }
+        ));
+    }
+
+    #[test]
+    fn an_observed_protected_branch_passing_or_losing_its_denial_record_is_caught() {
+        let decided = decided(next(
+            &bash("git -C /r commit"),
+            &context(Some("/p")),
+            &after_gathering(protecting_main()),
+            &disk(),
+        ));
+        assert_eq!(decided.answer, Answer::Deny(reason::refuse_deny("main")));
+        let record = decided.record.expect("the denial is recorded");
+        assert_eq!(record.verb, Some(GitVerb::Commit));
+        assert_eq!(record.branch.as_deref(), Some("main"));
+        assert_eq!(record.settings, Some(protecting_main()));
+    }
+
+    #[test]
+    fn an_unknown_commit_target_reading_a_branch_or_losing_its_ask_record_is_caught() {
+        let decided = decided(next(
+            &bash("cd /r && git commit"),
+            &context(Some("/p")),
+            &looked_up(),
+            &disk(),
+        ));
+        assert_eq!(decided.answer, Answer::Ask(
+            "Baley guard: cannot tell which checkout this commit lands in. Approve only if you intend to commit there.".into()
+        ));
+        let record = decided.record.expect("the ask is recorded");
+        assert_eq!(record.verb, Some(GitVerb::Commit));
+        assert_eq!(record.branch, None);
+        assert_eq!(record.settings, None);
+        assert_eq!(record.target, None);
+    }
+
+    #[test]
+    fn an_unbound_redirected_commit_gathered_or_recorded_is_caught() {
+        let decided = decided(next(
+            &bash("git -C /r commit"),
+            &context(None),
+            &Seen::default(),
+            &disk(),
+        ));
+        assert_eq!(decided.answer, Answer::Pass);
+        assert_eq!(decided.record, None);
+    }
+
+    #[test]
+    fn a_redirected_commit_record_omitting_its_resolved_directory_is_caught() {
+        let record = decided(next(
+            &bash("git -C /r -C src commit"),
+            &context(Some("/p")),
+            &after_gathering(protecting_main()),
+            &disk(),
+        ))
+        .record
+        .expect("the denial is recorded");
+        assert_eq!(record.target.as_deref(), Some("/r/src"));
+    }
+
+    #[test]
     fn a_bound_commit_that_skips_the_lookup_the_branch_or_the_policy_read_is_caught() {
         let call = bash("git commit -m x");
         let mut seen = Seen::default();
@@ -364,7 +485,7 @@ mod tests {
         seen.looked_up = true;
         assert!(matches!(
             next(&call, &context(Some("/p")), &seen, &disk()),
-            Next::Do(Step::Branch)
+            Next::Do(Step::Branch(at)) if at == std::path::Path::new("/q")
         ));
         seen.branch = Some(BranchObservation::Read("main".into()));
         let session = Bound {

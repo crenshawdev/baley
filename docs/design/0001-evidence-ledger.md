@@ -160,7 +160,7 @@ flowchart TB
   guard -->|records its answers in the per-user project user| db
   cli --> db
   server -.->|finds project file from CLAUDE_PROJECT_DIR, runs git for a write| checkout
-  guard -.->|finds project file from CLAUDE_PROJECT_DIR, runs bounded git for the cwd's branch and HEAD's baley.toml| checkout
+  guard -.->|finds project file from CLAUDE_PROJECT_DIR, runs bounded git for the commit target's branch and the session project's baley.toml at HEAD| checkout
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef container fill:#438dd5,stroke:#2e6295,color:#fff
   classDef external fill:#6b6b6b,stroke:#4d4d4d,color:#fff
@@ -169,7 +169,7 @@ flowchart TB
   class host,checkout external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Each Claude Code session starts its own MCP server, so several can run beside the guard hook and the command line. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database. The server finds the project file from its session's `CLAUDE_PROJECT_DIR` and runs git only to prepare a write, as Baley with the call's caller. The guard finds the project file the same way, and runs git only for the branch of the checkout its working directory is in and for HEAD's copy of `baley.toml`, within its time budget ([0010](0010-guard.md), GRD-R14). It records its answers in the per-user project `user`, never in the session's project, so a guard record needs no project in this machine's ledger.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Each Claude Code session starts its own MCP server, so several can run beside the guard hook and the command line. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database. The server finds the project file from its session's `CLAUDE_PROJECT_DIR` and runs git only to prepare a write, as Baley with the call's caller. The guard finds the project file the same way, and runs git only for the branch at the commit's target, resolved from the working directory, and for HEAD's copy of the session project's `baley.toml`, within its time budget ([0010](0010-guard.md), GRD-R14). It records its answers in the per-user project `user`, never in the session's project, so a guard record needs no project in this machine's ledger.*
 
 ### Terms
 
