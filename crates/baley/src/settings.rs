@@ -47,7 +47,13 @@ pub const GUARD_LIMIT: usize = 1 << 20;
 /// [`GUARD_LIMIT`] bytes. A larger file is `config-unavailable` naming it, so
 /// the guard judges it torn rather than wait on it or read part of it.
 pub fn read_for_guard(path: &Path) -> Result<Option<SettingsFile>, Unavailable> {
-    judge_for_guard(path, gather_up_to(path, GUARD_LIMIT as u64 + 1))
+    judge_for_guard(path, gather_for_guard(path))
+}
+
+/// As [`gather`], reading one byte past [`GUARD_LIMIT`] so the judge can
+/// tell a file over the cap from one exactly at it.
+fn gather_for_guard(path: &Path) -> Seen {
+    gather_up_to(path, GUARD_LIMIT as u64 + 1)
 }
 
 /// What one read of a settings path found.
@@ -171,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn a_guard_read_with_no_byte_cap_or_one_off_by_one_is_caught() {
+    fn a_guard_judge_with_no_byte_cap_or_one_off_by_one_is_caught() {
         let path = Path::new(PATH);
         let at_cap = judge_for_guard(path, Seen::Opened(vec![b'#'; 1_048_576]));
         assert_eq!(at_cap.unwrap().unwrap().bytes.len(), 1_048_576);
@@ -241,5 +247,16 @@ mod tests {
         );
         assert_eq!(read(&dir.path().join("absent")), Ok(None));
         assert_eq!(read(dir.path()).unwrap_err().fault, Fault::NotRegular);
+    }
+
+    #[test]
+    fn a_guard_gather_reading_a_large_file_whole_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let large = dir.path().join("config.toml");
+        std::fs::write(&large, vec![b'#'; GUARD_LIMIT * 2]).unwrap();
+        let Seen::Opened(bytes) = gather_for_guard(&large) else {
+            panic!("opened");
+        };
+        assert_eq!(bytes.len(), GUARD_LIMIT + 1);
     }
 }
