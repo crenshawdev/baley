@@ -51,8 +51,9 @@ impl Registration {
 pub enum Deadline {
     /// Exactly this long, every launch.
     Exact(Duration),
-    /// A guard caller: above zero and at most this cap. The guard's budget
-    /// picks each launch's time from what is left, so only the cap is fixed.
+    /// A guard caller: exactly the time a budget grant gave it, above zero and
+    /// at most this cap. The budget picks each launch's time from what is
+    /// left, so only the cap is fixed.
     Guard(Duration),
 }
 
@@ -80,9 +81,9 @@ pub fn deadline(caller: Caller) -> Deadline {
 }
 
 /// A registered launch for `caller` at its exact deadline. A guard caller's
-/// carries no timeout, so the validator refuses it: its time comes only from
-/// a budget grant through [`guard_launch`], so its launches together never
-/// outrun git's one allowance.
+/// carries no grant, so the validator refuses it even with a timeout set by
+/// hand: its time comes only from a budget grant through [`guard_launch`], so
+/// its launches together never outrun git's one allowance.
 pub fn launch(caller: Caller) -> Launch {
     let launch = Launch::registered_git(Registration(caller)).own_group();
     match deadline(caller) {
@@ -91,11 +92,10 @@ pub fn launch(caller: Caller) -> Launch {
     }
 }
 
-/// A guard caller's launch on the time `grant` gives it.
+/// A guard caller's launch on the time `grant` gives it. The validator
+/// accepts it only while its timeout is still that time.
 pub fn guard_launch(caller: Caller, grant: &GitGrant) -> Launch {
-    Launch::registered_git(Registration(caller))
-        .timeout(grant.timeout())
-        .own_group()
+    Launch::granted_git(Registration(caller), grant).own_group()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

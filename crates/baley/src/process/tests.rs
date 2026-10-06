@@ -113,9 +113,12 @@ fn a_guard_launch_at_zero_past_five_seconds_or_sharing_a_group_is_refused() {
     use std::{io::ErrorKind, time::Duration};
 
     for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        // No grant gives these times, so each is recorded as granted too and
+        // only the range and the group decide.
         let at = |timeout: Option<Duration>, own_group: bool| {
             let mut launch = git_process::launch(caller);
             launch.timeout = timeout;
+            launch.granted = timeout;
             launch.own_group = own_group;
             launch
         };
@@ -151,6 +154,66 @@ fn a_guard_launch_made_outside_the_budget_is_refused() {
     for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
         let error = validate_launch(&git_process::launch(caller)).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidInput, "{caller:?}");
+    }
+}
+
+#[test]
+fn a_guard_launch_timed_by_hand_within_the_cap_is_refused() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    use std::time::Duration;
+
+    for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        for timeout in [Duration::from_millis(2_400), Duration::from_secs(5)] {
+            let launch = git_process::launch(caller).timeout(timeout);
+            assert_eq!(
+                validate_launch(&launch).unwrap_err().to_string(),
+                "registered git launch requires its caller deadline and owned process group",
+                "{caller:?} {timeout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_granted_guard_launch_whose_timeout_is_raised_by_hand_is_refused() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    use crate::guard_budget::Budget;
+    use std::time::Duration;
+
+    // 5.6 s in, the grant is 2.4 s. Raised to 5 s it is still inside the cap.
+    let grant = Budget::with_clock(|| Duration::from_millis(5_600))
+        .git()
+        .expect("time is left");
+    for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+        let launch = git_process::guard_launch(caller, &grant).timeout(Duration::from_secs(5));
+        assert_eq!(
+            validate_launch(&launch).unwrap_err().to_string(),
+            "registered git launch requires its caller deadline and owned process group",
+            "{caller:?}"
+        );
+    }
+}
+
+#[test]
+fn a_guard_launch_as_granted_is_not_refused() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    use crate::guard_budget::Budget;
+    use std::time::Duration;
+
+    // Git's whole 5 s at the start, and the 2.4 s of work left at 5.6 s.
+    for elapsed in [0, 5_600] {
+        let grant = Budget::with_clock(move || Duration::from_millis(elapsed))
+            .git()
+            .expect("time is left");
+        for caller in [Caller::GuardBranch, Caller::GuardProjectHead] {
+            let launch = git_process::guard_launch(caller, &grant);
+            if let Err(error) = validate_launch(&launch) {
+                panic!("{caller:?} at {elapsed} ms: {error}");
+            }
+        }
     }
 }
 

@@ -38,6 +38,9 @@ pub struct Launch {
     pub limit: usize,
     /// Kill the child once it has run this long.
     pub timeout: Option<Duration>,
+    /// The timeout a guard budget grant gave this launch. Only `granted_git`
+    /// sets it, so the validator can tell a granted time from one set by hand.
+    granted: Option<Duration>,
     /// Put the child in its own process group, and kill that group once the
     /// child is reaped, so a descendant cannot hold the pipes open.
     pub own_group: bool,
@@ -83,6 +86,7 @@ impl std::fmt::Debug for Launch {
             .field("env", &env)
             .field("limit", &self.limit)
             .field("timeout", &self.timeout)
+            .field("granted", &self.granted)
             .field("own_group", &self.own_group)
             .field("die_with_parent", &self.die_with_parent)
             .field("inherit", &self.inherit)
@@ -102,6 +106,7 @@ impl Launch {
             env: Vec::new(),
             limit: usize::MAX,
             timeout: None,
+            granted: None,
             own_group: false,
             die_with_parent: false,
             inherit: false,
@@ -117,6 +122,18 @@ impl Launch {
     pub(crate) fn registered_git(registration: crate::git_process::Registration) -> Self {
         let mut launch = Self::new("git");
         launch.origin = Origin::Git(registration);
+        launch
+    }
+
+    /// A guard caller's git launch on the time `grant` gave it. The grant is
+    /// kept beside `timeout`, so a time changed by hand afterwards no longer
+    /// matches it and the validator refuses the launch.
+    pub(crate) fn granted_git(
+        registration: crate::git_process::Registration,
+        grant: &crate::guard_budget::GitGrant,
+    ) -> Self {
+        let mut launch = Self::registered_git(registration).timeout(grant.timeout());
+        launch.granted = Some(grant.timeout());
         launch
     }
 
@@ -225,10 +242,12 @@ pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> 
             use crate::git_process::Deadline;
             let timed = match crate::git_process::deadline(caller) {
                 Deadline::Exact(deadline) => launch.timeout == Some(deadline),
-                // A zero timeout would still start git, only to kill it.
-                Deadline::Guard(cap) => launch
-                    .timeout
-                    .is_some_and(|timeout| !timeout.is_zero() && timeout <= cap),
+                // Only the time a grant gave counts, so a timeout set by hand
+                // cannot skip the budget. A zero timeout would still start
+                // git, only to kill it.
+                Deadline::Guard(cap) => launch.granted.is_some_and(|granted| {
+                    launch.timeout == Some(granted) && !granted.is_zero() && granted <= cap
+                }),
             };
             if !timed || !launch.own_group {
                 return Err(std::io::Error::new(
