@@ -384,7 +384,7 @@ The lease is stated to the executor as the exact files and directories, with the
 
 ## 11. Build status
 
-The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `execution-history`, `evidence-read` and `execute-next` (`crates/baley/src/mcp/operations.rs:105-106, 114`) and the execution apply spellings (`crates/baley/src/mcp/operations.rs:137-155`) as unavailable, and the operation baseline names Build 5 for them. Production reaches the executor contract and its front door through `baley executor-instructions` (`crates/baley/src/instruction_surfaces.rs:19-22`), and the guard reaches the list of rendered project files it protects (`crates/baley/src/execution/render.rs:290-441`, used in `crates/baley/src/guard/mod.rs:351-357`). The parked engine's native execution path is close to this design, and the rows below list the differences.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `execution-history`, `evidence-read` and `execute-next` (`crates/baley/src/mcp/operations.rs:105-106, 114`) and the execution apply spellings (`crates/baley/src/mcp/operations.rs:137-155`) as unavailable, and the operation baseline names Build 5 for them. Production reaches the executor contract and its front door through `baley executor-instructions` (`crates/baley/src/instruction_surfaces.rs:19-22`), and the guard reaches the list of rendered project files it protects (`crates/baley/src/execution/render.rs:290-441`, used in `crates/baley/src/guard/mod.rs:354-360`). The parked engine's native execution path is close to this design, and the rows below list the differences.
 
 | Requirement | Status | Where |
 |---|---|---|
@@ -409,7 +409,7 @@ The binary parks the inherited engine for Build 9 to delete, and nothing in prod
 | EXE-R19 | Not built | Only the parked engine records and answers a checkpoint (`crates/baley/src/execution_service.rs:364-501, 709-798`). The session server answers `execution-authorize`, `execution-task-checkpoint` and `execution-task-answer` as unavailable (`crates/baley/src/mcp/operations.rs:139-140, 155`) until Build 5 |
 | EXE-R20 | Not built | Only the parked engine records the host's token count for a round (`crates/baley/src/execution/history.rs:1825-1862`). The session server answers `execution-round-record` as unavailable (`crates/baley/src/mcp/operations.rs:147`) until Build 5 |
 | EXE-R21 | Not built | Only the parked engine takes plans in numeric order (`crates/baley/src/execution/plan.rs:495-522`). The session server answers `execute-next` as unavailable (`crates/baley/src/mcp/operations.rs:114`) until Build 5 |
-| EXE-R22 | Not built | `GitObservation` values supplied by the caller (`crates/baley-store/src/command.rs:104-112`, compared in `crates/baley-store-sqlite/src/transact.rs:560-573`, #40) |
+| EXE-R22 | Not built | `GitObservation` values supplied by the caller (`crates/baley-store/src/command.rs:104-112`, compared in `crates/baley-store-sqlite/src/transact.rs:563-576`, #40) |
 
 ## 12. Open questions
 
