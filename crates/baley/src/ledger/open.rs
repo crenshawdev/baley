@@ -59,12 +59,8 @@ pub(crate) fn server_options() -> Options {
 /// `StoreError::Busy`, and answers views behind this binary's as
 /// `StoreError::NeedsRebuild` instead of rebuilding them. It is built from
 /// `options()` so the two never disagree on events, views or the view set
-/// version, and the startup `quick_check` stays off. Build 3 T10's guard
-/// hook is its caller.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Build 3 T10's guard hook is its first caller")
-)]
+/// version, and the startup `quick_check` stays off. The guard hook opens
+/// its two short stores with it.
 pub(crate) fn guard_options(storage_time: Duration) -> Options {
     Options {
         guard_storage_time: Some(storage_time),

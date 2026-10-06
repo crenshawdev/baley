@@ -8,7 +8,9 @@
 //! Each function here runs on a store the entry opened. None opens one, reads
 //! git or reads a settings file.
 
-use super::decide::Selected;
+use super::context::HookContext;
+use super::decide::{Seen, Selected};
+use super::unrecordable::not_recorded;
 use baley_core::catalog::USER_PROJECT;
 use baley_core::guard::{
     Answer, AnsweredFacts, AuditPrecondition, BranchObservation, GUARD_ANSWERED,
@@ -24,6 +26,7 @@ use baley_store::{
     request_digest,
 };
 use serde_json::json;
+use std::path::Path;
 
 /// What a record keeps in place of git's stderr.
 const REDACTED: &str = "[redacted]";
@@ -88,6 +91,50 @@ impl Judged<'_> {
                 branch,
             ),
         }
+    }
+}
+
+/// How `selected`'s answer is recorded, or the line saying why it cannot be.
+/// With no settings read it is recorded as judged. A commit's settings key
+/// its remembered denials by the session project's root and the root of the
+/// checkout the cwd is in, and a root that is not UTF-8 cannot key a record.
+pub(super) fn judged<'a>(
+    answer: Answer,
+    selected: &'a Selected,
+    seen: &'a Seen,
+    context: &'a HookContext,
+) -> Result<Judged<'a>, String> {
+    let Some(settings) = &selected.settings else {
+        return Ok(Judged::Absent(answer));
+    };
+    let text = |root: &'a Path| {
+        root.to_str()
+            .ok_or_else(|| not_recorded(&format!("{} is not UTF-8", root.display())))
+    };
+    let project = context
+        .project
+        .as_ref()
+        .ok_or_else(|| not_recorded("no session project is bound"))?;
+    let key = PolicyKey {
+        project_root: text(&project.root)?,
+        checkout_root: context.checkout.as_deref().map(text).transpose()?,
+    };
+    match (settings, &seen.branch, selected.verb) {
+        (SettingsInput::Complete(settings), _, _) => Ok(Judged::Complete {
+            answer,
+            settings,
+            key,
+        }),
+        (SettingsInput::Torn(torn), Some(branch), Some(verb)) => Ok(Judged::Torn {
+            torn,
+            excerpt: seen.excerpt.as_deref(),
+            verb,
+            branch,
+            key,
+        }),
+        (SettingsInput::Torn(_), _, _) => Err(not_recorded(
+            "torn settings came with no branch or git verb",
+        )),
     }
 }
 
@@ -335,7 +382,6 @@ mod tests {
     //! options on a fixed clock, with supplied times.
 
     use super::*;
-    use crate::hook_input::Envelope;
     use crate::ledger::open::{self, tests::guard};
     use baley_core::guard::{
         GUARD_POLICY_RECORDED, ToolInput, input_digest, reason, remembered_settings,
@@ -373,11 +419,6 @@ mod tests {
 
     fn bash(command: &str, verb: GitVerb) -> Selected {
         Selected {
-            envelope: Envelope {
-                cwd: CWD.into(),
-                session_id: Some("s".into()),
-                tool_use_id: Some("t".into()),
-            },
             tool: "Bash",
             input_digest: input_digest(
                 "Bash",
@@ -799,5 +840,81 @@ mod tests {
 
         assert_eq!(found, Ok(Redelivery::NoRecord));
         assert_eq!(store.projects(), Ok(vec![]));
+    }
+
+    #[test]
+    fn a_user_left_at_view_set_6_read_as_recorded_is_caught() {
+        use crate::guard_hook::unrecordable::store_failure;
+        use crate::ledger::open::tests::view_set_6;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let old = open::store(&home, T0, view_set_6()).unwrap();
+        crate::models::create_user(&old, T0).unwrap();
+        // A `user` with no events has no views to bring forward.
+        crate::models::record_seed(&old, request(9), T0).unwrap();
+        drop(old);
+        let guarded = open::store(&home, T1, guard()).unwrap();
+
+        let found = lookup(&guarded, &caller("t1"), &commit().input_digest);
+
+        let needs = StoreError::NeedsRebuild {
+            project: ProjectId(USER_PROJECT.into()),
+        };
+        assert_eq!(found, Err(needs.clone()));
+        assert_eq!(store_failure(&needs).0, AuditPrecondition::Unrecordable);
+    }
+
+    #[test]
+    fn a_policy_key_from_the_wrong_roots_or_from_a_root_that_is_not_utf8_is_caught() {
+        use crate::guard_hook::context::Bound;
+        use crate::protected_paths::ProtectedPaths;
+        use std::os::unix::ffi::OsStrExt;
+
+        let torn = Unavailable {
+            path: "/p/baley.toml".into(),
+            fault: Fault::NotRegular,
+        };
+        let selected = Selected {
+            settings: Some(SettingsInput::Torn(torn.clone())),
+            ..commit()
+        };
+        let main = BranchObservation::Read("main".into());
+        let seen = Seen {
+            branch: Some(main.clone()),
+            excerpt: Some("fatal: x".into()),
+            ..Seen::default()
+        };
+        let mut context = HookContext {
+            project_directory: Ok(Some("/p".into())),
+            project: Some(Bound {
+                folder: "/p/sub".into(),
+                root: "/p".into(),
+            }),
+            checkout: Some("/q".into()),
+            protected: Ok(ProtectedPaths {
+                home: "/h".into(),
+                config: "/c".into(),
+                files: vec![],
+            }),
+        };
+        let ask = Answer::Ask("approve?".into());
+
+        assert_eq!(
+            judged(ask.clone(), &selected, &seen, &context),
+            Ok(Judged::Torn {
+                torn: &torn,
+                excerpt: Some("fatal: x"),
+                verb: GitVerb::Commit,
+                branch: &main,
+                key: KEY,
+            })
+        );
+        assert_eq!(
+            judged(ask.clone(), &commit(), &seen, &context),
+            Ok(Judged::Absent(ask.clone()))
+        );
+        context.checkout = Some(std::ffi::OsStr::from_bytes(b"/q\xff").into());
+        assert!(judged(ask, &selected, &seen, &context).is_err());
     }
 }

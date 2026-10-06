@@ -5,7 +5,7 @@
 
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, FolderRefusal, Folders, Platform};
-use crate::mcp::context::{ProjectContext, project_context};
+use crate::mcp::context::{DirectoryFault, ProjectContext, project_context};
 use crate::protected_paths::ProtectedPaths;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -23,21 +23,14 @@ pub(super) struct Bound {
 /// What the hook knows about where it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct HookContext {
-    /// `CLAUDE_PROJECT_DIR` as given, whenever it is set and UTF-8, valid or
-    /// not. Never canonicalized, so a record carries the host's own text.
-    #[allow(
-        dead_code,
-        reason = "Build 3 T10's recording step puts it in the hook caller"
-    )]
-    pub project_directory: Option<String>,
+    /// `CLAUDE_PROJECT_DIR` as given whenever it is set, valid or not, and
+    /// `None` when unset. Never canonicalized, so a record carries the host's
+    /// own text. A value that is not UTF-8 cannot be recorded as given.
+    pub project_directory: Result<Option<String>, DirectoryFault>,
     /// The session project, or `None` when nothing is bound.
     pub project: Option<Bound>,
     /// The root of the checkout the cwd is in, whose branch the hook reads,
     /// and the checkout half of the remembered-policy key.
-    #[allow(
-        dead_code,
-        reason = "Build 3 T10's recording step keys the remembered policy by it"
-    )]
     pub checkout: Option<PathBuf>,
     /// The paths path tools are judged against, or why Baley's folders could
     /// not be resolved.
@@ -118,8 +111,15 @@ pub(super) fn judge(
     {
         files.push(file);
     }
+    let project_directory = project_dir
+        .map(|text| {
+            text.to_str()
+                .map(str::to_owned)
+                .ok_or(DirectoryFault::NotUtf8)
+        })
+        .transpose();
     HookContext {
-        project_directory: project_dir.and_then(OsStr::to_str).map(str::to_owned),
+        project_directory,
         project,
         checkout,
         protected: folders.map(|folders| ProtectedPaths {
@@ -133,7 +133,6 @@ pub(super) fn judge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::context::DirectoryFault;
 
     fn folders() -> Result<Folders, FolderRefusal> {
         Ok(Folders {
@@ -180,7 +179,7 @@ mod tests {
         assert_eq!(
             context,
             HookContext {
-                project_directory: Some("/p".into()),
+                project_directory: Ok(Some("/p".into())),
                 project: bound("/p"),
                 checkout: Some("/q".into()),
                 protected: protecting(&["/p/baley.toml", "/q/baley.toml"]),
@@ -208,7 +207,7 @@ mod tests {
             assert_eq!(
                 context,
                 HookContext {
-                    project_directory: given.map(str::to_owned),
+                    project_directory: Ok(given.map(str::to_owned)),
                     project: None,
                     checkout: Some("/q".into()),
                     protected: protecting(&["/q/baley.toml"]),
@@ -216,6 +215,21 @@ mod tests {
                 "{project:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_project_directory_that_is_not_utf8_read_as_unset_is_caught() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let context = judge(
+            Some(OsStr::from_bytes(b"/p\xff")),
+            &ProjectContext::Invalid(DirectoryFault::NotUtf8),
+            None,
+            managed("/q"),
+            folders(),
+        );
+        assert_eq!(context.project_directory, Err(DirectoryFault::NotUtf8));
+        assert_eq!(context.project, None);
     }
 
     #[test]
@@ -260,7 +274,7 @@ mod tests {
         assert_eq!(
             context,
             HookContext {
-                project_directory: Some("/p".into()),
+                project_directory: Ok(Some("/p".into())),
                 project: bound("/p"),
                 checkout: Some("/q".into()),
                 protected: Err(FolderRefusal::UserHomeUnset),

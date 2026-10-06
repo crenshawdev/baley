@@ -1,8 +1,10 @@
 //! What the guard answers one classified call, and which answers are
 //! recorded (design 0010, GRD-R2 to GRD-R13). The judge says what the call
-//! still needs and the entry gathers only that: a commit's branch, then its
-//! policy. Path calls are judged against the hook's cwd through a supplied
-//! [`Lookup`], whether or not a project is bound.
+//! still needs and the entry gathers only that: for a bound command or
+//! PowerShell call, the answer recorded under its call id, before any git
+//! read; then for a commit its branch, then its policy. Path calls are
+//! judged against the hook's cwd through a supplied [`Lookup`], whether or
+//! not a project is bound.
 
 use super::context::{Bound, HookContext};
 use crate::hook_input::{CommandTool, Envelope, HookInput, PathTarget, PathTool};
@@ -19,11 +21,19 @@ pub(super) struct Seen {
     pub branch: Option<BranchObservation>,
     /// The session project's settings.
     pub settings: Option<SettingsInput>,
+    /// Git's stderr ending a torn HEAD copy's cause, which a record leaves
+    /// out.
+    pub excerpt: Option<String>,
+    /// Whether the answer recorded under the call's id was looked for.
+    pub looked_up: bool,
 }
 
 /// What the entry gathers next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Step {
+    /// Look for the answer recorded under the call's id with this input
+    /// digest, before any git or policy read.
+    Lookup(String),
     /// Read the branch at the hook's cwd.
     Branch,
     /// Read this session project's policy.
@@ -49,13 +59,7 @@ pub(super) struct Decided {
 /// What a recorded answer carries besides the answer itself. The command is
 /// never kept, only its place in the input digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "Build 3 T10's recording step reads these facts into guard.answered"
-)]
 pub(super) struct Selected {
-    /// The call's cwd, session and call id.
-    pub envelope: Envelope,
     /// The tool's name as the host gives it.
     pub tool: &'static str,
     /// The input digest over the fields the guard read.
@@ -77,16 +81,15 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
         HookInput::NoAnswer | HookInput::Watch(_) => unrecorded(Answer::Pass),
         // Unreadable input has no envelope to record it by.
         HookInput::Deny(reason) => unrecorded(Answer::Deny(reason.clone())),
-        HookInput::PowerShell(envelope) => {
-            let facts = Facts::new(envelope, "PowerShell", ToolInput::default());
+        HookInput::PowerShell(_) => {
+            let facts = Facts::new("PowerShell", ToolInput::default());
+            if bound && !seen.looked_up {
+                return Next::Do(Step::Lookup(facts.digest()));
+            }
             decide(powershell_answer(bound), facts)
         }
         HookInput::Path { envelope, target } => path(envelope, target, context, fs),
-        HookInput::Command {
-            envelope,
-            tool,
-            text,
-        } => {
+        HookInput::Command { tool, text, .. } => {
             let name = match tool {
                 CommandTool::Bash => "Bash",
                 CommandTool::Monitor => "Monitor",
@@ -98,7 +101,10 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
             let (Some(project), Some(verb)) = (&context.project, git_verb(text)) else {
                 return unrecorded(Answer::Pass);
             };
-            let mut facts = Facts::new(envelope, name, input);
+            let mut facts = Facts::new(name, input);
+            if !seen.looked_up {
+                return Next::Do(Step::Lookup(facts.digest()));
+            }
             facts.verb = Some(verb);
             if verb == GitVerb::Push {
                 // Every push in a project asks, on no settings or git read.
@@ -117,7 +123,7 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
                 BranchObservation::Unreadable { .. } => None,
             };
             facts.settings = Some(settings.clone());
-            // Nothing is remembered yet, so torn settings ask.
+            // The remembered policy is read only inside the audit transaction.
             decide(
                 commit_push_answer(verb, bound, settings, None, branch),
                 facts,
@@ -151,7 +157,7 @@ fn path(envelope: &Envelope, target: &PathTarget, context: &HookContext, fs: &dy
             ..ToolInput::default()
         },
     };
-    let mut facts = Facts::new(envelope, target.tool.name(), input);
+    let mut facts = Facts::new(target.tool.name(), input);
     let cwd = envelope.cwd.as_str();
     let answer = match (&context.protected, target.tool) {
         (Err(refusal), tool) => Answer::Deny(format!(
@@ -180,7 +186,6 @@ fn path(envelope: &Envelope, target: &PathTarget, context: &HookContext, fs: &dy
 
 /// The record's facts while they are gathered.
 struct Facts<'a> {
-    envelope: &'a Envelope,
     tool: &'static str,
     input: ToolInput<'a>,
     target: Option<String>,
@@ -190,9 +195,8 @@ struct Facts<'a> {
 }
 
 impl<'a> Facts<'a> {
-    fn new(envelope: &'a Envelope, tool: &'static str, input: ToolInput<'a>) -> Self {
+    fn new(tool: &'static str, input: ToolInput<'a>) -> Self {
         Facts {
-            envelope,
             tool,
             input,
             target: None,
@@ -200,6 +204,11 @@ impl<'a> Facts<'a> {
             branch: None,
             settings: None,
         }
+    }
+
+    /// The input digest over the fields the guard read.
+    fn digest(&self) -> String {
+        input_digest(self.tool, &self.input)
     }
 }
 
@@ -215,9 +224,8 @@ fn unrecorded(answer: Answer) -> Next {
 /// with an envelope, and never a plain pass.
 fn decide(answer: Answer, facts: Facts<'_>) -> Next {
     let record = (answer != Answer::Pass).then(|| Selected {
-        envelope: facts.envelope.clone(),
         tool: facts.tool,
-        input_digest: input_digest(facts.tool, &facts.input),
+        input_digest: facts.digest(),
         target: facts.target,
         verb: facts.verb,
         branch: facts.branch,
@@ -262,7 +270,7 @@ mod tests {
             .collect();
         files.push("/q/baley.toml".into());
         HookContext {
-            project_directory: project.map(str::to_owned),
+            project_directory: Ok(project.map(str::to_owned)),
             project: project.map(|p| Bound {
                 folder: p.into(),
                 root: p.into(),
@@ -325,17 +333,35 @@ mod tests {
         })
     }
 
+    /// The redelivery lookup found no record.
+    fn looked_up() -> Seen {
+        Seen {
+            looked_up: true,
+            ..Seen::default()
+        }
+    }
+
     fn after_gathering(settings: SettingsInput) -> Seen {
         Seen {
             branch: Some(BranchObservation::Read("main".into())),
             settings: Some(settings),
+            ..looked_up()
         }
     }
 
     #[test]
-    fn a_bound_commit_that_skips_the_branch_or_the_policy_read_is_caught() {
+    fn a_bound_commit_that_skips_the_lookup_the_branch_or_the_policy_read_is_caught() {
         let call = bash("git commit -m x");
         let mut seen = Seen::default();
+        let command = ToolInput {
+            command: Some("git commit -m x"),
+            ..ToolInput::default()
+        };
+        assert!(matches!(
+            next(&call, &context(Some("/p")), &seen, &disk()),
+            Next::Do(Step::Lookup(digest)) if digest == input_digest("Bash", &command)
+        ));
+        seen.looked_up = true;
         assert!(matches!(
             next(&call, &context(Some("/p")), &seen, &disk()),
             Next::Do(Step::Branch)
@@ -355,7 +381,7 @@ mod tests {
     fn a_plain_pass_on_an_unprotected_commit_selected_for_recording_is_caught() {
         let seen = Seen {
             branch: Some(BranchObservation::Read("feat/x".into())),
-            settings: Some(protecting_main()),
+            ..after_gathering(protecting_main())
         };
         let decided = decided(next(
             &bash("git commit -m x"),
@@ -469,7 +495,7 @@ mod tests {
     #[test]
     fn a_bound_powershell_call_passed_or_left_unrecorded_is_caught() {
         let call = HookInput::PowerShell(envelope("/q"));
-        let decided = decided(next(&call, &context(Some("/p")), &Seen::default(), &disk()));
+        let decided = decided(next(&call, &context(Some("/p")), &looked_up(), &disk()));
         assert_eq!(decided.answer, Answer::Ask(reason::powershell_ask()));
         let record = decided.record.expect("an ask is recorded");
         assert_eq!(record.tool, "PowerShell");
@@ -501,7 +527,7 @@ mod tests {
         assert_eq!(record.target.as_deref(), Some(CONFIG));
 
         let push = bash("git push origin main");
-        let record = decided(next(&push, &context(Some("/p")), &Seen::default(), &disk()))
+        let record = decided(next(&push, &context(Some("/p")), &looked_up(), &disk()))
             .record
             .expect("a push ask is recorded");
         let command = ToolInput {
