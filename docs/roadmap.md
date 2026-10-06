@@ -1,10 +1,10 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T9 merged, as of origin/main `a76182be`, on 2026-10-05, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T9 merged, as of origin/main `a76182be`, on 2026-10-05, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. Each build pull request updates this roadmap.
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except [#134](https://github.com/crenshawdev/baley/issues/134), which blocks Build 4, and the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190), [#194](https://github.com/crenshawdev/baley/issues/194), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201) and [#203](https://github.com/crenshawdev/baley/issues/203), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#186](https://github.com/crenshawdev/baley/issues/186), [#190](https://github.com/crenshawdev/baley/issues/190), [#194](https://github.com/crenshawdev/baley/issues/194), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201) and [#203](https://github.com/crenshawdev/baley/issues/203), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -17,14 +17,12 @@ flowchart TB
     B7["Build 7: Next action and progress<br/>#28"]
     B8["Build 8: Search, why and support work<br/>#29"]
     B9["Build 9: Removal<br/>#30"]
-    D134["Design: what a plan re-check reads<br/>#134"]
     OTHER["11 other open issues:<br/>designs, upkeep, bugs"]
     R1["Release design<br/>#14"]
     R2["Live acceptance run on Claude Code"]
     R3["Publish and install"]
 
     B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7 --> B8 --> B9 --> R1 --> R2 --> R3
-    D134 --> B4
     OTHER --> R1
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
@@ -35,11 +33,11 @@ flowchart TB
 
     class B1,B2 done
     class B3 progress
-    class B4,R1 blocked
-    class B5,B6,B7,B8,B9,D134,OTHER,R2,R3 planned
+    class R1 blocked
+    class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. The 11 other issues block the release design; the seven Build 3 findings are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -245,20 +243,24 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotte
 
 ## Build 4: Planning
 
-[#25](https://github.com/crenshawdev/baley/issues/25) · milestone Evidence · blocked
+[#25](https://github.com/crenshawdev/baley/issues/25) · milestone Evidence · planned
 
 The owner starts a project, shapes the story backlog, and commits stories to phases under a task capacity. Each story carries versioned truths, and each truth has one check. The analyzer and the planner ask the owner only the decisions left to the owner, each with a recommended answer, in rounds ordered by what each question depends on, and every answer and deferral is recorded ([ADR 0030](adr/0030-question-rounds.md)). Each phase's plan is written, checked, reviewed and risk-scanned, and approval binds the plan's exact digest. Every configured reviewer runs, and a provider that cannot be called is replaced by the host's own subagent reviewer unless that reviewer already runs. The host session makes the outside calls from Baley's work order and checks each finding, and the owner rules on each one that survives ([ADR 0013](adr/0013-host-session-calls-outside-models.md), [ADR 0019](adr/0019-reviews-adjudicated-and-ruled.md)). The first workers are dispatched here, so routing is finished here. The first dispatch task supplies Claude Code's identity rung map and a dated per-model table of supported effort levels. Claude Code runs an unsupported level as the highest supported level at or below it, and a model without effort is not applicable. The route records the requested rung and the effective level apart. `RungMap` is unchanged, and the owner reviews the initial table in that task's pull request.
 
+Build 4 implements PLN-R16's full and diff plan re-check inputs, the setting's first reader and validation, immutable material for each round, and the scope recorded in plan-check and plan-review events and views. Its planning/checker and review-admission tasks define the hand-off between the two paths, preserving each path's authorization and round budget.
+
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0002 system design](design/0002-system-design.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0004 starting a project and changing scope](design/0004-starting-a-project-and-changing-scope.md), [0005 context, plans and acceptance](design/0005-context-plans-and-acceptance.md), [0008 review](design/0008-review.md), [0009 risk](design/0009-risk.md), [0012 host interface](design/0012-host-interface.md), [0014 support families](design/0014-support-families.md)
-- ADRs: [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0017 stories and sprints](adr/0017-stories-and-sprints.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md), [0030 question rounds](adr/0030-question-rounds.md), [0031 one term per concept](adr/0031-one-term-per-concept.md)
+- ADRs: [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0017 stories and sprints](adr/0017-stories-and-sprints.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md), [0030 question rounds](adr/0030-question-rounds.md), [0031 one term per concept](adr/0031-one-term-per-concept.md), [0037 plan re-check scope](adr/0037-plan-recheck-scope.md)
 - Carries: [#40](https://github.com/crenshawdev/baley/issues/40), [#68](https://github.com/crenshawdev/baley/issues/68), [#69](https://github.com/crenshawdev/baley/issues/69), [#72](https://github.com/crenshawdev/baley/issues/72)
-- Blocked by: Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)) and the design [#134](https://github.com/crenshawdev/baley/issues/134), which settles what a plan re-check reads before the plan checker is built
+- Blocked by: Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24))
 
 ## Build 5: Doing the work
 
 [#26](https://github.com/crenshawdev/baley/issues/26) · milestone Evidence · planned
 
 Baley runs a phase's tasks and runs every test and check itself, judging by exit code ([ADR 0014](adr/0014-baley-runs-tests.md)). A task close is refused for any path outside the lease until the owner rules on it ([ADR 0018](adr/0018-lease-enforced-at-close.md)). Build 5 also supplies the active dispatch's lease to the guard's write decision, whose only lease input until then is "no active dispatch", and adds the out-of-lease deny (GRD-R11, EXE-R8). The verifier gets specs and run ids, never the executor's summary. Diff review and the completion risk scan gate each plan. A `fix` ruling opens a gap plan, and a finding is filed on GitHub only on the owner's command. A returning finding the owner dismissed before is brought back beside that dismissal, and the owner confirms or reverses it.
+
+Build 5 constructs the full revised targets for diff and completion risk review re-checks, including the original reviewed changes and completed gap-plan fixes.
 
 - Designs: [0002 system design](design/0002-system-design.md), [0006 execution](design/0006-execution.md), [0007 verification](design/0007-verification.md), [0008 review](design/0008-review.md), [0009 risk](design/0009-risk.md), [0012 host interface](design/0012-host-interface.md)
 - ADRs: [0014 Baley runs tests](adr/0014-baley-runs-tests.md), [0018 lease enforced at close](adr/0018-lease-enforced-at-close.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md)
@@ -317,7 +319,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. Installation on Claude Code: MCP registration, instruction stubs and the sandbox rule. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except #134 and the Build 3 findings #184, #186, #190, #194, #200, #201 and #203.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 findings #184, #186, #190, #194, #200, #201 and #203.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -329,13 +331,12 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 ## Other open issues
 
-Every issue here except #134 and the Build 3 findings blocks the release design #14. #134 blocks Build 4, which blocks #14. GitHub links none of the seven Build 3 findings to #14. "Carried by" means that build does the fix.
+Every issue here except the Build 3 findings blocks the release design #14. GitHub links none of the seven Build 3 findings to #14. "Carried by" means that build does the fix.
 
 ### Designs
 
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
-| [#134](https://github.com/crenshawdev/baley/issues/134) | Choose what a plan re-check reads | Encyclopedists | Blocks Build 4 and lands before it |
 | [#47](https://github.com/crenshawdev/baley/issues/47) | Repository upkeep and the build gate | Encyclopedists | #49 #50 #54 wait on it (stated in their text; no GitHub link) |
 
 ### Upkeep and docs
@@ -372,12 +373,12 @@ Every issue here except #134 and the Build 3 findings blocks the release design 
 
 ## Milestones
 
-Counts as of 2026-10-05.
+Counts as of 2026-10-05, with #134 closed by the design landing on 2026-10-06.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
 | [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 32 | 15 | Builds 3 to 9, bug #40, #44 and findings #184, #186, #190, #194, #200 and #201 | Open |
-| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 2 | 5 | #134, #47, #49, #50, #54 | Open |
+| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 3 | 4 | #47, #49, #50, #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
 | [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
 | [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its stories, revise a truth or a story, keeping every earlier version on record. | 1 | 0 | None | Closed |
