@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0003: Configuration and routing](../design/0003-configuration-and-routing.md) |
 | Supersedes | [0027](0027-vendor-folders-and-plain-keys.md), in part: the compiled key-name table names `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` only |
-| Superseded by | |
+| Superseded by | [0039](0039-session-owned-provider-credentials.md), in part: detection looks up provider keys |
 
 ## Context and problem
 

@@ -15,7 +15,7 @@ Claude Code starts one Baley server per session over stdio ([ADR 0034](0034-one-
 
 [ADR 0009](0009-served-instructions.md) leaves stub placement to a plugin or `baley init`. [Design 0012](../design/0012-host-interface.md) gives that work to `baley install`. A plugin cannot carry all the sandbox and permission settings needed by the [host security bar](0033-host-security-bar.md). Delivery needs one owner action and one writer of the complete configuration.
 
-An update must preserve a running session's binary and the guard's bounded response time. A release archive's checksum alone does not authenticate its publisher, and a provenance attestation is not a signature the installed binary can verify by itself.
+An update must preserve a running session's server binary and the guard's bounded response time. A release archive's checksum alone does not authenticate its publisher, and a provenance attestation is not a signature the installed binary can verify by itself.
 
 ## Decision drivers
 
@@ -23,7 +23,7 @@ An update must preserve a running session's binary and the guard's bounded respo
 - No package runtime or plugin is needed to run a Rust binary.
 - Updates are the owner's choice and never spend the guard's time budget.
 - Downloads are authenticated before activation.
-- A running session keeps the version it started with.
+- A running session keeps its server version; each hook call follows the stable path and must work beside that server.
 
 ## Considered options
 
@@ -31,15 +31,21 @@ An update must preserve a running session's binary and the guard's bounded respo
 2. An npm package that launches the platform binary
 3. A Claude Code plugin carrying registration, hooks and stubs
 
+Update policy options:
+
+1. Manual updates only
+2. Automatic updates off by default, enabled by the owner
+3. Automatic updates on by default, disabled by the owner
+
 ## Decision
 
 Chosen option: **1**. The owner runs one installer command. The script downloads a release, verifies its signature and checksum, places the binary behind the stable path `~/.local/bin/baley`, and invokes `baley install`. There is no npm dependency and no Claude Code plugin.
 
-**Wiring.** `baley install` writes the user-level MCP entry, the pre-tool hook, the stubs, the sandbox configuration and the `Read` and `Edit` deny rules. Every executable reference uses the same absolute stable path. It preserves separately owned registrations and settings, including Cadence's. It resolves Baley's folders once for the server, hook and deny paths and records what it installed. `baley doctor` checks the installed result. There is no session-start hook.
+**Wiring.** `baley install` writes the user-level MCP entry, the pre-tool hook, the stubs, the sandbox configuration and the `Read` and `Edit` deny rules. Every executable reference uses the same absolute stable path. It preserves separately owned registrations and settings. At install it resolves Baley's folders to render the deny paths and records those paths. The server and hook resolve their own runtime environment; the registration pins no `BALEY_HOME` or `XDG_*` value. Doctor reports any disagreement between those runtime folders and the installed denials. `baley doctor` checks the installed result. There is no session-start hook.
 
 **Setup.** Install takes the settings interview's defaults. The interview remains available through `baley config interview`. Outside providers remain disabled until the owner chooses them and types the risk acknowledgement required by [ADR 0039](0039-session-owned-provider-credentials.md). Install never supplies that confirmation. Missing system sandbox prerequisites are reported with the fix, and the receipt names the need for a new Claude Code session and per-checkout `baley init`.
 
-**Updates.** Automatic updates exist and are off by default. Once enabled, `baley serve` starts a detached process that checks at most once a day across sessions. Neither that process nor its network waits run inside the guard hook or its budget. A download's signature and checksum are verified before a new version is staged beside the old one behind the stable path. Activation applies to new sessions only. Existing sessions keep their version, and the old binary remains available to them. Stub and hook activation must preserve that same boundary. A manual `baley update` is always available and uses the same verification and activation rules.
+**Updates.** Update policy option **2** is chosen: automatic updates exist and are off by default. Once enabled, `baley serve` starts a detached process that checks at most once a day across sessions. Neither that process nor its network waits run inside the guard hook or its budget. A download's signature and checksum are verified before a new version is staged beside the old one behind the stable path. New sessions start the new server and load its stubs; existing sessions keep their server and loaded instruction version, and the old binary remains available to them. The hook follows the stable path, so its next call runs the newly activated binary, even beside an older running server. A newer hook must work with that server and its ledger state. A manual `baley update` is always available and uses the same verification and activation rules. The updater uses ADR 0028's `reqwest` HTTP client to contact the release source; it sends no project content or provider credential.
 
 Release verification uses a signed checksum manifest. Verification probably needs a new dependency. The signature format and verification dependency are not selected here. A build task must name any new dependency before adding it.
 
@@ -55,15 +61,15 @@ Release verification uses a signed checksum manifest. Verification probably need
 ### Negative
 
 - Baley must merge host settings safely and distinguish its own artifacts from somebody else's.
-- Keeping old versions and activating hooks and stubs for new sessions costs more than replacing one file. Hooks start anew per call, so changing a link alone cannot establish the session boundary.
+- Keeping old server versions available costs more than replacing one file. Hooks start anew through the stable path, so a new hook must remain compatible with an older running server and its ledger state.
 - Once opted in, update checks make network calls without a prompt for each check.
 - Under ADR 0034, an old server can become read-only when a newer binary raises the ledger's compatibility epoch.
 
 ### Follow-up
 
 - Build 3 T14 to T17 ([#24](https://github.com/crenshawdev/baley/issues/24)) implement delivery, artifact application, setup and installed qualification under HST-R12 and HST-R17. They are no longer held for a delivery choice.
-- The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) specifies publication and trust for the signed checksum manifest. The implementing task names its verification dependency, if any.
-- T14 and T15 specify and qualify how fresh hook processes and stub reads retain the session's version during activation. A stable link alone is insufficient evidence.
+- The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) specifies publication and trust for the signed checksum manifest. The implementing task names both the installer-side verifier that runs before Baley exists and the updater verifier, including any new dependency.
+- T14 implements compatibility of a newer stable-path hook with an older running server and its ledger state; T17 qualifies it. T15 preserves the new-session boundary for loading stubs. T14 defines the staged-version folder and adds it to the protected paths; T11 supplies the installed executable path to that projection.
 
 ## Options in detail
 
@@ -78,3 +84,15 @@ A thin package can select a platform binary, but adds Node and npm to installati
 ### Claude Code plugin
 
 Can carry registration, hooks and stubs, but still needs the binary to write the remaining settings. Versioned plugin paths also complicate activation during a running session. It adds a second carrier without completing installation.
+
+### Manual updates only
+
+Avoids automatic network traffic but gives the owner no way to request unattended updates. It does not meet the update requirement.
+
+### Opt-in automatic updates (chosen)
+
+Keeps network checks off until the owner enables them, while allowing unattended updates after that choice. Daily detached checks bound the work and leave the guard budget untouched.
+
+### Opt-out automatic updates
+
+Keeps installations current without a setup choice, but initiates network checks before the owner consents. It conflicts with the requirement that automatic updates be opt-in.

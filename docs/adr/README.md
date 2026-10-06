@@ -20,7 +20,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted, superseded in part by 0021 |
 | [0011](0011-one-shared-server.md) | Run one shared Baley server per user over stdio and HTTP | Superseded by 0034 |
 | [0012](0012-optimistic-concurrency.md) | Use optimistic concurrency in the shared server | Accepted |
-| [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted, superseded in part by 0027 and 0039 |
+| [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted, superseded in part by 0027 and 0039 (credential wrapper, provider login, model detection and typed returns; Baley parses raw responses) |
 | [0014](0014-baley-runs-tests.md) | Have Baley run tests and checks itself and judge by exit code | Accepted |
 | [0015](0015-settings-in-toml.md) | Keep settings in TOML: one global file, one project file, host sections | Accepted, superseded in part by 0027 |
 | [0016](0016-key-store.md) | Store provider API keys encrypted in the ledger with the master key in the OS secret store | Superseded by 0027, and in part by 0023 and 0039 |

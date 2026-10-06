@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md), [0002: System design](../design/0002-system-design.md), [0003: Configuration and routing](../design/0003-configuration-and-routing.md), [0006: Execution](../design/0006-execution.md), [0010: Guard](../design/0010-guard.md), [0012: Host interface](../design/0012-host-interface.md) |
 | Supersedes | [0029](0029-a-host-may-offer-more.md), in part: the host that offers less sets the floor; [0020](0020-sandbox-is-a-write-barrier.md), in part: reads of Baley's home are the host's policy; [0018](0018-lease-enforced-at-close.md), in part: the reason for the close check and the Codex follow-up; [0008](0008-host-sandbox-isolation.md), in part: the driver naming both hosts; [0027](0027-vendor-folders-and-plain-keys.md), in part: the Codex consequence |
-| Superseded by | |
+| Superseded by | [0039](0039-session-owned-provider-credentials.md), in part: provider keys stay out of agents' reach |
 
 ## Context and problem
 

@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0038](0038-installer-and-opt-in-updates.md), in part: the plugin or `baley init` writes the stubs |
 
 ## Context and problem
 
