@@ -179,6 +179,16 @@ fn evidenced(caller: &ServerCaller, instruction: Option<&InstructionEvidence>) -
     }
 }
 
+/// Selects the caller handed to preparation before it can append any events.
+fn prepare_capture<T>(
+    judged: &JudgedCapture,
+    caller: &ServerCaller,
+    prepare: impl FnOnce(&ServerCaller, &WriteRequest) -> T,
+) -> T {
+    let caller = evidenced(caller, judged.instruction.as_ref());
+    prepare(&caller, &judged.request)
+}
+
 /// Records one capture of `kind`, `text` and `phase` under `command`, the
 /// command preparation returned, in one domain transaction.
 ///
@@ -255,20 +265,21 @@ pub fn serve(arguments: &Value, preparation: &Preparation) -> Value {
         Ok(judged) => judged,
         Err(refusal) => return refusal,
     };
-    let caller = evidenced(&preparation.caller, judged.instruction.as_ref());
     let ledger = preparation.ledger.as_deref();
     // With no ledger, preparation fails at the project check, before any
     // settings are read from the config folder.
     let config = ledger.map_or(Path::new(""), |ledger| ledger.config.as_path());
-    let prepared = match prepare(
-        ledger.map(|ledger| &ledger.store),
-        &caller,
-        Some(&judged.request),
-        config,
-        preparation.host,
-        &preparation.at,
-        &mut crate::process::System,
-    ) {
+    let prepared = match prepare_capture(&judged, &preparation.caller, |caller, request| {
+        prepare(
+            ledger.map(|ledger| &ledger.store),
+            caller,
+            Some(request),
+            config,
+            preparation.host,
+            &preparation.at,
+            &mut crate::process::System,
+        )
+    }) {
         Ok(prepared) => prepared,
         Err(failed) => return serde_json::to_value(*failed).expect("a failed answer serializes"),
     };
@@ -992,6 +1003,31 @@ mod tests {
         assert_eq!(formed.host(), base.host());
         assert_eq!(formed.baley_session(), base.baley_session());
         assert_eq!(formed.call(), base.call());
+    }
+
+    #[test]
+    fn preparation_receives_a_caller_without_the_captures_instruction_evidence() {
+        let evidence = InstructionEvidence::new("bal-capture", "1", &"ab".repeat(32)).unwrap();
+        let judged = JudgedCapture {
+            request: WriteRequest {
+                kind: CommandKind(CAPTURE_COMMAND.into()),
+                request_id: RequestId(REQUEST.into()),
+                digest: Hash([1; 32]),
+            },
+            kind: CaptureKind::Note,
+            text: "keep this".into(),
+            phase: None,
+            instruction: Some(evidence.clone()),
+        };
+        // Observe the input at preparation, before it returns a domain command.
+        let observed = prepare_capture(&judged, &caller(), |selected, _| selected.clone());
+        assert_eq!(observed.instructions(), &[evidence]);
+        assert_eq!(
+            observed,
+            caller()
+                .with_instructions(judged.instruction.into_iter().collect())
+                .unwrap()
+        );
     }
 
     #[test]
