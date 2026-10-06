@@ -4,8 +4,8 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         owner = person "Owner" "The person responsible for the work. Approves plans, rules on findings, sets policy."
 
         baley = softwareSystem "Baley" "Decides and orchestrates every step of the process; keeps the record." {
-            binary = container "Baley server" "The Rust binary. Each Claude Code session starts its own process of it over stdio as an MCP server. The command line and guard hook run it as processes of their own." "Rust" {
-                hostInterface = component "Host interface" "MCP server (stdio), command line and guard hook: the only ways in."
+            binary = container "Baley server" "The Rust binary. Each Claude Code session starts its own process of it over stdio as an MCP server. The command line runs it as a process of its own, and the guard hook as one process per tool call, which records its answers in the per-user ledger." "Rust" {
+                hostInterface = component "Host interface" "MCP server (stdio), command line and guard hook: the only ways in. The guard hook records its answers in the per-user ledger."
                 hardin = component "Hardin" "Derives the state of the work from the record, answers what may happen next and refuses the rest."
                 domain = component "Domain areas" "The rules of each process area: planning, execution, verification, review, risk, landing and the rest."
                 composer = component "Work order composer" "Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the record."
@@ -28,6 +28,11 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         owner -> hostInterface "Uses the command line"
         owner -> keysFile "Writes provider keys by hand"
         host -> hostInterface "Work orders, results, questions" "MCP over stdio"
+        host -> hostInterface "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
+        # Explicit, so the context and container views show the hook beside
+        # MCP; the implied edges would carry only the first component relation.
+        host -> baley "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
+        host -> binary "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
         host -> repo "Workers edit source and commit"
         host -> reviewers "Outside review calls, with prompts built by Baley"
         hostInterface -> hardin "Asks what may happen next"

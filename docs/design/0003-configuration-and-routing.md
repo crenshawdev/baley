@@ -48,7 +48,7 @@ graph LR
         style 10 fill:#85bbf0,stroke:#5d82a8,color:#000000
         11["<div style='font-weight: bold'>Ports and adapters</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Storage, git and test runner,<br />forge and host adapters. The<br />core sees only these ports.</div>"]
         style 11 fill:#85bbf0,stroke:#5d82a8,color:#000000
-        4["<div style='font-weight: bold'>Host interface</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>MCP server (stdio), command<br />line and guard hook: the only<br />ways in.</div>"]
+        4["<div style='font-weight: bold'>Host interface</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>MCP server (stdio), command<br />line and guard hook: the only<br />ways in. The guard hook<br />records its answers in the<br />per-user ledger.</div>"]
         style 4 fill:#85bbf0,stroke:#5d82a8,color:#000000
         7["<div style='font-weight: bold'>Work order composer</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Builds every dispatch: role,<br />model and effort from policy,<br />instructions from the binary,<br />inputs from the record.</div>"]
         style 7 fill:#85bbf0,stroke:#5d82a8,color:#000000
