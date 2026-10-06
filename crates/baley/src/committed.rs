@@ -73,12 +73,23 @@ pub fn read(
 }
 
 /// Bytes kept of each stream of a guard launch. A project file larger than
-/// this is refused as incomplete output.
-const GUARD_OUTPUT_LIMIT: usize = 1 << 20;
+/// this is refused as incomplete output, as the guard's working-tree read
+/// refuses one.
+const GUARD_OUTPUT_LIMIT: usize = settings::GUARD_LIMIT;
 
 /// Bytes kept of git's first stderr line in a guard read's error, so the
 /// error cannot carry a flood of output or any later line.
 const GUARD_EXCERPT_LIMIT: usize = 256;
+
+/// A guard read's refusal, with git's own words kept apart from Baley's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardRefusal {
+    /// The refusal as the live answer states it, git's excerpt included.
+    pub refusal: Unavailable,
+    /// The excerpt of git's stderr that ends the refusal's cause, when it
+    /// carries one. A guard record keeps the cause without it.
+    pub excerpt: Option<String>,
+}
 
 /// Reads HEAD's copy of `working` as [`read`] does, on the guard's budget.
 ///
@@ -87,17 +98,20 @@ const GUARD_EXCERPT_LIMIT: usize = 256;
 /// they share git's one allowance with the branch lookup. With no time left
 /// nothing launches and the read is refused. Each stream keeps at most
 /// `GUARD_OUTPUT_LIMIT` bytes (1 MiB), and an error keeps at most
-/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line.
+/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line, which the
+/// refusal also gives apart.
 ///
-/// It has no caller yet: Build 3's recording guard reads it after the branch
-/// lookup, on the same budget.
+/// The guard hook is its caller: it reads HEAD's copy at the session
+/// project's root after the branch lookup, on the same budget.
 pub fn read_for_guard(
     root: &Path,
     working: &SettingsFile,
     process: &mut dyn Process,
     budget: &mut Budget,
-) -> Result<Committed, Unavailable> {
-    sequence(root, working, &mut |args| {
+) -> Result<Committed, GuardRefusal> {
+    let mut excerpt = None;
+    let read = sequence(root, working, &mut |args| {
+        excerpt = None;
         let grant = budget
             .git()
             .ok_or_else(|| "the guard's git time is spent".to_owned())?;
@@ -109,8 +123,17 @@ pub fn read_for_guard(
         .limit(GUARD_OUTPUT_LIMIT);
         let ran = git_process::run(&launch, process).map(first_line_excerpt);
         budget.charge_git(grant);
+        // A refusal after a nonzero exit comes from `failed`, which ends the
+        // cause with this text.
+        excerpt = ran
+            .as_ref()
+            .ok()
+            .filter(|output| output.code().is_some_and(|code| code != 0))
+            .map(stderr_text)
+            .filter(|text| !text.is_empty());
         Ok((launch, ran))
-    })
+    });
+    read.map_err(|refusal| GuardRefusal { refusal, excerpt })
 }
 
 /// Starts one git launch of the sequence with these arguments and runs it,
@@ -287,17 +310,22 @@ pub(crate) fn failed(launch: &Launch, output: &Output) -> String {
         let signal = output.signal().unwrap_or_default();
         return format!("{} was killed by signal {signal}", command(launch));
     };
-    let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
-    // Control characters from the repository never reach the owner's terminal.
-    let stderr: String = String::from_utf8_lossy(first)
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
+    let stderr = stderr_text(output);
     if stderr.is_empty() {
         format!("{} exited with code {code}", command(launch))
     } else {
         format!("{} exited with code {code}: {stderr}", command(launch))
     }
+}
+
+/// Git's first stderr line as an error states it.
+fn stderr_text(output: &Output) -> String {
+    let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
+    // Control characters from the repository never reach the owner's terminal.
+    String::from_utf8_lossy(first)
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect()
 }
 
 pub(crate) fn command(launch: &Launch) -> String {
@@ -555,7 +583,7 @@ mod tests {
         Budget::with_clock(move || at)
     }
 
-    fn guard_read(fake: &mut dyn Process, budget: &mut Budget) -> Result<Committed, Unavailable> {
+    fn guard_read(fake: &mut dyn Process, budget: &mut Budget) -> Result<Committed, GuardRefusal> {
         read_for_guard(Path::new(ROOT), &working("/r/baley.toml"), fake, budget)
     }
 
@@ -611,7 +639,7 @@ mod tests {
         // No scripted answer: a launch would panic.
         let mut fake = Recorded::new();
 
-        let refusal = guard_read(&mut fake, &mut budget).unwrap_err();
+        let refusal = guard_read(&mut fake, &mut budget).unwrap_err().refusal;
 
         assert_eq!(
             cause(&refusal),
@@ -632,7 +660,9 @@ mod tests {
                 .out(format!("100644 blob {OID}\tbaley.toml\n"))
                 .fail(128, stderr);
 
-            let refusal = guard_read(&mut fake, &mut budget_at(secs(0))).unwrap_err();
+            let refusal = guard_read(&mut fake, &mut budget_at(secs(0)))
+                .unwrap_err()
+                .refusal;
 
             let cause = cause(&refusal);
             assert!(!cause.contains("SENTINEL"));
@@ -649,12 +679,33 @@ mod tests {
             &mut fake,
             &mut budget_at(std::time::Duration::from_millis(5_600)),
         )
-        .unwrap_err();
+        .unwrap_err()
+        .refusal;
 
         assert_eq!(
             cause(&refusal),
             "HEAD's copy: git rev-parse --verify -q HEAD exceeded git deadline of 2.4 seconds"
         );
+    }
+
+    #[test]
+    fn gits_stderr_in_a_guard_refusal_not_given_apart_from_baleys_words_is_caught() {
+        let mut failed = Recorded::new().fail(128, "fatal: SENTINEL\nnext line\n");
+        let refused = guard_read(&mut failed, &mut budget_at(secs(0))).unwrap_err();
+        assert_eq!(refused.excerpt.as_deref(), Some("fatal: SENTINEL"));
+        assert_eq!(
+            cause(&refused.refusal),
+            "HEAD's copy: git rev-parse --verify -q HEAD exited with code 128: fatal: SENTINEL"
+        );
+
+        // Stderr beside a successful exit is not in the refusal's words.
+        let mut warned =
+            Recorded::new()
+                .out(HEAD)
+                .answer(Output::exited(0, "\n", "warning: SENTINEL"));
+        let refused = guard_read(&mut warned, &mut budget_at(secs(0))).unwrap_err();
+        assert_eq!(refused.excerpt, None);
+        assert!(!cause(&refused.refusal).contains("SENTINEL"));
     }
 
     #[test]

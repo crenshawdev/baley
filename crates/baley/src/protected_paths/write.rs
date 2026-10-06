@@ -2,7 +2,7 @@
 //! It judges the target path alone, so it gives the same answer whether or
 //! not a project is bound and from any working directory.
 
-use super::contain::is_inside;
+use super::contain::{is_inside, names_missing_file};
 use super::resolve::{
     Lookup, ResolveFailure, canonical_cwd, resolve_existing_prefix, resolve_under,
 };
@@ -41,9 +41,11 @@ pub enum Lease {
 ///
 /// It denies a target inside or equal to the home or config folder, and a
 /// target that is the same destination as a protected file by path or by
-/// identity. It resolves both the spelling as given and the spelling with each
-/// backslash read as a slash, and denies when either lands on a protected
-/// path or when a path cannot be resolved.
+/// identity. While a protected file does not exist, a spelling that would
+/// create it on a case-insensitive volume is that destination too. It
+/// resolves both the spelling as given and the spelling with each backslash
+/// read as a slash, and denies when either lands on a protected path or when
+/// a path cannot be resolved.
 pub fn write_answer(
     cwd: &str,
     target: &str,
@@ -106,8 +108,10 @@ pub(super) fn resolve_entry(entry: &Path, fs: &dyn Lookup) -> Result<PathBuf, Re
     resolve_existing_prefix(entry, fs)
 }
 
-/// Whether two resolved paths are one file: the same path, or the same
-/// (device, inode) when both exist.
+/// Whether two resolved paths are one file: the same path, the same
+/// (device, inode) when both exist, or, when the protected `destination`
+/// does not exist yet, a spelling that would create it on a case-insensitive
+/// volume (see [`names_missing_file`]).
 fn same_destination(
     target: &Path,
     destination: &Path,
@@ -121,8 +125,9 @@ fn same_destination(
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(ResolveFailure::Identity(error.to_string())),
     };
-    Ok(match (identity(target)?, identity(destination)?) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    })
+    match (identity(target)?, identity(destination)?) {
+        (Some(left), Some(right)) => Ok(left == right),
+        (_, None) => names_missing_file(target, destination, fs),
+        (None, Some(_)) => Ok(false),
+    }
 }

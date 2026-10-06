@@ -1,4 +1,5 @@
-//! Whether one resolved path lies inside, or contains, a protected folder.
+//! Whether one resolved path lies inside, or contains, a protected folder,
+//! or names a protected file not yet created.
 //! Comparing components alone would miss a case-variant spelling on a
 //! case-insensitive volume, so the (device, inode) identity of existing
 //! ancestors is compared too.
@@ -32,6 +33,39 @@ pub fn is_inside(path: &Path, folder: &Path, fs: &dyn Lookup) -> Result<bool, Re
             continue;
         }
         if let Ok(rest) = path.strip_prefix(ancestor)
+            && begins_with(rest, &missing)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `path` names `file`, a protected file that does not exist yet, as
+/// [`is_inside`] judges a missing folder: below an existing ancestor with the
+/// identity of the file's deepest existing ancestor, the rest of `path` is
+/// the file's missing components, ignoring ASCII case, with none left over.
+/// A differently cased spelling becomes the file on a case-insensitive
+/// volume. On a case-sensitive one this also refuses a case-variant sibling,
+/// the same accepted cost as for folders. An existing file is never matched
+/// here.
+pub(super) fn names_missing_file(
+    path: &Path,
+    file: &Path,
+    fs: &dyn Lookup,
+) -> Result<bool, ResolveFailure> {
+    let Some((anchor, missing)) = deepest_existing(file, fs)? else {
+        return Ok(false);
+    };
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    for ancestor in path.ancestors() {
+        if identity(ancestor, fs)? != Some(anchor) {
+            continue;
+        }
+        if let Ok(rest) = path.strip_prefix(ancestor)
+            && rest.components().count() == missing.len()
             && begins_with(rest, &missing)
         {
             return Ok(true);

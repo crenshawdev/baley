@@ -59,6 +59,8 @@ pub mod exec;
 pub mod folders;
 /// The guard's one time budget: git and storage allowances inside the hook timeout.
 pub mod guard_budget;
+/// The guard hook: reads one host tool call, judges it and answers in the host's pre-tool hook form.
+pub mod guard_hook;
 /// Classifies one hook call's input for the guard: which tool it is and what it carries.
 pub mod hook_input;
 /// `baley init`: ties a repository to a ledger project.
@@ -79,5 +81,5 @@ pub mod policy_step;
 pub mod protected_paths;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
-/// The two settings files as bytes: the global file's path and one reader.
+/// The two settings files as bytes: the global file's path, one reader and its capped form for the guard.
 pub mod settings;

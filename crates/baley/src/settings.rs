@@ -1,5 +1,6 @@
-//! The settings files as bytes: where the global file is, and one reader that
-//! gathers a file and judges what it found (design 0003, CFG-R2, CFG-R9).
+//! The settings files as bytes: where the global file is, and a reader that
+//! gathers a file and judges what it found (design 0003, CFG-R2, CFG-R9),
+//! with a capped form of it for the guard.
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
@@ -38,6 +39,23 @@ pub fn read(path: &Path) -> Result<Option<SettingsFile>, Unavailable> {
     judge(path, gather(path))
 }
 
+/// The most bytes the guard takes of one settings file, and of each stream
+/// of its git reads of HEAD's copy: 1 MiB.
+pub const GUARD_LIMIT: usize = 1 << 20;
+
+/// Reads one settings file for the guard as [`read`] does, but takes at most
+/// [`GUARD_LIMIT`] bytes. A larger file is `config-unavailable` naming it, so
+/// the guard judges it torn rather than wait on it or read part of it.
+pub fn read_for_guard(path: &Path) -> Result<Option<SettingsFile>, Unavailable> {
+    judge_for_guard(path, gather_for_guard(path))
+}
+
+/// As [`gather`], reading one byte past [`GUARD_LIMIT`] so the judge can
+/// tell a file over the cap from one exactly at it.
+fn gather_for_guard(path: &Path) -> Seen {
+    gather_up_to(path, GUARD_LIMIT as u64 + 1)
+}
+
 /// What one read of a settings path found.
 pub(crate) enum Seen {
     Missing,
@@ -48,9 +66,14 @@ pub(crate) enum Seen {
 
 /// Opens the path, following a link, and reads the file if it is a regular one.
 pub(crate) fn gather(path: &Path) -> Seen {
+    gather_up_to(path, u64::MAX)
+}
+
+/// As [`gather`], reading at most `limit` bytes.
+fn gather_up_to(path: &Path, limit: u64) -> Seen {
     // Non-blocking, so a FIFO with no writer cannot hang the open before its
     // kind is judged; the flag changes nothing for a regular file.
-    let mut file = match OpenOptions::new()
+    let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(path)
@@ -70,7 +93,7 @@ pub(crate) fn gather(path: &Path) -> Seen {
         Ok(meta) if !meta.is_file() => Seen::NotRegular,
         Ok(_) => {
             let mut bytes = Vec::new();
-            match file.read_to_end(&mut bytes) {
+            match file.take(limit).read_to_end(&mut bytes) {
                 Ok(_) => Seen::Opened(bytes),
                 Err(error) => Seen::Unreadable {
                     cause: error.to_string(),
@@ -92,6 +115,19 @@ pub(crate) fn judge(path: &Path, seen: Seen) -> Result<Option<SettingsFile>, Una
         Seen::NotRegular => Err(unavailable(Fault::NotRegular)),
         Seen::Unreadable { cause } => Err(unavailable(Fault::Unreadable { cause })),
         Seen::Opened(bytes) => Ok(Some(file(path, bytes))),
+    }
+}
+
+/// As [`judge`], refusing a file past [`GUARD_LIMIT`].
+fn judge_for_guard(path: &Path, seen: Seen) -> Result<Option<SettingsFile>, Unavailable> {
+    match seen {
+        Seen::Opened(bytes) if bytes.len() > GUARD_LIMIT => Err(Unavailable {
+            path: path.into(),
+            fault: Fault::Unreadable {
+                cause: format!("it is over the guard's {GUARD_LIMIT}-byte limit"),
+            },
+        }),
+        seen => judge(path, seen),
     }
 }
 
@@ -137,6 +173,20 @@ mod tests {
         assert_eq!(
             refusal.to_string(),
             "config-unavailable: cannot read /c/config.toml: Permission denied (os error 13)"
+        );
+    }
+
+    #[test]
+    fn a_guard_judge_with_no_byte_cap_or_one_off_by_one_is_caught() {
+        let path = Path::new(PATH);
+        let at_cap = judge_for_guard(path, Seen::Opened(vec![b'#'; 1_048_576]));
+        assert_eq!(at_cap.unwrap().unwrap().bytes.len(), 1_048_576);
+
+        let refusal = judge_for_guard(path, Seen::Opened(vec![b'#'; 1_048_577])).unwrap_err();
+        assert_eq!(refusal.path, path);
+        assert_eq!(
+            refusal.to_string(),
+            "config-unavailable: cannot read /c/config.toml: it is over the guard's 1048576-byte limit"
         );
     }
 
@@ -197,5 +247,16 @@ mod tests {
         );
         assert_eq!(read(&dir.path().join("absent")), Ok(None));
         assert_eq!(read(dir.path()).unwrap_err().fault, Fault::NotRegular);
+    }
+
+    #[test]
+    fn a_guard_gather_reading_a_large_file_whole_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let large = dir.path().join("config.toml");
+        std::fs::write(&large, vec![b'#'; GUARD_LIMIT * 2]).unwrap();
+        let Seen::Opened(bytes) = gather_for_guard(&large) else {
+            panic!("opened");
+        };
+        assert_eq!(bytes.len(), GUARD_LIMIT + 1);
     }
 }

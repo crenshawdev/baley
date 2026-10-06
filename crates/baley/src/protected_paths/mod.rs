@@ -9,7 +9,7 @@ mod resolve;
 mod write;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use contain::{contains, is_inside};
 pub use read::read_answer;

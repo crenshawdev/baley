@@ -103,9 +103,6 @@ pub(crate) enum IntentKind {
     RailObservation {
         record: Box<baley::rail::risk::Recorded>,
     },
-    GuardAudit {
-        audit: super::writer::audit::Audit,
-    },
     /// GH-262: task and plan events the parse restored from the decisions
     /// log, by id. The only change is each named snapshot copy replaced by
     /// the log's text for it, and the operation that records the repair.
@@ -1896,7 +1893,6 @@ impl Intent {
             IntentKind::ExecutionFinalizeRiskV1 { .. }
             | IntentKind::RailReceipt { .. }
             | IntentKind::RailObservation { .. }
-            | IntentKind::GuardAudit { .. }
             | IntentKind::SnapshotRepairV1 { .. }
             | IntentKind::BoundaryObservationV1 { .. }
             | IntentKind::ExecutionDispatchV1 { .. }
@@ -1930,7 +1926,6 @@ impl Intent {
         self.validate_rail_receipt(snapshot)?;
         self.validate_risk_finalization(snapshot)?;
         self.validate_rail_observation(snapshot)?;
-        self.validate_guard_audit(snapshot)?;
         self.validate_snapshot_repair(snapshot)?;
         self.validate_boundary_v1(snapshot, decisions, summary_phase)?;
         Ok(())
@@ -2162,52 +2157,6 @@ impl Intent {
         Ok(())
     }
 
-    fn validate_guard_audit(&self, snapshot: &Snapshot) -> Result<()> {
-        let IntentKind::GuardAudit { audit } = &self.kind else {
-            return Ok(());
-        };
-        if self.participants.len() != 3
-            || self
-                .participants
-                .iter()
-                .any(|p| !matches!(p.target.as_str(), ITEMS | DECISIONS | STATE))
-        {
-            return Err(Error::Invalid(
-                "guard audit cannot change external participants".into(),
-            ));
-        }
-        let participant = |name| self.participants.iter().find(|p| p.target == name).unwrap();
-        let items = participant(ITEMS);
-        let decisions = participant(DECISIONS);
-        let state = participant(STATE);
-        let old_items = items.expected.bytes.as_deref().unwrap_or_default();
-        let old_decisions = decisions.expected.bytes.as_deref().unwrap_or_default();
-        let old = match state.expected.bytes.as_deref() {
-            Some(bytes) => Snapshot::parse(bytes, old_items, old_decisions)?,
-            None if items.expected.bytes.is_none() && decisions.expected.bytes.is_none() => {
-                Snapshot::new(0, b"", b"", Value::Null)?
-            }
-            _ => {
-                return Err(Error::Invalid(
-                    "guard audit cannot adopt partial store".into(),
-                ));
-            }
-        };
-        let mut expected: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
-        expected.push(audit.record()?);
-        model::adopt_stamps(&mut expected, &decisions.bytes)?;
-        if items.bytes != old_items
-            || decisions.bytes != model::render_lines(&expected)?
-            || old.generation.checked_add(1) != Some(snapshot.generation)
-            || snapshot.operations != old.operations
-            || snapshot.data != super::writer::audit::project(&old, audit)?
-        {
-            return Err(Error::Invalid(
-                "guard audit changed data outside its projection".into(),
-            ));
-        }
-        Ok(())
-    }
     fn validate_boundary_v1(
         &self,
         snapshot: &Snapshot,
@@ -3213,11 +3162,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(
         process,
     )?;
     policy.validate(&MutationContext {
-        operation: if matches!(intent.kind, IntentKind::GuardAudit { .. }) {
-            "guard_audit_recovery"
-        } else {
-            "recovery"
-        },
+        operation: "recovery",
         snapshot: &snapshot,
     })?;
     if let IntentKind::MilestonePruneV1 { prune } = &intent.kind {
@@ -3309,13 +3254,6 @@ mod provenance_tests {
                 value["decision_id"] = json!("finalization");
                 value["requirements"] = json!([]);
             }
-            "guard-audit" => {
-                value["audit"] = json!({
-                    "event_id":"audit","command_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "cwd":"/project","project":"/project","verb":"commit","branch":null,"policy":null,
-                    "outcome":"ask","unavailable":[],"reason":"fixture"
-                })
-            }
             "rail-observation" => {
                 value["record"] = json!({
                     "observation":{"version":1,"request_id":"scan","request_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -3387,7 +3325,6 @@ mod provenance_tests {
         finalization_refuses_loss,
         "execution-finalize-risk-v1"
     );
-    variant!(audit_retains, audit_refuses_loss, "guard-audit");
     variant!(
         rail_observation_retains,
         rail_observation_refuses_loss,

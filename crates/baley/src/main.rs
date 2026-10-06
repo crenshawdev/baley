@@ -1,6 +1,5 @@
 #[path = "config/binary.rs"]
 pub mod config;
-mod guard;
 /// The inherited engine, unreached by production since the per-session server and
 /// kept so its tests run. Build 9 removes it.
 #[allow(dead_code)]
@@ -60,7 +59,7 @@ enum Command {
     TaskInstructions,
     /// Run the MCP stdio server.
     Serve,
-    /// Guard Bash Git commands and binary-owned Write/Edit outputs.
+    /// Answer one Claude Code pre-tool hook call for Bash, Monitor, PowerShell, Read, Grep, Glob, Write, Edit or NotebookEdit.
     Guard,
     /// Render the compiled context-role skill without opening a project.
     ContextInstructions,
@@ -121,7 +120,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
             unreachable!("dispatched above")
         }
         Command::Serve => return run_serve(),
-        Command::Guard => return guard::run(),
+        Command::Guard => return baley::guard_hook::run(),
         Command::SkillDescription { name } => {
             let mut markdown = String::new();
             if std::io::stdin().read_to_string(&mut markdown).is_err() {
@@ -213,6 +212,13 @@ mod serve_argument_tests {
             assert_eq!(error.exit_code(), 2);
         }
         assert!(Cli::try_parse_from(["baley", "serve"]).is_ok());
+    }
+
+    #[test]
+    fn the_cli_names_the_guard_and_serve_subcommands() {
+        let command = |word| crate::Cli::try_parse_from(["baley", word]).unwrap().command;
+        assert!(matches!(command("guard"), crate::Command::Guard));
+        assert!(matches!(command("serve"), crate::Command::Serve));
     }
 
     #[test]

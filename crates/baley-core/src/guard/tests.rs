@@ -1,6 +1,9 @@
 //! The guard's decisions on supplied values. Expectations come from design
 //! 0010 and the guard's rules, never from running this code.
 
+use baley_store::{Actor, Change, DocKey, Event, Hash, KeyValue, ProjectId, Projector, RequestId};
+use serde_json::{Value, json};
+
 use super::*;
 use crate::policy::{
     EffectivePolicy, Host, OnProtected, Schema, SettingsFile, Unavailable, effective_policy,
@@ -558,4 +561,504 @@ fn an_unrecordable_deny_or_pass_being_changed_is_caught() {
             answer
         );
     }
+}
+
+// The guard's events and the input digest.
+
+#[test]
+fn a_guard_event_registered_at_any_version_but_1_is_caught() {
+    use baley_store::EventSchema;
+
+    let mut registry = crate::registry::Registry::new();
+    register_guard_events(&mut registry).unwrap();
+    for type_name in ["guard.answered", "guard.policy_recorded"] {
+        assert!(registry.reads(type_name, 1), "{type_name}");
+        assert!(!registry.reads(type_name, 2), "{type_name}");
+    }
+}
+
+fn bash(command: &str) -> String {
+    input_digest(
+        "Bash",
+        &ToolInput {
+            command: Some(command),
+            ..ToolInput::default()
+        },
+    )
+}
+
+#[test]
+fn an_input_digest_that_ignores_the_command_text_is_caught() {
+    let digest = bash("git commit -m a");
+    assert_ne!(digest, bash("git commit -m b"));
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    );
+}
+
+#[test]
+fn an_input_digest_without_the_tool_is_caught() {
+    let monitor = input_digest(
+        "Monitor",
+        &ToolInput {
+            command: Some("git push"),
+            ..ToolInput::default()
+        },
+    );
+    assert_ne!(bash("git push"), monitor);
+}
+
+#[test]
+fn an_input_digest_that_drops_the_field_names_is_caught() {
+    let path = ToolInput {
+        path: Some("x"),
+        ..ToolInput::default()
+    };
+    let glob = ToolInput {
+        glob: Some("x"),
+        ..ToolInput::default()
+    };
+    assert_ne!(input_digest("Grep", &path), input_digest("Grep", &glob));
+}
+
+#[test]
+fn command_text_reaching_the_guard_answered_payload_is_caught() {
+    let digest = bash("git commit -m SENTINEL-COMMAND");
+    let settings = GuardSettings {
+        protected_branches: vec!["main".into()],
+        on_protected: OnProtected::Refuse,
+        hard_fail: false,
+    };
+    let facts = AnsweredFacts {
+        host: "claude-code",
+        session: Some("s1"),
+        call: "toolu_01",
+        project_directory: Some("/r"),
+        cwd: "/r",
+        tool: "Bash",
+        input_digest: &digest,
+        target: None,
+        verb: Some(GitVerb::Commit),
+        branch: Some("main"),
+        settings: SettingsFact::Complete(&settings),
+    };
+    let payload = answered_payload(&facts, &Answer::Deny(reason::refuse_deny("main")))
+        .expect("a deny is recorded");
+    let text = payload.to_string();
+    assert!(!text.contains("SENTINEL-COMMAND"), "{text}");
+    assert!(text.contains(&digest), "{text}");
+}
+
+// The `guard` view and the redelivery judge.
+
+fn event(type_name: &str, seq: u64, payload: Value) -> Event {
+    Event {
+        project_id: ProjectId("user".into()),
+        seq,
+        stream: "guard".into(),
+        stream_version: seq,
+        type_name: type_name.into(),
+        type_version: 1,
+        actor: Actor::Baley,
+        caller: None,
+        recorded_at: "2026-10-06T09:00:00Z".into(),
+        request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
+        git: None,
+        policy_version: 0,
+        payload,
+        prev_hash: None,
+        hash: Hash([0; 32]),
+    }
+}
+
+fn put(changes: Vec<Change>) -> (DocKey, Value) {
+    match <[Change; 1]>::try_from(changes) {
+        Ok([Change::Put { key, body }]) => (key, body),
+        other => panic!("expected one put, got {other:?}"),
+    }
+}
+
+fn text_key(parts: &[&str]) -> DocKey {
+    DocKey(
+        parts
+            .iter()
+            .map(|part| KeyValue::Text((*part).into()))
+            .collect(),
+    )
+}
+
+/// A `guard.answered` payload for an ask about a push from `/r`.
+fn answered(session: Option<&str>) -> Value {
+    answered_payload(
+        &AnsweredFacts {
+            host: "claude-code",
+            session,
+            call: "toolu_01",
+            project_directory: Some("/r"),
+            cwd: "/r/sub",
+            tool: "Bash",
+            input_digest: "d1",
+            target: None,
+            verb: Some(GitVerb::Push),
+            branch: None,
+            settings: SettingsFact::Absent,
+        },
+        &Answer::Ask(reason::push_ask()),
+    )
+    .expect("an ask is recorded")
+}
+
+#[test]
+fn a_guard_answer_stored_under_the_wrong_key_or_losing_a_fact_is_caught() {
+    let (key, body) = put(GuardProjector::new()
+        .apply(&event("guard.answered", 7, answered(Some("s1"))), &[])
+        .unwrap());
+    assert_eq!(key, text_key(&["claude-code", "s1", "toolu_01"]));
+    assert_eq!(key, guard_key("claude-code", Some("s1"), "toolu_01"));
+    assert_eq!(
+        body,
+        json!({
+            "host": "claude-code",
+            "session_key": "s1",
+            "call": "toolu_01",
+            "input_digest": "d1",
+            "project_directory": "/r",
+            "cwd": "/r/sub",
+            "outcome": "ask",
+            "reason": reason::push_ask(),
+            "seq": 7,
+        })
+    );
+}
+
+#[test]
+fn a_call_with_no_session_colliding_with_a_sessioned_call_is_caught() {
+    let projector = GuardProjector::new();
+    let (with, _) = put(projector
+        .apply(&event("guard.answered", 1, answered(Some("s1"))), &[])
+        .unwrap());
+    let (without, body) = put(projector
+        .apply(&event("guard.answered", 2, answered(None)), &[])
+        .unwrap());
+    assert_ne!(with, without);
+    assert_eq!(without, text_key(&["claude-code", "", "toolu_01"]));
+    assert_eq!(without, guard_key("claude-code", None, "toolu_01"));
+    assert_eq!(body["session_key"], "");
+}
+
+#[test]
+fn a_guard_answer_with_no_call_id_or_a_plain_pass_accepted_into_the_view_is_caught() {
+    let mut no_call = answered(Some("s1"));
+    no_call.as_object_mut().unwrap().remove("call");
+    let mut pass = answered(Some("s1"));
+    pass["outcome"] = json!("pass");
+    let mut empty_session = answered(Some("s1"));
+    empty_session["session"] = json!("");
+    for payload in [no_call, pass, empty_session, json!("not an object")] {
+        let error = GuardProjector::new()
+            .apply(&event("guard.answered", 4, payload.clone()), &[])
+            .expect_err(&format!("{payload} must be refused"));
+        assert!(error.0.contains("guard.answered at seq 4"), "{}", error.0);
+    }
+}
+
+/// A stored `guard` document for a call from `/r` in `/r/sub`.
+fn stored(outcome: &str, reason: &str) -> Value {
+    json!({
+        "host": "claude-code",
+        "session_key": "s1",
+        "call": "toolu_01",
+        "input_digest": "d1",
+        "project_directory": "/r",
+        "cwd": "/r/sub",
+        "outcome": outcome,
+        "reason": reason,
+        "seq": 3,
+    })
+}
+
+#[test]
+fn a_replay_that_changes_the_answer_kind_or_reason_is_caught() {
+    for (outcome, reason, expected) in [
+        ("ask", "asked", Answer::Ask("asked".into())),
+        ("deny", "denied", Answer::Deny("denied".into())),
+        (
+            "pass-on-failure",
+            "unchecked",
+            Answer::PassOnFailure("unchecked".into()),
+        ),
+    ] {
+        assert_eq!(
+            redelivery(Some(&stored(outcome, reason)), "d1", Some("/r"), "/r/sub"),
+            Redelivery::Replay(expected)
+        );
+    }
+}
+
+#[test]
+fn a_redelivery_accepting_another_input_project_directory_or_cwd_is_caught() {
+    let document = stored("deny", "denied");
+    for (digest, directory, cwd) in [
+        ("d2", Some("/r"), "/r/sub"),
+        ("d1", Some("/q"), "/r/sub"),
+        ("d1", None, "/r/sub"),
+        ("d1", Some("/r"), "/r"),
+    ] {
+        assert_eq!(
+            redelivery(Some(&document), digest, directory, cwd),
+            Redelivery::Clash,
+            "{digest} {directory:?} {cwd}"
+        );
+    }
+    let mut absent = document.clone();
+    absent["project_directory"] = Value::Null;
+    assert_eq!(
+        redelivery(Some(&absent), "d1", Some("/r"), "/r/sub"),
+        Redelivery::Clash
+    );
+    assert_eq!(
+        redelivery(Some(&absent), "d1", None, "/r/sub"),
+        Redelivery::Replay(Answer::Deny("denied".into()))
+    );
+}
+
+#[test]
+fn an_unreadable_recorded_answer_replayed_instead_of_clashing_is_caught() {
+    assert_eq!(
+        redelivery(Some(&stored("pass", "x")), "d1", Some("/r"), "/r/sub"),
+        Redelivery::Clash
+    );
+    let mut no_reason = stored("ask", "x");
+    no_reason.as_object_mut().unwrap().remove("reason");
+    assert_eq!(
+        redelivery(Some(&no_reason), "d1", Some("/r"), "/r/sub"),
+        Redelivery::Clash
+    );
+}
+
+#[test]
+fn a_call_with_no_recorded_answer_judged_as_a_replay_or_clash_is_caught() {
+    assert_eq!(
+        redelivery(None, "d1", Some("/r"), "/r/sub"),
+        Redelivery::NoRecord
+    );
+}
+
+// The remembered policy.
+
+#[test]
+fn a_remembered_allow_or_ask_keeping_a_denial_or_the_list_is_caught() {
+    for on_protected in [OnProtected::Allow, OnProtected::Ask] {
+        assert_eq!(
+            denial_parts(&remembered(on_protected, false, &["main", "master"])),
+            DenialParts {
+                refuse: false,
+                hard_fail: false,
+                protected_branches: Vec::new(),
+            },
+            "{on_protected:?}"
+        );
+    }
+}
+
+#[test]
+fn the_protected_list_dropped_under_refuse_or_hard_fail_is_caught() {
+    let list = vec!["main".to_owned(), "master".to_owned()];
+    assert_eq!(
+        denial_parts(&remembered(OnProtected::Refuse, false, &["main", "master"])),
+        DenialParts {
+            refuse: true,
+            hard_fail: false,
+            protected_branches: list.clone(),
+        }
+    );
+    assert_eq!(
+        denial_parts(&remembered(OnProtected::Ask, true, &["main", "master"])),
+        DenialParts {
+            refuse: false,
+            hard_fail: true,
+            protected_branches: list,
+        }
+    );
+}
+
+const PROJECT_ROOT: &str = "/r";
+
+fn policy_recorded(seq: u64, checkout: &str, host: &str, parts: &DenialParts) -> Event {
+    event(
+        "guard.policy_recorded",
+        seq,
+        policy_recorded_payload(PROJECT_ROOT, Some(checkout), host, parts),
+    )
+}
+
+fn refuse_parts() -> DenialParts {
+    DenialParts {
+        refuse: true,
+        hard_fail: false,
+        protected_branches: vec!["main".into()],
+    }
+}
+
+/// The documents left after `events`, the latest put for a key winning as
+/// the store keeps them.
+fn remembered_documents(events: &[Event]) -> std::collections::BTreeMap<DocKey, Value> {
+    let projector = GuardPolicyProjector::new();
+    events
+        .iter()
+        .flat_map(|event| projector.apply(event, &[]).unwrap())
+        .map(|change| match change {
+            Change::Put { key, body } => (key, body),
+            Change::Delete { key } => panic!("unexpected delete of {key:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_remembered_denial_leaking_across_checkout_or_host_is_caught() {
+    let no_denial = DenialParts::default();
+    let documents = remembered_documents(&[
+        policy_recorded(1, "/a", "claude-code", &refuse_parts()),
+        policy_recorded(2, "/b", "claude-code", &no_denial),
+        policy_recorded(3, "/a", "other-host", &no_denial),
+        policy_recorded(4, "/b", "other-host", &no_denial),
+    ]);
+    assert_eq!(documents.len(), 4);
+    let a = &documents[&text_key(&[PROJECT_ROOT, "/a", "claude-code"])];
+    assert_eq!(
+        a,
+        &json!({
+            "project_root": PROJECT_ROOT,
+            "checkout_key": "/a",
+            "host": "claude-code",
+            "refuse": true,
+            "hard_fail": false,
+            "protected_branches": ["main"],
+            "seq": 1,
+        })
+    );
+    for (checkout, host) in [("/b", "claude-code"), ("/a", "other-host")] {
+        let other = &documents[&guard_policy_key(PROJECT_ROOT, Some(checkout), host)];
+        assert_eq!(other["refuse"], false, "{checkout} {host}");
+        assert_eq!(other["checkout_key"], checkout);
+        assert_eq!(other["host"], host);
+    }
+}
+
+#[test]
+fn a_cwd_in_no_checkout_sharing_a_key_with_a_checkout_is_caught() {
+    let (key, body) = put(GuardPolicyProjector::new()
+        .apply(
+            &event(
+                "guard.policy_recorded",
+                5,
+                policy_recorded_payload(PROJECT_ROOT, None, "claude-code", &refuse_parts()),
+            ),
+            &[],
+        )
+        .unwrap());
+    assert_eq!(key, text_key(&[PROJECT_ROOT, "", "claude-code"]));
+    assert_eq!(key, guard_policy_key(PROJECT_ROOT, None, "claude-code"));
+    assert_eq!(body["checkout_key"], "");
+}
+
+#[test]
+fn an_older_refuse_kept_over_a_newer_policy_with_no_denial_is_caught() {
+    let documents = remembered_documents(&[
+        policy_recorded(1, "/a", "claude-code", &refuse_parts()),
+        policy_recorded(2, "/a", "claude-code", &DenialParts::default()),
+    ]);
+    assert_eq!(documents.len(), 1);
+    let kept = &documents[&guard_policy_key(PROJECT_ROOT, Some("/a"), "claude-code")];
+    assert_eq!(kept["refuse"], false);
+    assert_eq!(kept["hard_fail"], false);
+    assert_eq!(kept["protected_branches"], json!([]));
+    assert_eq!(kept["seq"], 2);
+}
+
+#[test]
+fn a_malformed_guard_policy_recorded_accepted_into_the_view_is_caught() {
+    let valid = policy_recorded_payload(PROJECT_ROOT, Some("/a"), "claude-code", &refuse_parts());
+    let mut no_host = valid.clone();
+    no_host.as_object_mut().unwrap().remove("host");
+    let mut empty_checkout = valid.clone();
+    empty_checkout["checkout_root"] = json!("");
+    let mut text_flag = valid.clone();
+    text_flag["refuse"] = json!("true");
+    let mut number_branch = valid;
+    number_branch["protected_branches"] = json!([1]);
+    for payload in [no_host, empty_checkout, text_flag, number_branch] {
+        let error = GuardPolicyProjector::new()
+            .apply(&event("guard.policy_recorded", 6, payload.clone()), &[])
+            .expect_err(&format!("{payload} must be refused"));
+        assert!(
+            error.0.contains("guard.policy_recorded at seq 6"),
+            "{}",
+            error.0
+        );
+    }
+}
+
+/// A stored `guard_policy` document holding `refuse`, `hard_fail` and
+/// `branches`.
+fn remembered_document(refuse: bool, hard_fail: bool, branches: &[&str]) -> Value {
+    json!({
+        "project_root": PROJECT_ROOT,
+        "checkout_key": "/a",
+        "host": "claude-code",
+        "refuse": refuse,
+        "hard_fail": hard_fail,
+        "protected_branches": branches,
+        "seq": 1,
+    })
+}
+
+#[test]
+fn the_change_judge_appending_an_unchanged_policy_or_keeping_a_cleared_refuse_is_caught() {
+    let stored = remembered_document(true, false, &["main"]);
+    assert!(!denials_changed(Some(&stored), &refuse_parts()));
+    assert!(!denials_changed(None, &DenialParts::default()));
+    assert!(denials_changed(Some(&stored), &DenialParts::default()));
+    assert!(denials_changed(None, &refuse_parts()));
+}
+
+/// The settings remembered after a complete policy of `settings`, through
+/// the payload and the view as the hook would store and read them.
+fn remembered_after(settings: &GuardSettings) -> GuardSettings {
+    let payload = policy_recorded_payload(
+        PROJECT_ROOT,
+        Some("/a"),
+        "claude-code",
+        &denial_parts(settings),
+    );
+    let (_, document) = put(GuardPolicyProjector::new()
+        .apply(&event("guard.policy_recorded", 1, payload), &[])
+        .unwrap());
+    remembered_settings(&document).expect("the document is readable")
+}
+
+#[test]
+fn a_remembered_allow_or_ask_relaxing_a_torn_ask_through_the_view_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    for on_protected in [OnProtected::Allow, OnProtected::Ask] {
+        let last = remembered_after(&remembered(on_protected, false, &["main"]));
+        assert_eq!(last.on_protected, OnProtected::Ask, "{on_protected:?}");
+        assert_eq!(
+            commit(&settings, Some(&last), &read("main")),
+            Answer::Ask(reason::torn_ask(&named, Some("main")))
+        );
+    }
+}
+
+#[test]
+fn a_remembered_refuse_through_the_view_not_denying_under_torn_settings_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let last = remembered_after(&remembered(OnProtected::Refuse, false, &["main"]));
+    assert_eq!(
+        commit(&settings, Some(&last), &read("main")),
+        Answer::Deny(reason::remembered_refuse_deny(&named, "main"))
+    );
 }

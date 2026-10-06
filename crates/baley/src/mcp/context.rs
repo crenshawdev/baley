@@ -127,16 +127,10 @@ pub struct SessionContext {
 /// Decides the session context from what the process told us.
 pub fn judge(observation: Observation) -> SessionContext {
     let mut notes = Vec::new();
-    let project = match &observation.project_dir {
-        None => ProjectContext::Missing,
-        Some(value) => match directory(value) {
-            Ok(_) if !observation.project_is_directory => {
-                ProjectContext::Invalid(DirectoryFault::NotADirectory)
-            }
-            Ok(text) => ProjectContext::Valid(text),
-            Err(fault) => ProjectContext::Invalid(fault),
-        },
-    };
+    let project = project_context(
+        observation.project_dir.as_deref(),
+        observation.project_is_directory,
+    );
     let working_directory = match &observation.working_dir {
         None => WorkingDirectory::Unusable(DirectoryFault::Unreadable),
         Some(value) => match directory(value) {
@@ -154,6 +148,21 @@ pub fn judge(observation: Observation) -> SessionContext {
         baley_session: observation.minted_session,
         host_session,
         notes,
+    }
+}
+
+/// Judges `CLAUDE_PROJECT_DIR` as the environment gave it, or `None` when
+/// unset, and whether that path is an existing directory. The server judges
+/// its startup project with it, and the guard hook judges its project with it
+/// too, so both apply one set of rules.
+pub fn project_context(value: Option<&OsStr>, is_directory: bool) -> ProjectContext {
+    match value {
+        None => ProjectContext::Missing,
+        Some(value) => match directory(value) {
+            Ok(_) if !is_directory => ProjectContext::Invalid(DirectoryFault::NotADirectory),
+            Ok(text) => ProjectContext::Valid(text),
+            Err(fault) => ProjectContext::Invalid(fault),
+        },
     }
 }
 

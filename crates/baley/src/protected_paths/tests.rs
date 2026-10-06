@@ -1,7 +1,8 @@
 //! The decisions here run over a table of what each lookup answers for one
 //! exact path, and a path not in the table is missing. The table resolves
 //! nothing: a link names the canonical path it leads to. Nothing here touches
-//! a disk, reads the environment or starts a program.
+//! a disk, reads the environment or starts a program. The table is visible to
+//! the crate's tests, so the guard hook's decisions run over the same seam.
 
 use super::{
     Entry, Lease, Lookup, Part, ProtectedPaths, ResolveFailure, contains, is_inside, read_answer,
@@ -24,13 +25,13 @@ struct Seen {
     entry: Entry,
 }
 
-struct Tree {
+pub(crate) struct Tree {
     paths: BTreeMap<PathBuf, Seen>,
     /// One lookup of one path that fails with something other than missing.
     failure: Option<(Ask, PathBuf)>,
 }
 
-fn tree() -> Tree {
+pub(crate) fn tree() -> Tree {
     Tree {
         paths: BTreeMap::new(),
         failure: None,
@@ -53,11 +54,11 @@ impl Tree {
         self
     }
 
-    fn dir(self, path: &str) -> Self {
+    pub(crate) fn dir(self, path: &str) -> Self {
         self.add(path, true)
     }
 
-    fn file(self, path: &str) -> Self {
+    pub(crate) fn file(self, path: &str) -> Self {
         self.add(path, false)
     }
 
@@ -584,6 +585,57 @@ fn a_baley_toml_elsewhere_a_sibling_and_a_project_file_are_allowed() {
     ] {
         assert_eq!(write("/p", target, &fs), Answer::Pass, "{target}");
     }
+}
+
+// Issue #194: a checkout whose baley.toml is not created yet, with /P a
+// second name for /p as a case-insensitive volume gives it.
+fn write_beside_missing_file(target: &str, fs: &Tree) -> Answer {
+    let list = ProtectedPaths {
+        home: "/u/.local/share/baley".into(),
+        config: "/u/.config/baley".into(),
+        files: vec!["/p/baley.toml".into()],
+    };
+    write_answer("/p", target, &list, &Lease::NoActiveDispatch, fs)
+}
+
+#[test]
+fn a_case_variant_spelling_that_creates_a_missing_protected_file_is_caught() {
+    let fs = tree().dir("/p").hard("/P", "/p");
+    for target in [
+        "/p/BALEY.TOML",
+        "/p/Baley.toml",
+        "BALEY.TOML",
+        "/P/baley.toml",
+        "/P/BALEY.TOML",
+    ] {
+        assert!(is_deny(&write_beside_missing_file(target, &fs)), "{target}");
+    }
+}
+
+#[test]
+fn a_name_that_only_starts_like_a_missing_protected_file_denied_is_caught() {
+    let fs = tree().dir("/p").dir("/p/sub");
+    for target in [
+        "/p/baley.toml.bak",
+        "/p/sub/baley.toml",
+        "/p/BALEY.TOML/inner.txt",
+    ] {
+        assert_eq!(
+            write_beside_missing_file(target, &fs),
+            Answer::Pass,
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn an_existing_protected_file_matched_by_a_case_variant_spelling_is_caught() {
+    let fs = tree().dir("/p").file("/p/baley.toml");
+    assert_eq!(
+        write_beside_missing_file("/p/BALEY.TOML", &fs),
+        Answer::Pass
+    );
+    assert!(is_deny(&write_beside_missing_file("/p/baley.toml", &fs)));
 }
 
 fn read(cwd: &str, path: Option<&str>, pattern: Option<&str>, fs: &Tree) -> Answer {

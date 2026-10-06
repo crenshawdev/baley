@@ -22,7 +22,9 @@ pub use record::{RECORD_COMMAND, record};
 /// call it, each right after checkout admission and in a transaction of its
 /// own. So does the session server's write preparation (`mcp::prepare`), once
 /// per project write, with the host's recorded policy, the call's caller and
-/// the server's time. A project read never calls it, and the guard does not.
+/// the server's time. A project read never calls it. The guard builds its
+/// policy with [`build`] and never runs the step, so it admits no checkout
+/// and records no `policy.effective`.
 pub fn step(
     store: &(impl Admin + Views + Ledger),
     project: &ProjectId,
