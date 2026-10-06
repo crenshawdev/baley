@@ -35,9 +35,27 @@ use crate::{init, models, replace, settings};
 
 /// Writes `pairs` into the file `layer` names and returns what the command
 /// prints. Every pair is judged before anything is written, then one file
-/// write follows. `baley config interview` calls this too.
+/// write follows.
 pub(crate) fn set(layer: FileLayer, host: Option<Host>, pairs: &[(String, String)]) -> Render {
-    attempt(layer, host, pairs).unwrap_or_else(|render| render)
+    apply(layer, host, pairs, None)
+}
+
+/// The target the interview showed, with its own digest or no file yet.
+pub(crate) struct Expected {
+    /// The path shown for the write.
+    pub(crate) path: PathBuf,
+    /// The digest of that file's read, not the merged policy's source.
+    pub(crate) digest: Option<String>,
+}
+
+/// Applies the pairs only to the target the interview showed, when supplied.
+pub(crate) fn apply(
+    layer: FileLayer,
+    host: Option<Host>,
+    pairs: &[(String, String)],
+    expected: Option<&Expected>,
+) -> Render {
+    attempt(layer, host, pairs, expected).unwrap_or_else(|render| render)
 }
 
 fn refusal(text: impl ToString) -> Render {
@@ -48,6 +66,7 @@ fn attempt(
     layer: FileLayer,
     host: Option<Host>,
     pairs: &[(String, String)],
+    expected: Option<&Expected>,
 ) -> Result<Render, Render> {
     let folders = Folders::resolve(Platform::current(), &Environment::read()).map_err(refusal)?;
     let unavailable =
@@ -89,6 +108,13 @@ fn attempt(
     };
     let prepared =
         prepare(layer, &global_path, project.as_ref(), &reads, schema).map_err(refusal)?;
+    if let Some(expected) = expected {
+        check_expected(
+            expected,
+            &prepared.target,
+            prepared.base.as_ref().map(|file| file.digest.as_str()),
+        )?;
+    }
     refuse_link(&prepared.target).map_err(refusal)?;
 
     // The store opens before the write, so an unsafe ledger refuses while the
@@ -185,6 +211,18 @@ fn attempt(
         code: 0,
         error: false,
     })
+}
+
+/// Binds the interview to its target alone, before any store or write opens.
+fn check_expected(expected: &Expected, target: &Path, digest: Option<&str>) -> Result<(), Render> {
+    if expected.path == target && expected.digest.as_deref() == digest {
+        Ok(())
+    } else {
+        Err(refusal(format!(
+            "config-conflict: {} changed since it was shown; run the interview again",
+            expected.path.display()
+        )))
+    }
 }
 
 /// Reads both settings files and HEAD's copy again after the write, so the
@@ -449,6 +487,52 @@ mod tests {
 
     const T0: &str = "2026-10-01T10:00:00Z";
     const T1: &str = "2026-10-01T10:00:01Z";
+
+    fn shown(digest: Option<&str>) -> Expected {
+        Expected {
+            path: "/r/baley.toml".into(),
+            digest: digest.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_unchanged_interview_target_is_not_refused() {
+        assert!(check_expected(&shown(Some("a")), Path::new("/r/baley.toml"), Some("a")).is_ok());
+    }
+
+    #[test]
+    fn an_interview_does_not_overwrite_changed_bytes_at_the_same_path() {
+        let refused =
+            check_expected(&shown(Some("a")), Path::new("/r/baley.toml"), Some("b")).unwrap_err();
+        assert_eq!(refused.code, 2);
+        assert_eq!(
+            refused.lines,
+            ["config-conflict: /r/baley.toml changed since it was shown; run the interview again"]
+        );
+    }
+
+    #[test]
+    fn identical_bytes_at_another_path_do_not_redirect_the_interview() {
+        let refused = check_expected(
+            &shown(Some("a")),
+            Path::new("/r/inner/baley.toml"),
+            Some("a"),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, 2);
+    }
+
+    #[test]
+    fn an_interview_with_no_file_then_or_now_can_create_it() {
+        assert!(check_expected(&shown(None), Path::new("/r/baley.toml"), None).is_ok());
+    }
+
+    #[test]
+    fn an_interview_does_not_overwrite_a_file_created_since_it_began() {
+        let refused =
+            check_expected(&shown(None), Path::new("/r/baley.toml"), Some("a")).unwrap_err();
+        assert_eq!(refused.code, 2);
+    }
 
     fn request(n: u8) -> RequestId {
         RequestId(format!("00000000-0000-4000-8000-0000000000{n:02}"))
