@@ -9,6 +9,16 @@ body:
       description: What you did, what you expected, what happened instead. Paste exact error text.
     validations:
       required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Stops me working
+        - Wrong result, I can work around it
+        - Minor or cosmetic
+    validations:
+      required: true
   - type: textarea
     id: repro
     attributes:
