@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `7ceab752`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its implementation belongs to #49, #50 and #54, while UPK-R2 waits on the held [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `7ceab752`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its implementation belongs to #49, #50 and #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T14 to T17 are planned, no longer held for a decision. Removal of the built key reader, `baley exec` and HTTPS model lister is unassigned; John Crenshaw must assign its build. Each build pull request updates this roadmap.
 
 ## The path to the first release
 
@@ -88,7 +88,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 
 [#23](https://github.com/crenshawdev/baley/issues/23) · milestone Evidence · done
 
-Baley finds its per-user ledger safely, and `baley init` ties a repository to a project through a committed `baley.toml`. Baley keeps its files in its own folder under a crenshawdev vendor folder: the global settings file `config.toml` and the keys file `keys.env` in `$XDG_CONFIG_HOME/crenshawdev/baley` and the ledger in `$XDG_DATA_HOME/crenshawdev/baley` on Linux (an empty or relative XDG variable counts as unset), all three in `~/Library/Application Support/crenshawdev/baley` on macOS, and all three in `BALEY_HOME` when it is set ([ADR 0027](adr/0027-vendor-folders-and-plain-keys.md)). The ledger's home is not supported on a network share, and Baley does not check for one. Baley reads the two TOML settings files ([ADR 0015](adr/0015-settings-in-toml.md)) and resolves routes against a model catalog it refreshes by calling each provider's model-list endpoint with `reqwest` ([ADR 0028](adr/0028-one-http-stack.md)). Provider keys are plain `NAME=value` lines in `keys.env`, which the owner edits by hand and Baley only reads, refusing it with `keys-file-exposed` when group or others can read it or another user owns it, and with `keys-file-invalid` when a line is invalid, a value is empty or a name appears twice, and with `keys-file-unreadable` when it is not a regular file or cannot be read. There is no encryption, no master key and no OS secret store. Keys reach a command only through `baley exec --key`; detection also reads them for provider model-list requests. Key values never enter events, views or exports. All of it runs from the command line, on Linux and macOS.
+Baley finds its per-user ledger safely, and `baley init` ties a repository to a project through a committed `baley.toml`. Baley keeps its files in its own folder under a crenshawdev vendor folder: the global settings file `config.toml` and the keys file `keys.env` in `$XDG_CONFIG_HOME/crenshawdev/baley` and the ledger in `$XDG_DATA_HOME/crenshawdev/baley` on Linux (an empty or relative XDG variable counts as unset), all three in `~/Library/Application Support/crenshawdev/baley` on macOS, and all three in `BALEY_HOME` when it is set ([ADR 0027](adr/0027-vendor-folders-and-plain-keys.md)). The ledger's home is not supported on a network share, and Baley does not check for one. Baley reads the two TOML settings files ([ADR 0015](adr/0015-settings-in-toml.md)) and resolves routes against a model catalog it refreshes by calling each provider's model-list endpoint with `reqwest` ([ADR 0028](adr/0028-one-http-stack.md)). Provider keys are plain `NAME=value` lines in `keys.env`, which the owner edits by hand and Baley only reads, refusing it with `keys-file-exposed` when group or others can read it or another user owns it, and with `keys-file-invalid` when a line is invalid, a value is empty or a name appears twice, and with `keys-file-unreadable` when it is not a regular file or cannot be read. There is no encryption, no master key and no OS secret store. Keys reach a command only through `baley exec --key`; detection also reads them for provider model-list requests. Key values never enter events, views or exports. All of it runs from the command line, on Linux and macOS. This describes the completed build. [ADR 0039](adr/0039-session-owned-provider-credentials.md) replaces its credential and fetching design: the built reader, `baley exec` and HTTPS lister still await removal, and John Crenshaw must assign that removal to a build.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0002 system design](design/0002-system-design.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0012 host interface](design/0012-host-interface.md)
 - ADRs: [0003 per-user database](adr/0003-per-user-database.md), [0004 project identity](adr/0004-project-identity.md), [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0015 settings in TOML](adr/0015-settings-in-toml.md), [0027 vendor folders and plain keys](adr/0027-vendor-folders-and-plain-keys.md), [0028 one HTTP stack](adr/0028-one-http-stack.md)
@@ -158,7 +158,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 
 [#24](https://github.com/crenshawdev/baley/issues/24) · milestone Evidence · in progress
 
-Claude Code is the only host Baley supports in this release, and Build 3 removes Codex support. Each Claude Code session starts its own Baley MCP server over stdio, and the session's subagents reach it through the session's connection. There is no launcher, no HTTP listener and no background service, and every worker in this release is a subagent of its session. The server takes its project from `CLAUDE_PROJECT_DIR`, records its working directory beside it, and creates a session id that every call carries, with the host's own session id beside it when one is set. Ledger events record which caller wrote them. Each project call is prepared from the session's `CLAUDE_PROJECT_DIR` in the order the command line uses: a read appends nothing, and a write runs checkout admission and the host's policy step before its command. T8's `capture` and `document` are the first operations to use it. Another host can connect and list the tools, but every tool call it makes is refused with Claude Code named as the supported host. Sessions share the ledger through the store: every write takes the writer queue and decides inside its transaction ([ADR 0012](adr/0012-optimistic-concurrency.md)), and the build's acceptance includes two live Claude Code sessions writing one project at once, with the record checked afterwards. Agents can neither read nor write Baley's home or its config folder (`config.toml` and `keys.env`). Claude Code's sandbox, its file permission rules and Baley's guard hook carry that together, and `baley doctor` reports what an agent can reach. The compiled instructions are served ([ADR 0009](adr/0009-served-instructions.md)): T7 serves help, the operation schemas and the compiled instructions by identity in parts, and T8, which builds `document`, attaches the instruction identity a session sends on `capture` to the caller it records, with the version and hash taken from the registry. The build renders the stub content that the held delivery tasks will write, and it opens with warnings that say what a restore cannot undo. How Baley is delivered and updated, who writes its Claude artifacts and how setup is entered wait on an owner decision, so T14 to T17 are held. Captures are recorded.
+Claude Code is the only host Baley supports in this release, and Build 3 removes Codex support. Each Claude Code session starts its own Baley MCP server over stdio, and the session's subagents reach it through the session's connection. There is no launcher, no HTTP listener and no background service, and every worker in this release is a subagent of its session. The server takes its project from `CLAUDE_PROJECT_DIR`, records its working directory beside it, and creates a session id that every call carries, with the host's own session id beside it when one is set. Ledger events record which caller wrote them. Each project call is prepared from the session's `CLAUDE_PROJECT_DIR` in the order the command line uses: a read appends nothing, and a write runs checkout admission and the host's policy step before its command. T8's `capture` and `document` are the first operations to use it. Another host can connect and list the tools, but every tool call it makes is refused with Claude Code named as the supported host. Sessions share the ledger through the store: every write takes the writer queue and decides inside its transaction ([ADR 0012](adr/0012-optimistic-concurrency.md)), and the build's acceptance includes two live Claude Code sessions writing one project at once, with the record checked afterwards. Agents can neither read nor write Baley's home or its config folder (`config.toml`). The designed credential boundary keeps keys in the owner's environment ([ADR 0039](adr/0039-session-owned-provider-credentials.md)), which those folder denials do not protect. Claude Code's sandbox, its file permission rules and Baley's guard hook carry that together, and `baley doctor` reports what an agent can reach. The compiled instructions are served ([ADR 0009](adr/0009-served-instructions.md)): T7 serves help, the operation schemas and the compiled instructions by identity in parts, and T8, which builds `document`, attaches the instruction identity a session sends on `capture` to the caller it records, with the version and hash taken from the registry. The build renders the stub content that the delivery tasks will write, and it opens with warnings that say what a restore cannot undo. [ADR 0038](adr/0038-installer-and-opt-in-updates.md) specifies one installer command into `~/.local/bin`, with `baley install` writing every artifact at the stable path, no npm or plugin, and default setup with the interview available later. Updates are off by default and opt-in, checked at most daily from a detached process started by `baley serve`, never the guard, signature-verified and staged for new sessions only. Manual `baley update` remains available. T14 to T17 implement and qualify that design and are no longer held. Captures are recorded.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0002 system design](design/0002-system-design.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0010 guard](design/0010-guard.md), [0012 host interface](design/0012-host-interface.md), [0014 support families](design/0014-support-families.md), [0015 repository upkeep and the build gate](design/0015-repository-upkeep-and-build-gate.md)
 - ADRs: [0008 host sandbox isolation](adr/0008-host-sandbox-isolation.md), [0009 served instructions](adr/0009-served-instructions.md), [0011 one shared server](adr/0011-one-shared-server.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0020 sandbox is a write barrier](adr/0020-sandbox-is-a-write-barrier.md), [0028 one HTTP stack](adr/0028-one-http-stack.md), [0029 a host may offer more](adr/0029-a-host-may-offer-more.md), [0033 host security bar](adr/0033-host-security-bar.md), [0034 one server per session](adr/0034-one-server-per-session.md), [0035 restore purge uncertainty](adr/0035-restore-purge-uncertainty.md), [0036 per-user guard records](adr/0036-per-user-guard-records.md)
@@ -180,7 +180,7 @@ flowchart LR
     T11["T11: Claude artifact content"]
     T12["T12: Live Claude qualification"]
     T13["T13: Runtime doctor"]
-    Delivery["Pending delivery decision"]
+    Delivery["Delivery design: ADR 0038 and 0039"]
     T14["T14: Binary delivery"]
     T15["T15: Artifact application"]
     T16["T16: Setup entry"]
@@ -205,7 +205,7 @@ flowchart LR
     T11 --> T15
     T12 --> T14
     T12 -. evidence .-> T13
-    Delivery -.-> T14
+    Delivery --> T14
     T13 --> T17
     T14 --> T15
     T15 --> T16
@@ -213,13 +213,12 @@ flowchart LR
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
-    classDef held fill:#ffffff,stroke:#6e7781,stroke-dasharray:4 3,color:#57606a
     class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10 done
-    class T11,T12,T13 planned
-    class Delivery,T14,T15,T16,T17 held
+    class Delivery done
+    class T11,T12,T13,T14,T15,T16,T17 planned
 ```
 
-Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotted arrow is an evidence link or a wait on the pending delivery decision, and a held task waits on that decision. One pull request per task.
+Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dotted arrow is an evidence link. The delivery design is decided, and T14 to T17 are planned implementation tasks, not built work. One pull request per task.
 
 | Task | What | Pull requests | Status |
 |---|---|---|---|
@@ -236,10 +235,10 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotte
 | T11 | Claude artifact content and logical stubs | | Planned |
 | T12 | Live Claude qualification and concurrent sessions | | Planned |
 | T13 | Runtime doctor host observations | | Planned |
-| T14 | Binary delivery and update activation | | Held |
-| T15 | Claude artifact ownership and application | | Held |
-| T16 | Owner setup entry and completion record | | Held |
-| T17 | Delivery doctor and installed qualification | | Held |
+| T14 | Binary delivery and update activation | | Planned |
+| T15 | Claude artifact ownership and application | | Planned |
+| T16 | Owner setup entry and completion record | | Planned |
+| T17 | Delivery doctor and installed qualification | | Planned |
 
 ## Build 4: Planning
 
@@ -317,7 +316,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 [#14](https://github.com/crenshawdev/baley/issues/14) · milestone Traders · not written · blocked
 
-The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. Installation on Claude Code: MCP registration, instruction stubs and the sandbox rule. It also picks the first version number.
+The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. Publication supplies the signed checksum manifest consumed by the installer and updater. Installation follows [ADR 0038](adr/0038-installer-and-opt-in-updates.md): one installer command, binary-written wiring at the stable path, and opt-in verified updates for new sessions only. Provider access follows [ADR 0039](adr/0039-session-owned-provider-credentials.md), with no Baley key file or provider call. The implementing task must name any new signature-verification dependency; none is selected yet. It also picks the first version number.
 
 Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 findings #184, #186, #190, #200, #201 and #203.
 
@@ -386,3 +385,6 @@ What the records leave open or do not say.
 - There is no first version number. The release design #14 picks it.
 - #44 was meant to land before Build 1 T10, which has merged. No order is given for bug #70.
 - The board's Status field is set only on the build issues, #40 and #14.
+- John Crenshaw must assign the build that removes the built key reader, `baley exec` and HTTPS model lister and key lookup, and supplies model import and provider acknowledgement. Pure catalog reading code stays.
+- The release design and implementing task must select the signed checksum manifest's signature format and name any new verifier dependency.
+- Build 3 T14 and T15 must specify how fresh hooks and stub reads keep a running session's version while updates activate for new sessions; T17 qualifies it.
