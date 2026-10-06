@@ -28,6 +28,24 @@ use crate::view::ViewSet;
 /// How long a store's connections wait on a lock held by another process.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
+/// The longest a guard store waits in all, for its locks, its connections
+/// and SQLite's busy handler together. A guard open's storage time is cut
+/// to it, and the guard's budget gives storage no more.
+pub const GUARD_STORAGE_CAP: Duration = Duration::from_millis(2000);
+
+/// The reading after which a guard store opened at reading `now` with
+/// storage time `time` waits for nothing: never more than the cap later.
+fn guard_deadline(now: Duration, time: Duration) -> Duration {
+    now + time.min(GUARD_STORAGE_CAP)
+}
+
+/// The busy timeout a guard store's connection runs its statements under
+/// at reading `now`: the storage time left before `deadline`, zero once it
+/// is spent, so SQLite waits no longer than the store would.
+fn guard_busy_timeout(deadline: Duration, now: Duration) -> Duration {
+    deadline.saturating_sub(now)
+}
+
 /// The page size every store is created with. It cannot change once the
 /// write-ahead log is on.
 const PAGE_SIZE: i64 = 8192;
@@ -58,9 +76,12 @@ pub struct Options {
     /// on. Command-line and guard opens leave it off.
     pub startup_check: bool,
     /// Set only by the guard's open: the storage time its call may still
-    /// spend waiting. Open reads `timing` once, and every later wait for the
-    /// writer queue, the maintenance lock or a connection ends that long
-    /// after, answering `StoreError::Busy`. `None` waits as long as it takes.
+    /// spend waiting, cut to `GUARD_STORAGE_CAP`. Open reads `timing` once,
+    /// and every later wait for the writer queue, the maintenance lock or a
+    /// connection ends that long after, answering `StoreError::Busy`. Each
+    /// connection's busy timeout is set to the time left before its
+    /// statements run. `None` waits as long as it takes, with SQLite's busy
+    /// timeout at 5,000 ms.
     pub guard_storage_time: Option<Duration>,
 }
 
@@ -175,11 +196,18 @@ impl SqliteStore {
     /// `Refusal::UnsafeHome`, naming each fault. It then creates the lock
     /// files and an empty `baley.db` with mode 0600 when missing.
     /// With `Options::guard_storage_time` set, open reads the timing once
-    /// first, and the store's waits end that long after the reading.
+    /// first, the store's waits end that long after the reading, and both
+    /// connections open with the time left as their busy timeout.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
         let deadline = options
             .guard_storage_time
-            .map(|time| options.timing.now() + time);
+            .map(|time| guard_deadline(options.timing.now(), time));
+        // A normal open reads no clock for it.
+        let busy_timeout = || {
+            deadline.map_or(BUSY_TIMEOUT, |deadline| {
+                guard_busy_timeout(deadline, options.timing.now())
+            })
+        };
         match checks::judge(&checks::gather(home)?) {
             Judgement::Safe => {}
             Judgement::Unsafe(faults) => {
@@ -215,7 +243,7 @@ impl SqliteStore {
                 .open(&path)
                 .map(drop),
         )?;
-        let writer = connect(&path)?;
+        let writer = connect(&path, busy_timeout())?;
 
         let existing = stored_epoch(&writer)?;
         let schema_existed = existing.is_some();
@@ -247,7 +275,7 @@ impl SqliteStore {
             )));
         }
         // Opened after creation, so it reads the file as created.
-        let reader = connect(&path)?;
+        let reader = connect(&path, busy_timeout())?;
         if epoch == EPOCH {
             check_file_settings(&writer)?;
         }
@@ -380,7 +408,9 @@ impl SqliteStore {
         }
     }
 
-    /// One of the store's two connections, taken as `turn` takes a lock.
+    /// One of the store's two connections, taken as `turn` takes a lock. On
+    /// a guard store its busy timeout is then set to the time left, so its
+    /// statements wait in SQLite no longer than the store may.
     fn connection<'s>(
         &'s self,
         conn: &'s Mutex<Connection>,
@@ -389,7 +419,13 @@ impl SqliteStore {
             Ok::<_, Infallible>(try_lock(conn))
         });
         match taken {
-            Taken::Held(conn) => Ok(conn),
+            Taken::Held(conn) => {
+                if let Some(deadline) = self.deadline {
+                    conn.busy_timeout(guard_busy_timeout(deadline, self.timing.now()))
+                        .map_err(sql)?;
+                }
+                Ok(conn)
+            }
             Taken::Block => Ok(lock(conn)),
             Taken::Busy => Err(StoreError::Busy),
         }
@@ -557,11 +593,12 @@ impl SqliteStore {
     }
 }
 
-/// A connection with the design's per-connection settings. None of them
-/// writes to the database file.
-pub(crate) fn connect(path: &Path) -> Result<Connection, StoreError> {
+/// A connection with the design's per-connection settings and the busy
+/// timeout given, `BUSY_TIMEOUT` but on a guard store. None of them writes
+/// to the database file.
+pub(crate) fn connect(path: &Path, busy_timeout: Duration) -> Result<Connection, StoreError> {
     let conn = Connection::open(path).map_err(sql)?;
-    conn.busy_timeout(BUSY_TIMEOUT).map_err(sql)?;
+    conn.busy_timeout(busy_timeout).map_err(sql)?;
     conn.execute_batch(
         "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
     )
@@ -733,6 +770,7 @@ mod tests {
     use baley_store::Admin;
 
     use super::*;
+    use crate::queue::scripted::Scripted;
 
     const AT: &str = "2026-09-25T18:00:00Z";
 
@@ -1300,23 +1338,105 @@ mod tests {
         assert_eq!(rows, Ok(Ok(0)));
     }
 
-    /// A guard store over a home a normal open made, with 1.5 s of storage
-    /// time on a timing that steps 100 ms a reading, so a bounded wait ends
-    /// after a few readings and no real time.
-    fn guard(home: &Path) -> Arc<SqliteStore> {
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    /// A guard store given `time` of storage time on `timing`, over a home
+    /// a normal open made.
+    fn guard_on(home: &Path, timing: Arc<Scripted>, time: Duration) -> SqliteStore {
         drop(open(home));
-        Arc::new(
-            SqliteStore::open(
-                home,
-                AT,
-                Options {
-                    timing: crate::queue::scripted::Scripted::stepping(Duration::from_millis(100)),
-                    guard_storage_time: Some(Duration::from_millis(1_500)),
-                    ..Options::default()
-                },
-            )
-            .expect("guard open"),
+        SqliteStore::open(
+            home,
+            AT,
+            Options {
+                timing,
+                guard_storage_time: Some(time),
+                ..Options::default()
+            },
         )
+        .expect("guard open")
+    }
+
+    /// A guard store with 1.5 s of storage time on a timing that steps
+    /// 100 ms a reading, so a bounded wait ends after a few readings and no
+    /// real time.
+    fn guard(home: &Path) -> Arc<SqliteStore> {
+        Arc::new(guard_on(home, Scripted::stepping(ms(100)), ms(1_500)))
+    }
+
+    /// `PRAGMA busy_timeout` of the write and the read connection, in ms.
+    fn busy_timeouts(store: &SqliteStore) -> (i64, i64) {
+        let read = |conn: &Mutex<Connection>| {
+            lock(conn)
+                .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .expect("busy timeout")
+        };
+        (read(&store.writer), read(&store.reader))
+    }
+
+    // Catches a guard store whose statements keep the 5,000 ms busy timeout,
+    // or one past the storage time given.
+    #[test]
+    fn a_guard_stores_statements_wait_past_its_storage_time() {
+        let home = crate::checks::private_folder();
+        let store = guard_on(home.path(), Scripted::still(), ms(1_500));
+        store.record_trace(&trace("write")).expect("guard write");
+        store.epoch().expect("guard read");
+        assert_eq!(busy_timeouts(&store), (1_500, 1_500));
+    }
+
+    // Catches the 2 s cap skipped, so a guard given more waits past it.
+    #[test]
+    fn a_guard_given_three_seconds_waits_past_the_cap() {
+        let home = crate::checks::private_folder();
+        let store = guard_on(home.path(), Scripted::still(), ms(3_000));
+        store.record_trace(&trace("write")).expect("guard write");
+        store.epoch().expect("guard read");
+        assert_eq!(busy_timeouts(&store), (2_000, 2_000));
+    }
+
+    // Catches a busy timeout set once at open, which a later write still
+    // runs under after time has passed.
+    #[test]
+    fn a_later_guard_write_keeps_the_busy_timeout_from_open() {
+        let home = crate::checks::private_folder();
+        let timing = Scripted::still();
+        let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
+        timing.script(&[ms(500)]);
+        store.record_trace(&trace("write")).expect("guard write");
+        assert_eq!(busy_timeouts(&store).0, 1_000);
+    }
+
+    // Catches a guard write that starts once its storage time is spent.
+    #[test]
+    fn a_guard_write_starts_after_its_storage_time_is_spent() {
+        let home = crate::checks::private_folder();
+        let timing = Scripted::still();
+        let store = guard_on(home.path(), Arc::clone(&timing), ms(1_500));
+        timing.script(&[ms(1_500)]);
+        assert_eq!(store.record_trace(&trace("late")), Err(StoreError::Busy));
+        assert_eq!(trace_rows(home.path()), 0);
+    }
+
+    // Catches a spent storage time that leaves SQLite waiting, or a busy
+    // timeout past the cap.
+    #[test]
+    fn a_guard_busy_timeout_outlasts_the_time_left_or_the_cap() {
+        let opened_with = |opened, time, now| guard_busy_timeout(guard_deadline(opened, time), now);
+        assert_eq!(opened_with(ms(0), ms(1_500), ms(2_000)), Duration::ZERO);
+        assert_eq!(opened_with(ms(0), ms(1_500), ms(1_500)), Duration::ZERO);
+        assert_eq!(opened_with(ms(1_000), ms(10_000), ms(1_000)), ms(2_000));
+        assert_eq!(opened_with(ms(1_000), ms(1_500), ms(1_500)), ms(1_000));
+    }
+
+    // Catches a guard open whose own statements run under the 5,000 ms
+    // busy timeout until a later acquisition sets it.
+    #[test]
+    fn a_guard_open_runs_its_statements_under_the_normal_busy_timeout() {
+        let home = crate::checks::private_folder();
+        let store = guard_on(home.path(), Scripted::still(), ms(1_500));
+        assert_eq!(busy_timeouts(&store), (1_500, 1_500));
     }
 
     /// Runs `call` through `store` on its own thread while the test holds

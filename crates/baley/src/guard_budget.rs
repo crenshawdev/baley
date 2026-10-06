@@ -23,10 +23,9 @@ pub const HOST_TIMEOUT: Duration = Duration::from_secs(10);
 pub const WORK: Duration = Duration::from_secs(8);
 /// All of one guard call's git launches together run at most this long.
 pub const GIT: Duration = Duration::from_secs(5);
-/// All of one guard call's storage waits together last at most this long.
-// The SQLite adapter's guard cap is to replace this literal, so 2 s has one
-// definition.
-pub const STORAGE: Duration = Duration::from_secs(2);
+/// All of one guard call's storage waits together last at most this long:
+/// the cap the SQLite adapter enforces on a guard store.
+pub const STORAGE: Duration = baley_store_sqlite::GUARD_STORAGE_CAP;
 /// The least of the host timeout left after work, for killing and reaping a
 /// child and writing the answer.
 pub const MIN_RESERVE: Duration = Duration::from_secs(1);

@@ -7,6 +7,9 @@
 //! fresh ledger: earlier epoch-1 files are disposable and a different
 //! schema digest is refused at open. The adapter checks the real home and
 //! store files for ownership, kind, modes and links before every open.
+//! A store opened for the guard waits for its locks, its connections and
+//! SQLite's busy handler no longer than the storage time it was given, at
+//! most `GUARD_STORAGE_CAP`, and then answers `StoreError::Busy`.
 //! The adapter runs the port's conformance suite as one test per check,
 //! and keeps its own tests for SQLite mechanisms.
 
@@ -35,4 +38,4 @@ pub use checkpoint::{ExitCheckpoint, SkipReason};
 pub use health::StartupHealth;
 pub use queue::{Monotonic, Timing};
 pub use schema::EPOCH;
-pub use store::{Options, SqliteStore, TraceEntry};
+pub use store::{GUARD_STORAGE_CAP, Options, SqliteStore, TraceEntry};
