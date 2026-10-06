@@ -103,10 +103,9 @@ pub fn run() -> ExitCode {
                     Err(line) => failed = Some(line),
                 }
             }
-            Next::Do(Step::Branch) => {
-                let at = Path::new(cwd);
-                let git = branch::git_branch(at, &mut System, &mut budget);
-                seen.branch = Some(branch::branch(git, branch::symbolic_head(at)));
+            Next::Do(Step::Branch(at)) => {
+                let git = branch::git_branch(&at, &mut System, &mut budget);
+                seen.branch = Some(branch::branch(git, branch::symbolic_head(&at)));
             }
             Next::Do(Step::Policy(project)) => {
                 let config = context
