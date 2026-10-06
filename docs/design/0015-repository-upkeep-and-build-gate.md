@@ -6,7 +6,7 @@
 | Design issue | [#47](https://github.com/crenshawdev/baley/issues/47) |
 | Requirement prefix | UPK |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | [0001: Evidence ledger](0001-evidence-ledger.md), [0012: Host interface](0012-host-interface.md), [ADR 0009: Served instructions](../adr/0009-served-instructions.md), [ADR 0027: Vendor folders and plain keys](../adr/0027-vendor-folders-and-plain-keys.md), [ADR 0033: Host security bar](../adr/0033-host-security-bar.md), [ADR 0034: One server per session](../adr/0034-one-server-per-session.md) |
+| Related | ADRs: [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md), [0034](../adr/0034-one-server-per-session.md) · C4 view: not applicable (no runtime component) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -38,7 +38,7 @@ This area uses the existing [glossary](../../CONTEXT.md) terms without changing 
 |---|---|---|---|---|
 | UPK-R1 | The executable and MCP server are `baley`; the tools are `baley_version`, `baley_query` and `baley_apply`; instruction and agent identities use `bal-`. | Host configuration, advertised tools and instructions must agree. | HST-R5, HST-R12 | Active |
 | UPK-R2 | Installation never replaces a separately owned Cadence registration by name alone; registration replacement waits on the owner's delivery decision under [HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). | An occupied name does not establish ownership. | HST-R16, HST-R17 | Active |
-| UPK-R3 | Existing Baley spellings in inherited configuration, records and renderers remain consistent until their consumers are removed; upkeep does not rewrite stored bytes. | Record markers and hash inputs are contracts, not display text. | [0001: Compatibility and migration](0001-evidence-ledger.md#compatibility-and-migration) | Active |
+| UPK-R3 | Existing Baley spellings in inherited configuration, records and renderers remain consistent until their consumers are removed; upkeep does not rewrite stored bytes. | Record markers and hash inputs are contracts, not display text. | EVD-R19 | Active |
 | UPK-R4 | The historical mentions listed in section 6 remain, without becoming aliases; baseline performance material describes the replaced store without its project name. | Product history is separate from a supported interface. | | Active |
 | UPK-R5 | `main` requires `cargo-test`, `clippy`, `cargo-deny` and `fmt`, with strict up-to-date checks and the expected check producer preserved; `fmt` becomes required only after its job exists and passes. | The gate includes formatting without requiring a result no workflow can produce. | | Active |
 | UPK-R6 | Formatting uses the exact toolchain in `rust-toolchain.toml`, explicitly installs that toolchain's `rustfmt`, and runs `cargo fmt --all --check`. | A minimal toolchain installation does not supply every optional component. | UPK-R5 | Active |
@@ -101,7 +101,7 @@ The `fmt` job belongs in [test.yml](../../.github/workflows/test.yml). It uses t
 
 Discovery can be recorded with `cargo nextest list --locked --workspace --build-jobs 6 --message-format json`, as described in [nextest's machine-readable lists](https://nexte.st/docs/machine-readable/list/). A listing supplements the run; it supplies neither executed counts nor timing evidence. The source mapping accounts for macro expansion and a source file compiled into multiple test binaries. Ignored and filtered cases are separate from executed cases, and retries are identified rather than silently counted as distinct tests.
 
-**Refusals:** a competing build prevents a valid cost measurement. A failed run remains a failed run in the report. Missing cases or timing lines prevent a complete count or ranking. Static test-attribute counts cannot close [#54](https://github.com/crenshawdev/baley/issues/54).
+**Refusals:** a competing build prevents a valid cost measurement. A failed run remains a failed run in the report. Missing cases or timing lines prevent a complete count or ranking. Static test-attribute counts do not supply the executed counts or timing evidence required by UPK-R10 and UPK-Q3.
 
 ## 6. Records
 
@@ -174,7 +174,7 @@ The isolated formatting revision is already recorded at [.git-blame-ignore-revs:
 
 ### Host registration
 
-Claude Code is the only supported host ([ADR 0033](../adr/0033-host-security-bar.md)). It starts `baley serve` once per session, as specified by [0012, HST-R16](0012-host-interface.md#3-requirements). The owner does not start the server. This command is the session server, with no temporary launch compatibility or Build 9 removal.
+Claude Code is the only supported host ([ADR 0033](../adr/0033-host-security-bar.md)). It starts `baley serve` once per session, as specified by [0012, HST-R16](0012-host-interface.md#3-requirements). The owner does not start the server. This command is the session server.
 
 The canonical server and tool names remain those in UPK-R1. An installation preserves a separately owned registration rather than inferring ownership from its name. How Baley is delivered, who writes the host files and how an existing Baley registration is replaced wait on the owner's delivery decision under [0012, HST-R17](0012-host-interface.md#3-requirements), carried by [#24](https://github.com/crenshawdev/baley/issues/24) and the [held Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts). This area specifies neither a replacement algorithm nor a second set of tool aliases.
 
@@ -184,7 +184,7 @@ Every file represented in the twenty slowest cases plus ties receives a keep, fo
 
 Tests execute production logic in-process, with plain inputs or a minimal Rust substitute at one filesystem, process or clock seam. Gathering external observations is separate from judging them. Tests launch no programs and use no live clock. A fresh temporary directory may be the filesystem seam. Store tests use real SQLite in such a directory, never a fake store. Operation-order tests do not prove crash survival or physical durability. A new test is demonstrated to fail with the behavior it guards broken, then that behavior is restored. No unit test asserts on timing.
 
-[#54](https://github.com/crenshawdev/baley/issues/54) closes only with the measurement specified in section 5, full per-file accounting and all represented files assessed in its pull request. Build 9's application performance budgets remain separate from this suite-cost evidence.
+UPK-R10 and UPK-Q3 require the measurement specified in section 5, full per-file accounting and an assessment of every file represented in the twenty slowest cases plus ties. Build 9's application performance budgets remain separate from this suite-cost evidence.
 
 ## 9. Settings
 
@@ -214,7 +214,7 @@ The all-state GitHub issue collection, including pull requests, gives these assi
 | `enhancement` | 0 | 53 | 0 | Keep these assignments; not used for new work |
 | `accessibility`, `documentation`, `duplicate`, `good first issue`, `help wanted`, `invalid`, `wontfix` | 0 each | 0 each | 0 each | Remove only while unused |
 
-The 53 `enhancement` assignments are closed issues 73 through 126, excluding 93. Removal covers seven labels and relabels no issue. Assignments are checked again before deletion, including closed issues and pull requests. This is the acceptance scope of [#50](https://github.com/crenshawdev/baley/issues/50).
+The 53 `enhancement` assignments are closed issues 73 through 126, excluding 93. Removal covers seven labels and relabels no issue. UPK-R8 requires a fresh inventory of assignments before deletion, including closed issues and pull requests.
 
 ### Bug impact
 
@@ -257,16 +257,16 @@ The workflow pins nextest 0.9.144 at [test.yml:55](../../.github/workflows/test.
 
 ### Static test counts
 
-These are source-line counts of `#[test]` and `#[tokio::test]` attributes, including attributes with arguments, in Rust files under `crates`. Each matching line counts once. They are not discovered or executed test counts.
+These counts include only Rust source lines containing actual `#[test]` or `#[tokio::test]` attributes, with or without arguments, under `crates`. Each matching line counts once, including attributes in macro definitions; mentions in strings or comments are excluded. They are not discovered or executed test counts.
 
 | Crate | Test-attribute lines | Files containing those lines |
 |---|---:|---:|
-| `baley` | 2,246 | 173 |
+| `baley` | 2,245 | 172 |
 | `baley-core` | 409 | 14 |
 | `baley-store` | 105 | 11 |
 | `baley-store-sqlite` | 305 | 12 |
 | `baley-bench` | 5 | 2 |
-| Total | 3,070 | 212 |
+| Total | 3,069 | 211 |
 
 The count does not expand macros or resolve binary membership. For example, [ledger/tests.rs:16-22](../../crates/baley/src/ledger/tests.rs#L16) defines an attribute inside a macro, and the store's [conformance macro:249-352](../../crates/baley-store/src/conformance/mod.rs#L249) generates adapter cases. The test count and timing figures in older issues are not measurements of this tree. No compilation, formatter, test, lint or dependency-check execution is claimed by this document's static evidence.
 

@@ -19,7 +19,7 @@ Bug fixes, refactors inside one module and dependency updates do not.
 |---|---|---|
 | Product requirements (PRD) | [`prd/`](prd/) | What Baley is for and what its owner can do, as numbered user stories |
 | System design | [`0002-system-design.md`](0002-system-design.md) | The architecture every area follows: who is responsible for what, the patterns, the parts and the decisions that cut across areas |
-| Area design documents | `NNNN-slug.md` | The full design of one process area, in the form of [TEMPLATE.md](TEMPLATE.md). The set: 0003 configuration and routing, 0004 starting a project and changing scope, 0005 context, plans and acceptance, 0006 execution, 0007 verification, 0008 review, 0009 risk, 0010 guard, 0011 milestones, landing, undo and pause, 0012 host interface, 0013 next action and progress, 0014 support families, 0015 repository upkeep and the build gate |
+| Area design documents | `NNNN-slug.md` | The full design of one process area, in the form of [TEMPLATE.md](TEMPLATE.md). The set: 0003 configuration and routing, 0004 starting a project and changing scope, 0005 context, plans and acceptance, 0006 execution, 0007 verification, 0008 review, 0009 risk, 0010 guard, 0011 milestones, landing, undo and pause, 0012 host interface, 0013 next action and progress, 0014 support families |
 | Decision records (ADRs) | [`../adr/`](../adr/) | One architectural decision each: its context, the options and why one was chosen |
 | Glossary | [`CONTEXT.md`](../../CONTEXT.md) | One term for each concept across every document, with its meaning, the section that owns it and the words to avoid for it; it changes with the document that changes a term |
 | C4 model | [`c4/workspace.dsl`](c4/workspace.dsl) | The one model of Baley's structure; every structure diagram is exported from it |
@@ -49,7 +49,7 @@ Each design document states its requirements with stable identifiers: the docume
 
 Build issues, pull requests, tests and the instructions Baley serves cite the identifiers they satisfy, so any rule in the code traces back to its requirement.
 
-A reference to something not written yet uses `TARGET` enclosed in square brackets, so it is visible and searchable. A document is finished when no unresolved placeholder remains.
+A reference to something not written yet is written `[TARGET]`, so it is visible and searchable (`grep -rn "\[TARGET\]" docs/`). A document is finished when no unresolved `[TARGET]` remains.
 
 ## Diagrams
 
