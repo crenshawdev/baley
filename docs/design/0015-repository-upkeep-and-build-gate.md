@@ -206,7 +206,7 @@ The all-state GitHub issue collection, including pull requests, gives these assi
 
 | Label | Open issues | Closed issues | Pull requests | Use |
 |---|---:|---:|---:|---|
-| `design` | 2 | 11 | 10 | Active |
+| `design` | 1 | 12 | 10 | Active |
 | `bug` | 7 | 2 | 0 | Active |
 | `question` | 0 | 0 | 0 | Active; the [question form:3](../../.github/ISSUE_TEMPLATE/question.yml#L3) applies it |
 | `dependencies` | 0 | 0 | 6 | Active |
@@ -245,8 +245,8 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | UPK-R5, UPK-Q2 | Not built | [test.yml:15-119](../../.github/workflows/test.yml#L15) defines three jobs and no `fmt`; applied rules require only those three contexts |
 | UPK-R6 | Not built | Exact toolchain at [rust-toolchain.toml:11](../../rust-toolchain.toml#L11); [test.yml](../../.github/workflows/test.yml) has no format job that installs its `rustfmt` component and runs the check |
 | UPK-R7 | Built | README describes the [status:5](../../README.md#L5), [host:23](../../README.md#L23), [three required checks:33](../../README.md#L33) and [contribution policy:37](../../README.md#L37). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
-| UPK-R8 | Not built | Section 9's inventory has thirteen labels; [#50](https://github.com/crenshawdev/baley/issues/50) owns removal of the seven unused labels, preserving `enhancement` on its 53 closed issues without using it for new work |
-| UPK-R9 | Not built | [bug.yml:1-25](../../.github/ISSUE_TEMPLATE/bug.yml#L1) has no impact field |
+| UPK-R8 | Not built | Removal of section 9's seven unused labels remains a repository-settings change owned by [#50](https://github.com/crenshawdev/baley/issues/50), preserving `enhancement` on its 53 closed issues without using it for new work |
+| UPK-R9 | Built | [bug.yml:12-21](../../.github/ISSUE_TEMPLATE/bug.yml#L12) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [5-11](../../.github/ISSUE_TEMPLATE/bug.yml#L5) and [22-35](../../.github/ISSUE_TEMPLATE/bug.yml#L22) |
 | UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
 | UPK-R11 | Partly built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets eight build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) sets six test threads; [test.yml:60,89](../../.github/workflows/test.yml#L60) omits explicit build and test limits. [#49](https://github.com/crenshawdev/baley/issues/49) owns the six-job build default and the explicit nextest and clippy limits |
 | UPK-Q1 | Built | Section 6 classifies every retained match; no active source uses an old name |

@@ -339,7 +339,7 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 |---|---|---|---|
 | [#44](https://github.com/crenshawdev/baley/issues/44) | Start the architecture overview | Evidence | None |
 | [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI; set six-job build and test limits | Encyclopedists | None |
-| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | None |
+| [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | None. The bug form's impact field is built; deleting the seven unused labels remains |
 | [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | None |
 
 ### Bugs
