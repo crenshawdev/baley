@@ -273,25 +273,17 @@ fn read_document<S: Views + Payloads + ?Sized>(
     match store.open(&hash) {
         Err(error) => store_failed(&error, NOT_READ_BUSY),
         Ok(PayloadBody::Gone(status)) => {
-            if matches!(status, PayloadStatus::Purged { .. }) {
-                let current = match find_capture(store, project, shape) {
+            let current;
+            let document = if matches!(status, PayloadStatus::Purged { .. }) {
+                current = match find_capture(store, project, shape) {
                     Ok(document) => document,
                     Err(answer) => return answer,
                 };
-                if let Some(Source::Ready(Content::Purged(reason))) = current.source() {
-                    return answer(
-                        &shape.identity,
-                        &current,
-                        Content::Purged(reason),
-                        shape.part,
-                    );
-                }
-            }
-            failed(
-                LEDGER_UNAVAILABLE,
-                "the capture is recorded, but its body is not held whole",
-                PLACE_LEDGER,
-            )
+                &current
+            } else {
+                document
+            };
+            gone_answer(shape, document, &status)
         }
         Ok(PayloadBody::Present(mut reader)) => {
             let mut bytes = Vec::new();
@@ -309,6 +301,25 @@ fn read_document<S: Views + Payloads + ?Sized>(
             }
         }
     }
+}
+
+/// A global tombstone needs this project's view to confirm its purge reason.
+fn gone_answer(shape: &DocumentShape, document: &CaptureDocument, status: &PayloadStatus) -> Value {
+    if let (PayloadStatus::Purged { .. }, Some(Source::Ready(Content::Purged(reason)))) =
+        (status, document.source())
+    {
+        return answer(
+            &shape.identity,
+            document,
+            Content::Purged(reason),
+            shape.part,
+        );
+    }
+    failed(
+        LEDGER_UNAVAILABLE,
+        "the capture is recorded, but its body is not held whole",
+        PLACE_LEDGER,
+    )
 }
 
 #[cfg(test)]
@@ -351,6 +362,50 @@ mod tests {
         );
         let present = document(json!({"hash": "ab".repeat(32), "state": "present"}));
         assert_eq!(present.source(), Some(Source::Open(Hash([0xab; 32]))));
+    }
+
+    #[test]
+    fn a_confirmed_purge_answered_with_the_global_reason_is_caught() {
+        let current = document(json!({"hash": "ab".repeat(32), "state": "purged",
+            "reason": "this project removed it"}));
+        let shape = DocumentShape {
+            identity: identity(),
+            part: None,
+        };
+        let status = PayloadStatus::Purged {
+            reason: "another project removed it".into(),
+        };
+        let value = gone_answer(&shape, &current, &status);
+        metadata(&value, 4097);
+        assert_eq!(
+            value["tombstone"],
+            json!({"state": "purged", "reason": "this project removed it"})
+        );
+        assert!(value.get("text").is_none(), "{value}");
+    }
+
+    #[test]
+    fn an_unconfirmed_purge_answered_with_the_global_reason_is_caught() {
+        let shape = DocumentShape {
+            identity: identity(),
+            part: None,
+        };
+        let status = PayloadStatus::Purged {
+            reason: "another project removed it".into(),
+        };
+        for body in [
+            json!({"hash": "ab".repeat(32), "state": "present"}),
+            json!({"text": "still inline"}),
+            json!({}),
+        ] {
+            let current = document(body);
+            let value = gone_answer(&shape, &current, &status);
+            assert_eq!(value["status"], "failed", "{value}");
+            assert_eq!(value["code"], "ledger-unavailable");
+            assert_eq!(value["place"], "ledger");
+            assert!(value.get("tombstone").is_none(), "{value}");
+            assert!(value.get("text").is_none(), "{value}");
+        }
     }
 
     #[test]
