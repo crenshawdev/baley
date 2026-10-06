@@ -197,7 +197,10 @@ impl SqliteStore {
     /// files and an empty `baley.db` with mode 0600 when missing.
     /// With `Options::guard_storage_time` set, open reads the timing once
     /// first, the store's waits end that long after the reading, and both
-    /// connections open with the time left as their busy timeout.
+    /// connections open with the time left as their busy timeout. Creating
+    /// the schema and declaring views wait no longer either: when the time
+    /// runs out, open answers `StoreError::Busy` rather than return a store
+    /// left without them.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
         let deadline = options
             .guard_storage_time
@@ -264,7 +267,7 @@ impl SqliteStore {
             }
             Some(epoch) => epoch,
             None => {
-                create(&writer, &queue, at)?;
+                create(&writer, &queue, deadline, options.timing.as_ref(), at)?;
                 stored_epoch(&writer)?
                     .ok_or_else(|| StoreError::Unavailable("the schema was not created".into()))?
             }
@@ -397,15 +400,9 @@ impl SqliteStore {
         self.turn(&self.maintenance_lock)
     }
 
-    /// A turn of `lock`: waited for as long as it takes on a normal store,
-    /// and on a guard store taken by nonblocking tries until the deadline,
-    /// then refused as `Busy`.
+    /// A turn of `lock`, taken as `take_turn` takes it for this store.
     fn turn<'s>(&'s self, lock: &'s FileLock) -> Result<Turn<'s>, StoreError> {
-        match acquire(self.deadline, self.timing(), || lock.try_wait()).map_err(io)? {
-            Taken::Held(turn) => Ok(turn),
-            Taken::Block => lock.wait().map_err(io),
-            Taken::Busy => Err(StoreError::Busy),
-        }
+        take_turn(lock, self.deadline, self.timing())
     }
 
     /// One of the store's two connections, taken as `turn` takes a lock. On
@@ -649,10 +646,38 @@ fn schema_digest() -> String {
     Hash(Sha256::digest(SCHEMA.as_bytes()).into()).to_hex()
 }
 
+/// A turn of `lock`: waited for as long as it takes with no `deadline`, and
+/// otherwise taken by nonblocking tries until that reading of `timing`,
+/// then refused as `Busy`.
+fn take_turn<'l>(
+    lock: &'l FileLock,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+) -> Result<Turn<'l>, StoreError> {
+    match acquire(deadline, timing, || lock.try_wait()).map_err(io)? {
+        Taken::Held(turn) => Ok(turn),
+        Taken::Block => lock.wait().map_err(io),
+        Taken::Busy => Err(StoreError::Busy),
+    }
+}
+
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
-pub(crate) fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
-    let _turn = queue.wait().map_err(io)?;
+/// With a guard's `deadline`, the queue is waited for as `take_turn` waits,
+/// and `conn` then runs under the time left as its busy timeout. A `Busy`
+/// answer leaves no schema.
+pub(crate) fn create(
+    conn: &Connection,
+    queue: &FileLock,
+    deadline: Option<Duration>,
+    timing: &dyn Timing,
+    at: &str,
+) -> Result<(), StoreError> {
+    let _turn = take_turn(queue, deadline, timing)?;
+    if let Some(deadline) = deadline {
+        conn.busy_timeout(guard_busy_timeout(deadline, timing.now()))
+            .map_err(sql)?;
+    }
     if stored_epoch(conn)?.is_some() {
         return Ok(());
     }
@@ -1439,22 +1464,99 @@ mod tests {
         assert_eq!(busy_timeouts(&store), (1_500, 1_500));
     }
 
-    /// Runs `call` through `store` on its own thread while the test holds
-    /// `held`, and gives back its answer, or `None` when none came in time,
-    /// so a call that blocks fails instead of hanging the suite. `held` is
-    /// released before the thread is joined.
+    /// Runs `call` on its own thread while the test holds `held`, and gives
+    /// back its answer, or `None` when none came in time, so a call that
+    /// blocks fails instead of hanging the suite. `held` is released before
+    /// the thread is joined.
+    fn answer_holding<H, T: Send + 'static>(
+        held: H,
+        call: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (send, answer) = mpsc::channel();
+        let handle = thread::spawn(move || send.send(call()).expect("send"));
+        let answered = answer.recv_timeout(Duration::from_secs(5)).ok();
+        drop(held);
+        handle.join().expect("call thread");
+        answered
+    }
+
+    /// `answer_holding` for a call through `store`.
     fn answer_while<H, T: Send + 'static>(
         store: &Arc<SqliteStore>,
         held: H,
         call: impl FnOnce(&SqliteStore) -> T + Send + 'static,
     ) -> Option<T> {
-        let (send, answer) = mpsc::channel();
         let caller = Arc::clone(store);
-        let handle = thread::spawn(move || send.send(call(&caller)).expect("send"));
-        let answered = answer.recv_timeout(Duration::from_secs(5)).ok();
-        drop(held);
-        handle.join().expect("call thread");
-        answered
+        answer_holding(held, move || call(&caller))
+    }
+
+    /// Guard options at `view_set_version` with 1.5 s of storage time on a
+    /// timing that steps 100 ms a reading.
+    fn guard_options(view_set_version: u32) -> Options {
+        Options {
+            view_set_version: NonZeroU32::new(view_set_version).expect("nonzero"),
+            timing: Scripted::stepping(ms(100)),
+            guard_storage_time: Some(ms(1_500)),
+            ..Options::default()
+        }
+    }
+
+    // Catches a guard open of a fresh home that waits for the writer queue
+    // to create the schema, or returns a store without one.
+    #[test]
+    fn a_guard_open_of_a_fresh_home_waits_for_the_queue() {
+        let home = crate::checks::private_folder();
+        let path = home.path().join("baley.db.writer");
+        crate::checks::private_file(&path);
+        let queue = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("queue file");
+        queue.lock().expect("hold the queue");
+        let opening = home.path().to_path_buf();
+        let answer = answer_holding(queue, move || {
+            SqliteStore::open(&opening, AT, guard_options(2)).err()
+        });
+        assert_eq!(answer, Some(Some(StoreError::Busy)));
+        let schema: Option<i64> = raw(home.path())
+            .query_row(
+                "SELECT 1 FROM sqlite_schema WHERE name = 'schema_meta'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("schema");
+        assert_eq!(schema, None);
+    }
+
+    // Catches a guard open that returns without the view set it declares
+    // when the writer queue is taken, as a read-only open may.
+    #[test]
+    fn a_guard_open_without_its_new_view_set_succeeds() {
+        let home = crate::checks::private_folder();
+        let other = open(home.path());
+        let held = other.queue.wait().expect("turn");
+        let opening = home.path().to_path_buf();
+        let answer = answer_holding(held, move || {
+            SqliteStore::open(&opening, AT, guard_options(3)).err()
+        });
+        assert_eq!(answer, Some(Some(StoreError::Busy)));
+    }
+
+    // Catches a guard `create_project` that waits for the writer queue, or
+    // records the project past its storage time.
+    #[test]
+    fn a_guard_create_project_waits_for_the_queue() {
+        let home = crate::checks::private_folder();
+        let store = guard(home.path());
+        let other = open(home.path());
+        let held = other.queue.wait().expect("turn");
+        let project = ProjectId("7f0c2a4e-8d1b-4c3a-9e5f-2b6d8a1c4e70".into());
+        let answer = answer_while(&store, held, move |store| {
+            store.create_project(&project, "user", AT)
+        });
+        assert_eq!(answer, Some(Err(StoreError::Busy)));
+        assert_eq!(other.projects().expect("projects"), []);
     }
 
     // Catches a guard write that blocks on the write connection's mutex

@@ -155,7 +155,7 @@ impl SqliteStore {
         )
         .map_err(sql)?;
         let queue = FileLock::open(&target.join("baley.db.writer")).map_err(io)?;
-        create(&conn, &queue, at)?;
+        create(&conn, &queue, None, self.timing(), at)?;
         conn.execute(
             "ATTACH DATABASE ?1 AS source",
             [uri(&self.home.join("baley.db"))?],
