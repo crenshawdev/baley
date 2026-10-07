@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged, as of main `662877b6`, on 2026-10-06, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T14 to T17 are planned, no longer held for a decision. Removal of the built key reader, `baley exec --key` and HTTPS model lister belongs to Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)). Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T10 merged and T11 in progress, as of main `bd1acc72`, on 2026-10-07, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T14 to T17 are planned, no longer held for a decision. Removal of the built key reader, `baley exec --key` and HTTPS model lister belongs to Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)). Each build pull request updates this roadmap.
 
 ## The path to the first release
 
@@ -217,10 +217,12 @@ flowchart LR
     Release14 --> Verified
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
+    classDef active fill:#9a6700,stroke:#7d4e00,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
     class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10 done
     class Delivery done
-    class T11,T12,T13,T14,T15,T16,T17,Release14,Verified planned
+    class T11 active
+    class T12,T13,T14,T15,T16,T17,Release14,Verified planned
 ```
 
 Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dotted arrow is an evidence link. T14 to T17 are planned, not built, and T14 and T17 use unsigned development artifacts only. #14 fills and qualifies T14's `verify_download` seam before delivery can release verified artifacts; its other build dependencies are listed under R1. One pull request per Build 3 task.
@@ -237,7 +239,7 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dot
 | T8 | Ledger captures and project identity reads | [#202](https://github.com/crenshawdev/baley/pull/202) | Merged |
 | T9 | Bounded guard process and storage access | [#204](https://github.com/crenshawdev/baley/pull/204) | Merged |
 | T10 | Per-user guard records and Claude hook answers | [#207](https://github.com/crenshawdev/baley/pull/207) | Merged |
-| T11 | Claude artifact content, logical stubs and supplied executable-path protection | | Planned |
+| T11 | Claude artifact content, logical stubs and supplied executable-path protection | | In progress |
 | T12 | Live Claude qualification and concurrent sessions | | Planned |
 | T13 | Runtime doctor host observations | | Planned |
 | T14 | Binary delivery, ledger update claims and events, version-folder protection and update compatibility using unsigned development artifacts only; leave `verify_download` between download and staging for #14's verifiers | | Planned; released delivery depends on #14 |
