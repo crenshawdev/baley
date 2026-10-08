@@ -10,7 +10,7 @@
 //! read as protection already installed.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::executable::{Executable, PathFault, judge};
 use super::stubs::Entry;
@@ -72,6 +72,14 @@ pub enum PlacementRefusal {
     },
     /// One identity was given two stub placements.
     DuplicateStub(String),
+    /// A stub's file is the executable the hook and the registration run
+    /// (D-25), so placing the stub would replace the binary.
+    StubOverExecutable {
+        /// The stub's identity.
+        stub: String,
+        /// The executable's path as supplied.
+        executable: PathBuf,
+    },
 }
 
 impl fmt::Display for PlacementRefusal {
@@ -88,6 +96,11 @@ impl fmt::Display for PlacementRefusal {
             PlacementRefusal::DuplicateStub(identity) => {
                 write!(f, "stub `{identity}` is placed twice")
             }
+            PlacementRefusal::StubOverExecutable { stub, executable } => write!(
+                f,
+                "stub `{stub}` cannot be placed over the executable {}",
+                executable.display()
+            ),
         }
     }
 }
@@ -130,8 +143,11 @@ pub struct Document<'a> {
 
 impl PlacementMap {
     /// Builds the map, judging every supplied path by the executable's rule
-    /// and refusing a stub whose file is shared or whose identity is placed
-    /// twice.
+    /// and refusing a stub whose identity is placed twice or whose file is
+    /// another artifact's file or the executable.
+    ///
+    /// Files are compared by spelling with `.` and `..` resolved and nothing
+    /// read, so two spellings joined by a symbolic link are not seen here.
     pub fn new(
         executable: Executable,
         stubs: Vec<(Entry, Placement)>,
@@ -164,14 +180,23 @@ impl PlacementMap {
                 continue;
             };
             let stub = Artifact::Stub(entry.identity.clone());
+            let file = resolved(path);
             let shared = map.all().into_iter().find(|(artifact, other, _)| {
-                *artifact != stub && matches!(other, Placement::At(other) if other == path)
+                *artifact != stub
+                    && matches!(other, Placement::At(other) if resolved(other) == file)
             });
             if let Some((with, _, _)) = shared {
                 return Err(PlacementRefusal::StubFileShared {
                     stub: entry.identity.clone(),
                     with,
                     path: path.clone(),
+                });
+            }
+            let executable = Path::new(map.executable.as_str());
+            if resolved(executable) == file {
+                return Err(PlacementRefusal::StubOverExecutable {
+                    stub: entry.identity.clone(),
+                    executable: executable.to_path_buf(),
                 });
             }
         }
@@ -278,6 +303,25 @@ impl PlacementMap {
             .map(|(artifact, _, _)| artifact)
             .collect()
     }
+}
+
+/// An absolute path's components with `.` dropped and `..` popping its
+/// parent, from the text alone.
+fn resolved(path: &Path) -> Vec<Component<'_>> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            // `..` at the root stays at the root.
+            Component::ParentDir => {
+                if matches!(parts.last(), Some(Component::Normal(_))) {
+                    parts.pop();
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    parts
 }
 
 #[cfg(test)]
@@ -475,5 +519,69 @@ mod tests {
                 path: HOOK.into(),
             })
         );
+    }
+
+    #[test]
+    fn a_stub_sharing_a_file_under_another_spelling_accepted_is_caught() {
+        let help_in_hook = build(
+            stubs(at(CAPTURE), at("/p/SKILL.md")),
+            at(REGISTRATION),
+            at("/p/d/../SKILL.md"),
+            at(SETTINGS),
+        );
+        assert_eq!(
+            help_in_hook,
+            Err(PlacementRefusal::StubFileShared {
+                stub: "bal-help".into(),
+                with: Artifact::Hook,
+                path: "/p/SKILL.md".into(),
+            })
+        );
+        let two_stubs = build(
+            stubs(at("/p/x/../SKILL.md"), at("/p/SKILL.md")),
+            at(REGISTRATION),
+            at(HOOK),
+            at(SETTINGS),
+        );
+        assert_eq!(
+            two_stubs,
+            Err(PlacementRefusal::StubFileShared {
+                stub: "bal-capture".into(),
+                with: Artifact::Stub("bal-help".into()),
+                path: "/p/x/../SKILL.md".into(),
+            })
+        );
+        let apart = build(
+            stubs(at(CAPTURE), at("/p/SKILL.md")),
+            at(REGISTRATION),
+            at("/p/d/SKILL.md"),
+            at(SETTINGS),
+        );
+        assert!(apart.is_ok(), "{apart:?}");
+    }
+
+    #[test]
+    fn a_stub_placed_over_the_executable_accepted_is_caught() {
+        for (executable, help) in [
+            (EXECUTABLE, EXECUTABLE),
+            (EXECUTABLE, "/usr/local/lib/../bin/baley"),
+            ("/usr/local/x/../bin/baley", EXECUTABLE),
+        ] {
+            let map = PlacementMap::new(
+                Executable::new(executable).unwrap(),
+                stubs(at(CAPTURE), at(help)),
+                at(REGISTRATION),
+                at(HOOK),
+                at(SETTINGS),
+            );
+            assert_eq!(
+                map,
+                Err(PlacementRefusal::StubOverExecutable {
+                    stub: "bal-help".into(),
+                    executable: executable.into(),
+                }),
+                "{executable} {help}"
+            );
+        }
     }
 }
