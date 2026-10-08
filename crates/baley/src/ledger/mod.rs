@@ -39,11 +39,7 @@ pub fn run(command: LedgerCommand) -> ExitCode {
                 .map_err(|e| display::store_error(&e, None))?,
         );
         Ok(commands::dispatch(
-            command,
-            store,
-            cwd,
-            &folders.config,
-            started_at,
+            command, store, cwd, &folders, started_at,
         ))
     })()
     .unwrap_or_else(|e| e);

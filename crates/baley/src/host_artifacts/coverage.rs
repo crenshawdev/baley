@@ -504,7 +504,7 @@ fn guard(inputs: &Inputs<'_>, tool: Tool) -> Vec<Cause> {
 /// absent, empty or `*` matcher, and reads one holding only letters, digits,
 /// `_`, `-`, spaces, `,` and `|` as a list of exact names. Anything else is
 /// a regular expression, which this judge does not evaluate.
-fn matcher_names(matcher: Option<&Value>, tool: Tool) -> bool {
+pub(crate) fn matcher_names(matcher: Option<&Value>, tool: Tool) -> bool {
     let text = match matcher {
         None => return true,
         Some(Value::String(text)) => text.as_str(),
@@ -526,7 +526,7 @@ fn matcher_names(matcher: Option<&Value>, tool: Tool) -> bool {
 /// through bash, with no field that narrows it (`if`), detaches it
 /// (`async`), reshapes it (`args`) or is unknown, and no timeout below the
 /// guard's budget, since a cut-off hook lets the call run.
-fn is_guard(handler: &Value, command: &str) -> bool {
+pub(crate) fn is_guard(handler: &Value, command: &str) -> bool {
     let Some(fields) = handler.as_object() else {
         return false;
     };

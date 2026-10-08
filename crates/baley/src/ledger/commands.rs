@@ -12,7 +12,8 @@ use super::{
 };
 use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
-use crate::{init, policy_step, settings};
+use crate::folders::Folders;
+use crate::{host_doctor, init, policy_step, settings};
 use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, ProjectIdentity, Unavailable};
 use baley_core::*;
@@ -33,15 +34,17 @@ fn require_remote(forge: &mut Forge, name: &str) -> Result<(), Render> {
     forge.require_remote(name).map_err(|e| Render::refusal(e.0))
 }
 
-/// Wires one owner command to the core and storage port. `config` is the
-/// config folder, where `purge`'s policy step finds the global file.
+/// Wires one owner command to the core and storage port. The config folder
+/// is where `purge`'s policy step finds the global file; `doctor` also takes
+/// the ledger home.
 pub(super) fn dispatch(
     command: LedgerCommand,
     store: Arc<SqliteStore>,
     cwd: PathBuf,
-    config: &Path,
+    folders: &Folders,
     started_at: String,
 ) -> Render {
+    let config = folders.config.as_path();
     let mut forge = GitForge::new(crate::process::System, cwd.clone(), SystemClock::seconds);
     let result = match command {
         LedgerCommand::Verify {
@@ -51,7 +54,7 @@ pub(super) fn dispatch(
         } => command_plan::verify_form(project.as_deref(), local_only, views)
             .map_err(Render::refusal)
             .and_then(|form| verify(&store, &mut forge, config, &cwd, form)),
-        LedgerCommand::Doctor => doctor(&store, &mut forge, config, &cwd),
+        LedgerCommand::Doctor => doctor(&store, &mut forge, folders, &cwd),
         LedgerCommand::Export { project, to } => export(&store, &ProjectId(project), &to),
         LedgerCommand::Purge {
             project,
@@ -116,9 +119,10 @@ fn verify(
 fn doctor(
     store: &SqliteStore,
     forge: &mut Forge,
-    config: &Path,
+    folders: &Folders,
     cwd: &Path,
 ) -> Result<Render, Render> {
+    let config = folders.config.as_path();
     let projects = store
         .projects()
         .map_err(|e| display::store_error(&e, None))?;
@@ -140,10 +144,43 @@ fn doctor(
         };
         checks.insert(project, check);
     }
-    store
+    let health = store
         .doctor(&SystemClock::now(), &checks)
-        .map(|h| display::doctor(&h, &projects, &reasons, &judged))
-        .map_err(|e| display::store_error(&e, None))
+        .map_err(|e| display::store_error(&e, None))?;
+    let rendered = display::doctor(&health, &projects, &reasons, &judged);
+    let checkout_file = gathered
+        .settings
+        .project_file
+        .as_ref()
+        .map(|file| file.path.clone());
+    let ids: Vec<ProjectId> = projects.iter().map(|(id, _)| id.clone()).collect();
+    let host = host_report(folders.clone(), checkout_file, store, &ids, &health);
+    Ok(display::with_host(rendered, &host))
+}
+
+/// The host section: the running binary against a placement map with every
+/// artifact unknown, so each one is reported as not installed, and the
+/// server's context from the last server call the ledger holds.
+fn host_report(
+    folders: Folders,
+    checkout_file: Option<PathBuf>,
+    store: &SqliteStore,
+    projects: &[ProjectId],
+    health: &Health,
+) -> host_doctor::Report {
+    let observation = host_doctor::gather(
+        host_doctor::all_unknown(std::env::current_exe()),
+        folders,
+        checkout_file,
+        std::env::var_os("PATH").as_deref(),
+        std::env::consts::OS,
+        host_doctor::Stored {
+            store,
+            projects,
+            health,
+        },
+    );
+    host_doctor::Report::new(&host_doctor::judge(&observation))
 }
 fn export(store: &SqliteStore, project: &ProjectId, to: &Path) -> Result<Render, Render> {
     store

@@ -174,7 +174,10 @@ fn merge(target: &mut Value, ours: &Value, key: &str, conflicts: &mut Vec<Confli
     }
 }
 
-fn same_server(existing: &Value, ours: &Value) -> bool {
+/// Whether an existing `mcpServers` entry runs the same command with the
+/// same arguments as ours. `alwaysLoad` and every other key are ignored, so
+/// the doctor judges a registration by composition's own rule.
+pub(crate) fn same_server(existing: &Value, ours: &Value) -> bool {
     existing.get("command") == ours.get("command") && existing.get("args") == ours.get("args")
 }
 

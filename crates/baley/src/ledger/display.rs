@@ -480,6 +480,14 @@ pub(super) fn doctor(
     }
     result
 }
+/// Appends the host section's lines after every line `render` holds and
+/// raises the exit status to the host report's when that is higher. The two
+/// codes are never added, and the host lines print whatever either code is.
+pub(super) fn with_host(mut render: Render, host: &crate::host_doctor::Report) -> Render {
+    render.lines.extend(host.lines.iter().cloned());
+    render.code = render.code.max(host.code);
+    render
+}
 /// Reports body removals, shared references and recovery.
 pub(super) fn purge(report: &PurgeReport) -> Render {
     let mut result = Render {

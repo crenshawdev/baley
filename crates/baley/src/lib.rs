@@ -65,6 +65,8 @@ pub mod guard_hook;
 pub mod hook_input;
 /// The content Claude Code loads for Baley, rendered from compiled tables and supplied values, with no file read or written.
 pub mod host_artifacts;
+/// The runtime doctor's host checks: gathered observations of Claude Code's artifacts, judged as plain values and reported as owner lines with an exit code.
+pub mod host_doctor;
 /// `baley init`: ties a repository to a ledger project.
 pub mod init;
 /// The compiled instruction registry: every instruction served to a model, by identity, with no disk loader and no override.
