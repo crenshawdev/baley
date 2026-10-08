@@ -94,7 +94,6 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::help::front_door;
 
     /// The nineteen front doors not served yet, written out by hand as
     /// `instruction/tests.rs` lists them.
@@ -158,19 +157,30 @@ mod tests {
     }
 
     #[test]
-    fn the_full_instructions_copied_into_a_stub_body_is_caught() {
-        let stub = render("bal-help", "List Baley commands.");
-        let (_, body) = split(&stub);
-        let lines: Vec<&str> = body
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .collect();
-        assert_eq!(lines.len(), 1, "body: {body:?}");
-        let line = lines[0];
-        assert!(line.contains("baley_query"));
-        assert!(line.contains(r#"{"operation":"instruction","identity":"bal-help"}"#));
-        let first_sentence = front_door::TEXT.split_inclusive('.').next().unwrap();
-        assert!(!body.contains(first_sentence));
+    fn the_full_instructions_copied_into_any_shipped_stub_body_is_caught() {
+        let mut judged = Vec::new();
+        for entry in manifest(&front_doors()).unwrap() {
+            let identity = entry.identity.as_str();
+            let stub = std::str::from_utf8(&entry.bytes).unwrap();
+            let (_, body) = split(stub);
+            let lines: Vec<&str> = body
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            assert_eq!(lines.len(), 1, "{identity}: {body:?}");
+            let query = format!(r#"{{"operation":"instruction","identity":"{identity}"}}"#);
+            assert!(lines[0].contains("baley_query"), "{identity}");
+            assert!(lines[0].contains(&query), "{identity}: {}", lines[0]);
+            let Lookup::Served { text, .. } = instruction::lookup(identity) else {
+                panic!("{identity} is not served");
+            };
+            for line in text.body.lines().filter(|line| !line.trim().is_empty()) {
+                assert!(!stub.contains(line), "{identity} holds {line:?}");
+            }
+            judged.push(identity.to_owned());
+        }
+        judged.sort();
+        assert_eq!(judged, ["bal-capture", "bal-help"]);
     }
 
     #[test]
