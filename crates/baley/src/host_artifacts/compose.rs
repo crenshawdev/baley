@@ -23,9 +23,10 @@ use crate::folders::Folders;
 /// differs from Baley's own entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conflict {
-    /// A value Baley sets held another value, and Baley's replaced it. A
-    /// sandbox turned off, `failIfUnavailable` false or
-    /// `allowUnsandboxedCommands` true shows here.
+    /// A value Baley sets held another value, and Baley's replaced it. When
+    /// the proposal is composed, a sandbox turned off, `failIfUnavailable`
+    /// false or `allowUnsandboxedCommands` true shows here; in a document the
+    /// proposal is not composed into, it shows as [`Conflict::Disabled`].
     Replaced {
         /// The key's dotted path.
         key: String,
@@ -35,8 +36,12 @@ pub enum Conflict {
     /// A key Baley adds entries under holds another JSON type, so nothing was
     /// added there. The dotted path, empty for the document itself.
     NotComposable(String),
-    /// A setting that switches protection off is on: `disableAllHooks` or
-    /// `sandbox.filesystem.disabled`. Baley does not own it, so it stays.
+    /// A setting that switches protection off, by its dotted key, holding a
+    /// value other than its secure one: `disableAllHooks` or
+    /// `sandbox.filesystem.disabled` true, or `sandbox.enabled`,
+    /// `sandbox.failIfUnavailable` or `sandbox.allowUnsandboxedCommands` left
+    /// insecure in a document the proposal is not composed into. Nothing
+    /// composed here owns it, so it stays.
     Disabled(&'static str),
     /// A `PreToolUse` item runs a command whose last word is `guard` but is
     /// not Baley's hook item: another matcher, another executable or another
@@ -177,6 +182,29 @@ fn scan(
     executable: &Executable,
     conflicts: &mut Vec<Conflict>,
 ) {
+    // When the proposal is composed the merge has already put Baley's value
+    // here, so only a hook or registration document can still hold another.
+    // An absent key may be set by another file, so it is not reported.
+    for (pointer, setting, secure) in [
+        ("/sandbox/enabled", "sandbox.enabled", true),
+        (
+            "/sandbox/failIfUnavailable",
+            "sandbox.failIfUnavailable",
+            true,
+        ),
+        (
+            "/sandbox/allowUnsandboxedCommands",
+            "sandbox.allowUnsandboxedCommands",
+            false,
+        ),
+    ] {
+        if document
+            .pointer(pointer)
+            .is_some_and(|value| *value != Value::Bool(secure))
+        {
+            conflicts.push(Conflict::Disabled(setting));
+        }
+    }
     for (pointer, setting) in [
         ("/disableAllHooks", "disableAllHooks"),
         (
@@ -449,6 +477,44 @@ mod tests {
             assert_eq!(result.conflicts, [expected], "{existing}");
             assert!(!result.is_complete(), "{existing}");
             assert_secure(&result.document);
+        }
+    }
+
+    #[test]
+    fn a_bypass_already_in_the_document_kept_when_the_proposal_is_not_composed_is_caught() {
+        let hook_only = vec![hook::render(&executable())];
+        let registration_only = vec![registration::render(&executable(), false)];
+        for (existing, ours, key) in [
+            (
+                json!({"sandbox": {"enabled": false}}),
+                &hook_only,
+                "sandbox.enabled",
+            ),
+            (
+                json!({"sandbox": {"failIfUnavailable": false}}),
+                &hook_only,
+                "sandbox.failIfUnavailable",
+            ),
+            (
+                json!({"sandbox": {"allowUnsandboxedCommands": true}}),
+                &hook_only,
+                "sandbox.allowUnsandboxedCommands",
+            ),
+            (
+                json!({"sandbox": {"enabled": false}}),
+                &registration_only,
+                "sandbox.enabled",
+            ),
+            (
+                json!({"sandbox": {"enabled": true, "failIfUnavailable": false}}),
+                &hook_only,
+                "sandbox.failIfUnavailable",
+            ),
+        ] {
+            let result = composed(&existing, ours);
+            assert_eq!(result.conflicts, [Conflict::Disabled(key)], "{existing}");
+            assert!(!result.is_complete(), "{existing}");
+            assert_eq!(result.document["sandbox"], existing["sandbox"]);
         }
     }
 
