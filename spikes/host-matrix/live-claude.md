@@ -364,7 +364,7 @@ Session B runs at the same time as session A, with the second registration form:
 Overlap. Type one prompt in each session without sending it, then send both at the same moment:
 
 - Session A: `Call baley_version, then baley_query {"operation":"help"}, five times each, one after the other, then baley_apply capture with request id 12120000-0000-4000-8000-000000000002, kind note, text "overlap A".`
-- Session B: the same, with request id `12120000-0000-4000-8000-000000000004`, kind `note` and text `overlap B`. This id is not the one the nearer-file check used, because a second capture under one id with other text is refused as `request-id-reuse`.
+- Session B: the same, with request id `12120000-0000-4000-8000-000000000004`, kind `note` and text `overlap B`. This id differs from the nearer-file check's, because a second capture under an id already used records nothing.
 
 Expect every call answered in both sessions and each capture recorded once, with no loss and no merge. Evidence: both receipts, and `q "select request_id, count(*) from event where type = 'capture.recorded' group by request_id"`. Row `conc.two-sessions`.
 
