@@ -256,6 +256,17 @@ mod tests {
             ),
             (3, "/p3", "/p3/sub")
         );
+
+        let third = [event(7, None), event(8, Some(server("/p8", "/p8/sub")))];
+        let kept = last_server_call(Some(kept), &third).expect("the newer call");
+        assert_eq!(
+            (
+                kept.seq,
+                kept.project_directory.as_str(),
+                kept.working_directory.as_str()
+            ),
+            (8, "/p8", "/p8/sub")
+        );
     }
 
     #[test]
