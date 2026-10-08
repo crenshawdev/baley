@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use super::prerequisites::{Judged as Prerequisites, Kind};
 use super::protection::{Judged, NotJudged};
 use super::{ArtifactState, Findings, MapFault};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
@@ -88,6 +89,7 @@ impl Report {
                 "executable {path} {gap_found}, and the hook and the registration run it"
             ));
         }
+        gap |= prerequisite_lines(&findings.prerequisites, &mut lines);
         match &findings.coverage {
             None => {}
             Some(Err(NotJudged::Unknown(missing))) => {
@@ -112,13 +114,13 @@ impl Report {
             let hook = nine.hook.display();
             if nine.missing.is_empty() {
                 lines.push(format!(
-                    "hook: a PreToolUse item in {hook} runs the guard for all nine tools in the matcher"
+                    "guard hook: a PreToolUse item in {hook} runs the guard for all nine tools in the matcher"
                 ));
             } else {
                 gap = true;
                 let names: Vec<&str> = nine.missing.iter().map(|tool| tool.name()).collect();
                 lines.push(format!(
-                    "hook: no PreToolUse item in {hook} runs the guard for {}",
+                    "guard hook: no PreToolUse item in {hook} runs the guard for {}",
                     names.join(", ")
                 ));
             }
@@ -128,6 +130,33 @@ impl Report {
             code: u8::from(gap),
         }
     }
+}
+
+/// The sandbox prerequisite lines for the platform. Returns whether the
+/// sandbox cannot run here: a platform it does not run on, or a program it
+/// needs that no `PATH` entry holds.
+fn prerequisite_lines(judged: &Prerequisites, lines: &mut Vec<String>) -> bool {
+    match judged.kind {
+        Kind::MacOs => {
+            lines.push("sandbox: macOS uses the built-in Seatbelt and needs no program".to_owned())
+        }
+        Kind::Other => lines.push(format!(
+            "sandbox: {} is a platform where Claude Code's sandbox does not run",
+            judged.os
+        )),
+        Kind::Linux => {
+            for program in &judged.required {
+                lines.push(match &program.found {
+                    Some(path) => format!("sandbox: {} found at {}", program.name, path.display()),
+                    None => format!(
+                        "sandbox: {} is missing from PATH, so the sandbox cannot run; install {} with `apt-get install bubblewrap socat` or `dnf install bubblewrap socat` (this lookup used this command's PATH, which may differ from the one Claude Code runs with)",
+                        program.name, program.package
+                    ),
+                });
+            }
+        }
+    }
+    !judged.unsupported().is_empty()
 }
 
 /// The coverage section: one line per tool access and per write-only file,
@@ -317,6 +346,18 @@ mod tests {
             assert!(!says_installed(line), "{line}");
         }
         assert_eq!(report.code, 0);
+
+        for (os, code) in [("macos", 0), ("freebsd", 1)] {
+            let mut other = unknown_observation();
+            other.prerequisites = found_on(os, &[]);
+            let report = report_of(&other);
+            for name in names {
+                let line = line_for(&report, name);
+                assert!(line.contains("not installed"), "{os}: {line}");
+                assert!(!says_installed(line), "{os}: {line}");
+            }
+            assert_eq!(report.code, code, "{os}: {:?}", report.lines);
+        }
     }
 
     #[test]
@@ -425,13 +466,17 @@ mod tests {
         assert!(!equal.lines.iter().any(|line| line.contains("differs")));
         assert_eq!(equal.code, 0);
     }
-    /// Baley's proposal and hook composed into one document, as a read.
-    fn composed(write_only: &[&str]) -> Vec<u8> {
+    /// Baley's proposal and hook composed into one document.
+    fn composed_value(write_only: &[&str]) -> serde_json::Value {
         let exe = executable();
         let write_only: Vec<PathBuf> = write_only.iter().map(PathBuf::from).collect();
         let proposal = security::propose(&folders(), &exe, &write_only).settings;
-        let document = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
-        serde_json::to_vec(&document).unwrap()
+        compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document
+    }
+
+    /// The same document, as the bytes a read finds.
+    fn composed(write_only: &[&str]) -> Vec<u8> {
+        serde_json::to_vec(&composed_value(write_only)).unwrap()
     }
 
     /// Settings and hook placed in one document, the document composed from
@@ -592,5 +637,142 @@ mod tests {
         );
         assert!(!judged[0].contains("cannot"), "{}", judged[0]);
         assert!(mentions(&report_of(&unknown_observation())).is_empty());
+    }
+    /// The report for settings and hook in one document, edited by `edit`.
+    fn edited(edit: impl FnOnce(&mut serde_json::Value)) -> Report {
+        let mut document = composed_value(&[SETTINGS]);
+        edit(&mut document);
+        report_of(&observed(
+            map(None, None, None, Some(SETTINGS), Some(SETTINGS)),
+            vec![(
+                SETTINGS,
+                FileState::Bytes(serde_json::to_vec(&document).unwrap()),
+            )],
+        ))
+    }
+
+    /// Removes the entries of the arrays at `pointers` that `drop` picks.
+    fn without(document: &mut serde_json::Value, pointers: &[&str], drop: impl Fn(&str) -> bool) {
+        for pointer in pointers {
+            document
+                .pointer_mut(pointer)
+                .and_then(serde_json::Value::as_array_mut)
+                .unwrap()
+                .retain(|item| !drop(item.as_str().unwrap()));
+        }
+    }
+
+    fn names(report: &Report, words: &[&str]) -> bool {
+        report
+            .lines
+            .iter()
+            .any(|line| words.iter().all(|word| line.contains(word)))
+    }
+
+    #[test]
+    fn a_host_gap_left_unnamed_in_the_report_is_caught() {
+        use serde_json::json;
+
+        let clean = edited(|_| {});
+        assert_eq!(clean.code, 0, "{:?}", clean.lines);
+
+        let off = edited(|document| document["sandbox"]["enabled"] = json!(false));
+        assert!(names(&off, &["sandbox.enabled"]), "{:?}", off.lines);
+        assert_eq!(off.code, 1);
+
+        let mut no_bwrap = observed(
+            map(None, None, None, Some(SETTINGS), Some(SETTINGS)),
+            vec![(SETTINGS, FileState::Bytes(composed(&[SETTINGS])))],
+        );
+        no_bwrap.prerequisites = found_on("linux", &["socat"]);
+        let no_bwrap = report_of(&no_bwrap);
+        assert!(
+            names(&no_bwrap, &["bwrap", "bubblewrap"]),
+            "{:?}",
+            no_bwrap.lines
+        );
+        assert_eq!(no_bwrap.code, 1);
+
+        let no_config = edited(|document| {
+            without(
+                document,
+                &[
+                    "/sandbox/filesystem/denyRead",
+                    "/sandbox/filesystem/denyWrite",
+                    "/permissions/deny",
+                ],
+                |item| item.contains("/.config/"),
+            );
+        });
+        assert!(names(&no_config, &[CONFIG]), "{:?}", no_config.lines);
+        assert_eq!(no_config.code, 1);
+
+        let no_deny_read =
+            edited(|document| document["sandbox"]["filesystem"]["denyRead"] = json!([]));
+        assert!(
+            names(&no_deny_read, &["denyRead"]),
+            "{:?}",
+            no_deny_read.lines
+        );
+        assert_eq!(no_deny_read.code, 1);
+
+        let no_edit_rules = edited(|document| {
+            without(document, &["/permissions/deny"], |rule| {
+                rule.starts_with("Edit(")
+            });
+        });
+        for tool in ["Write", "Edit", "NotebookEdit"] {
+            for line in tool_lines(&no_edit_rules, tool) {
+                assert!(
+                    line.contains("Edit(//home/o/.local/share/crenshawdev/baley/**)"),
+                    "{line}"
+                );
+            }
+        }
+        assert_eq!(no_edit_rules.code, 1);
+
+        let six_tools = edited(|document| {
+            document["hooks"]["PreToolUse"][0]["matcher"] =
+                json!("Read|Grep|Glob|Write|Edit|NotebookEdit");
+        });
+        let line = six_tools
+            .lines
+            .iter()
+            .find(|line| line.starts_with("guard hook:"))
+            .unwrap_or_else(|| panic!("{:?}", six_tools.lines));
+        for tool in ["Bash", "Monitor", "PowerShell"] {
+            assert!(line.contains(tool), "{line}");
+        }
+        assert!(!line.contains("Read"), "{line}");
+        assert_eq!(six_tools.code, 1);
+
+        let mut changed =
+            crate::host_artifacts::stubs::manifest(&crate::host_artifacts::stubs::front_doors())
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.identity == "bal-help")
+                .unwrap()
+                .bytes;
+        changed[0] ^= 1;
+        let stub = report_of(&observed(
+            map(None, Some(HELP), None, None, None),
+            vec![(HELP, FileState::Bytes(changed))],
+        ));
+        assert!(
+            names(&stub, &["bal-help", HELP, "differs"]),
+            "{:?}",
+            stub.lines
+        );
+        assert_eq!(stub.code, 1);
+
+        let mut freebsd = unknown_observation();
+        freebsd.prerequisites = found_on("freebsd", &[]);
+        let freebsd = report_of(&freebsd);
+        assert!(
+            names(&freebsd, &["freebsd", "sandbox does not run"]),
+            "{:?}",
+            freebsd.lines
+        );
+        assert_eq!(freebsd.code, 1);
     }
 }

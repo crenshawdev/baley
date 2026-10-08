@@ -164,6 +164,8 @@ fn host_report(folders: Folders, checkout_file: Option<PathBuf>) -> host_doctor:
         host_doctor::all_unknown(std::env::current_exe()),
         folders,
         checkout_file,
+        std::env::var_os("PATH").as_deref(),
+        std::env::consts::OS,
     );
     host_doctor::Report::new(&host_doctor::judge(&observation))
 }

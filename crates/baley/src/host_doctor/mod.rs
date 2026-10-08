@@ -11,7 +11,11 @@
 //! placed file once and asks about the executable, and owns no rule. The
 //! readers and their judgements are in [`placed`]. [`protection`] runs the
 //! coverage judge once over the settings and hook documents the map
-//! places, with the map's protected paths as the write-only list.
+//! places, with the map's protected paths as the write-only list, and checks
+//! that the guard runs before all nine tools of the hook's matcher.
+//! [`prerequisites`] finds the programs the sandbox needs on `PATH` for the
+//! target platform, and a missing one marks the sandbox unsupported for the
+//! coverage judge.
 //!
 //! The held delivery doctor (Build 3 T17) takes the same three steps over a
 //! placement map `baley install` supplies. Nothing here writes a file, the
@@ -20,9 +24,11 @@
 //! installed, and that alone never raises the exit status.
 
 pub mod placed;
+pub mod prerequisites;
 pub mod protection;
 pub mod report;
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 pub use report::Report;
@@ -107,6 +113,8 @@ pub struct Observation {
     pub folders: Folders,
     /// The discovered checkout's `baley.toml`, which is write-only too.
     pub checkout_file: Option<PathBuf>,
+    /// The platform and where the sandbox's programs were found.
+    pub prerequisites: prerequisites::Observed,
 }
 
 /// Gathers the observation for a placement map: reads each expected file
@@ -116,6 +124,8 @@ pub fn gather(
     placement: Result<PlacementMap, MapFault>,
     folders: Folders,
     checkout_file: Option<PathBuf>,
+    path: Option<&OsStr>,
+    os: &str,
 ) -> Observation {
     let host = placement.map(|map| {
         let executable = placed::observe_executable(Path::new(map.executable().as_str()));
@@ -138,6 +148,7 @@ pub fn gather(
         host,
         folders,
         checkout_file,
+        prerequisites: prerequisites::gather(path, os),
     }
 }
 
@@ -259,6 +270,8 @@ pub struct Findings {
     /// Whether the guard runs before all nine tools of the hook's matcher.
     /// None when the hook placement is unknown or its document unusable.
     pub nine_tools: Option<protection::NineTools>,
+    /// The platform and the sandbox programs it needs, found on `PATH`.
+    pub prerequisites: prerequisites::Judged,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -284,6 +297,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 documents: Vec::new(),
                 coverage: None,
                 nine_tools: None,
+                prerequisites: prerequisites::judge(&observation.prerequisites),
             };
         }
     };
@@ -294,6 +308,8 @@ pub fn judge(observation: &Observation) -> Findings {
             .find(|read| read.path == path)
             .map(|read| &read.state)
     };
+
+    let prerequisites = prerequisites::judge(&observation.prerequisites);
 
     let mut documents = Vec::new();
     for document in mapped.map.documents() {
@@ -388,9 +404,10 @@ pub fn judge(observation: &Observation) -> Findings {
             &documents,
             &observation.folders,
             observation.checkout_file.as_deref(),
-            &[],
+            &prerequisites.unsupported(),
         )),
         nine_tools: protection::nine_tools(&mapped.map, &documents),
+        prerequisites,
         documents,
     }
 }
@@ -451,12 +468,38 @@ pub(crate) mod fixtures {
         .unwrap()
     }
 
+    /// A Linux search that finds both sandbox programs.
+    pub(crate) fn linux_with_both() -> prerequisites::Observed {
+        found_on("linux", &["bwrap", "socat"])
+    }
+
+    /// A search on `os` that finds each named program in `/usr/bin`, and
+    /// gives the others a `PATH` entry with nothing in it.
+    pub(crate) fn found_on(os: &str, programs: &[&str]) -> prerequisites::Observed {
+        let entry = |present: bool| prerequisites::Candidate {
+            folder: "/usr/bin".into(),
+            regular_file: present,
+            mode: if present { 0o755 } else { 0 },
+        };
+        prerequisites::Observed {
+            os: os.into(),
+            searches: ["bwrap", "socat"]
+                .into_iter()
+                .map(|name| prerequisites::Search {
+                    program: name.into(),
+                    candidates: vec![entry(programs.contains(&name))],
+                })
+                .collect(),
+        }
+    }
+
     /// The observation of a host for which no map could be built.
     pub(crate) fn unmapped(fault: MapFault) -> Observation {
         Observation {
             host: Err(fault),
             folders: folders(),
             checkout_file: None,
+            prerequisites: linux_with_both(),
         }
     }
 
@@ -477,6 +520,59 @@ pub(crate) mod fixtures {
             }),
             folders: folders(),
             checkout_file: None,
+            prerequisites: linux_with_both(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::*;
+    use super::*;
+    use crate::host_artifacts::compose::compose;
+    use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
+    use crate::host_artifacts::{hook, security};
+
+    #[test]
+    fn a_missing_program_left_out_of_the_coverage_verdicts_is_caught() {
+        let exe = executable();
+        let proposal = security::propose(&folders(), &exe, &[SETTINGS.into()]).settings;
+        let document = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
+        let bytes = serde_json::to_vec(&document).unwrap();
+        for present in [["bwrap"], ["socat"]] {
+            let mut observation = observed(
+                map(None, None, None, Some(SETTINGS), Some(SETTINGS)),
+                vec![(SETTINGS, FileState::Bytes(bytes.clone()))],
+            );
+            observation.prerequisites = found_on("linux", &present);
+            let findings = judge(&observation);
+            let coverage = findings.coverage.unwrap().unwrap().coverage;
+            for tool in [Tool::Bash, Tool::Monitor, Tool::PowerShell] {
+                for access in [Access::Read, Access::Write] {
+                    assert_eq!(
+                        coverage.verdict(tool, access),
+                        Some(&Verdict::Gap(vec![Cause::Unsupported(Mechanism::Sandbox)])),
+                        "{tool:?} {access:?} with only {present:?} found"
+                    );
+                }
+            }
+            for tool in [
+                Tool::Read,
+                Tool::Grep,
+                Tool::Glob,
+                Tool::Write,
+                Tool::Edit,
+                Tool::NotebookEdit,
+            ] {
+                let access = tool.accesses()[0];
+                assert!(
+                    matches!(
+                        coverage.verdict(tool, access),
+                        Some(Verdict::Covered { .. })
+                    ),
+                    "{tool:?}"
+                );
+            }
         }
     }
 }
