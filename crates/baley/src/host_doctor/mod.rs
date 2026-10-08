@@ -23,6 +23,7 @@
 //! belongs: an artifact whose placement is unknown is reported as not
 //! installed, and that alone never raises the exit status.
 
+pub mod guard_records;
 pub mod placed;
 pub mod prerequisites;
 pub mod protection;
@@ -302,6 +303,8 @@ pub struct Findings {
     pub server: server_context::Judged,
     /// The stored epoch against this binary's, and the folders.
     pub store: store_health::Judged,
+    /// Whether the guard's per-user records were behind at the start.
+    pub guard_records: guard_records::Judged,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -330,6 +333,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 prerequisites: prerequisites::judge(&observation.prerequisites),
                 server: server_context::judge(&observation.server),
                 store: store_health::judge(&observation.health, &observation.folders),
+                guard_records: guard_records::judge(&observation.health),
             };
         }
     };
@@ -442,6 +446,7 @@ pub fn judge(observation: &Observation) -> Findings {
         prerequisites,
         server: server_context::judge(&observation.server),
         store: store_health::judge(&observation.health, &observation.folders),
+        guard_records: guard_records::judge(&observation.health),
         documents,
     }
 }
@@ -513,6 +518,93 @@ pub(crate) mod fixtures {
             log_bytes: 0,
             projects: vec![],
         }
+    }
+
+    /// The raw view state of a project: the live view set against the
+    /// binary's, and each view's live version against its binary version.
+    pub(crate) fn raw_views(
+        live_set: Option<u32>,
+        binary_set: u32,
+        views: &[(Option<u32>, u32)],
+    ) -> baley_store::RawViewHealth {
+        baley_store::RawViewHealth {
+            views: views
+                .iter()
+                .enumerate()
+                .map(|(index, (live, binary))| baley_store::ViewHealth {
+                    view: format!("view{index}"),
+                    live_version: *live,
+                    binary_version: *binary,
+                })
+                .collect(),
+            view_set: (live_set, binary_set),
+            building: None,
+        }
+    }
+
+    /// A project whose chain verified, with `head` as its last sequence.
+    pub(crate) fn project_health(
+        id: &str,
+        raw_views: Result<baley_store::RawViewHealth, baley_store::StoreError>,
+        head: Option<u64>,
+    ) -> baley_store::ProjectHealth {
+        use baley_store::{
+            AnchorCheck, AnchorVerdict, ChainReport, ClaimCounts, Hash, Head,
+            StoredAnchorComparison, UnanchoredAge, VerifyReport, ViewsReport,
+        };
+        baley_store::ProjectHealth {
+            project: ProjectId(id.into()),
+            check: AnchorCheck::LocalOnly,
+            verify: Ok(VerifyReport {
+                chain: ChainReport {
+                    head: head.map(|seq| Head {
+                        seq,
+                        hash: Hash([5; 32]),
+                    }),
+                    first_break: None,
+                    anchor: AnchorVerdict::NoAnchor,
+                    unanchored: None,
+                    acknowledged_restores: vec![],
+                    age_unanchored_since: None,
+                },
+                payloads: vec![],
+                bodies_checked: 0,
+                tombstones_checked: 0,
+                stored_anchor: None,
+                stored_anchor_comparison: StoredAnchorComparison::NotCompared,
+            }),
+            remote_absent_local_row: None,
+            unanchored: UnanchoredAge::None,
+            raw_views,
+            views_check: Ok(ViewsReport {
+                checked_seq: head.unwrap_or(0),
+                differing: vec![],
+            }),
+            claims: Ok(ClaimCounts {
+                active: 0,
+                interrupted: 0,
+                awaiting_owner: 0,
+            }),
+        }
+    }
+
+    /// The clean health holding exactly these projects.
+    pub(crate) fn health_with(projects: Vec<baley_store::ProjectHealth>) -> Health {
+        Health {
+            projects,
+            ..clean_health()
+        }
+    }
+
+    /// A health whose `user` project has views behind this binary's, or at
+    /// them.
+    pub(crate) fn user_health(behind: bool) -> Health {
+        let set = if behind { 6 } else { 7 };
+        health_with(vec![project_health(
+            baley_core::catalog::USER_PROJECT,
+            Ok(raw_views(Some(set), 7, &[(Some(1), 1), (Some(3), 3)])),
+            Some(4),
+        )])
     }
 
     /// A Linux search that finds both sandbox programs.

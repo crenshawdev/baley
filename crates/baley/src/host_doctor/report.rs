@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use super::guard_records::Judged as GuardRecords;
 use super::prerequisites::{Judged as Prerequisites, Kind};
 use super::protection::{Judged, NotJudged};
 use super::store_health::{Compatibility, Judged as Store};
@@ -138,6 +139,7 @@ impl Report {
         }
         server_lines(&findings.server, &mut lines);
         gap |= store_lines(&findings.store, &mut lines);
+        gap |= guard_record_lines(&findings.guard_records, &mut lines);
         Report {
             lines,
             code: u8::from(gap),
@@ -211,6 +213,23 @@ fn store_lines(judged: &Store, lines: &mut Vec<String>) -> bool {
         format!("config folder: {}", judged.config.display())
     });
     newer
+}
+
+/// The line on the guard's per-user records. Returns whether they were
+/// behind this binary when the doctor started, which needs a rebuild.
+fn guard_record_lines(judged: &GuardRecords, lines: &mut Vec<String>) -> bool {
+    lines.push(match judged {
+        GuardRecords::NoUserProject => {
+            "guard records: there are no per-user guard records yet".to_owned()
+        }
+        GuardRecords::Current => {
+            "guard records: the views of the user project are current for this binary".to_owned()
+        }
+        GuardRecords::Behind => "guard records: the views of the user project were behind this binary's when the doctor started, so the guard answers needs-rebuild and leaves its decisions unrecorded until `baley rebuild user` runs; this doctor's own view check may already have brought them current".to_owned(),
+        GuardRecords::Newer => "guard records: a newer Baley built the views of the user project, which the lines above report, so a rebuild does not apply".to_owned(),
+        GuardRecords::NotJudged => "guard records: not judged because the views or the chain of the user project could not be read, which the lines above report".to_owned(),
+    });
+    *judged == GuardRecords::Behind
 }
 
 /// The sandbox prerequisite lines for the platform. Returns whether the
@@ -376,10 +395,11 @@ mod tests {
 
     use super::super::fixtures::*;
     use super::super::placed::{Fault, FileState};
-    use super::super::{MapFault, Observation, all_unknown, judge};
+    use super::super::{MapFault, Observation, PlacedRead, all_unknown, judge};
     use super::*;
     use crate::host_artifacts::compose::compose;
     use crate::host_artifacts::executable::{MissingPrerequisite, PathFault};
+    use crate::host_artifacts::stubs;
     use crate::host_artifacts::{hook, security};
 
     fn unknown_observation() -> Observation {
@@ -1077,5 +1097,151 @@ mod tests {
             );
             assert_eq!(report.code, 0, "{integrity:?}: {:?}", report.lines);
         }
+    }
+
+    #[test]
+    fn guard_records_behind_at_doctors_start_without_the_rebuild_step_are_caught() {
+        use baley_core::catalog::USER_PROJECT;
+
+        let behind_set = with_health(user_health(true));
+        let current = with_health(user_health(false));
+        assert!(
+            names(
+                &behind_set,
+                &[
+                    "user",
+                    "behind this binary's",
+                    "when the doctor started",
+                    "baley rebuild user"
+                ]
+            ),
+            "{:?}",
+            behind_set.lines
+        );
+        assert_eq!(behind_set.code, 1, "{:?}", behind_set.lines);
+        assert!(
+            !current
+                .lines
+                .iter()
+                .any(|line| line.contains("baley rebuild user")),
+            "{:?}",
+            current.lines
+        );
+        assert_eq!(current.code, 0, "{:?}", current.lines);
+
+        let one_view_behind = health_with(vec![project_health(
+            USER_PROJECT,
+            Ok(raw_views(Some(7), 7, &[(Some(1), 1), (Some(2), 3)])),
+            Some(4),
+        )]);
+        let report = with_health(one_view_behind);
+        assert!(
+            names(
+                &report,
+                &["user", "behind this binary's", "baley rebuild user"]
+            ),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+    }
+
+    /// A host with nothing to find, health aside: every placement unknown,
+    /// both programs found on Linux and no server call.
+    fn quiet() -> Observation {
+        let mut observation = unknown_observation();
+        observation.health = user_health(false);
+        observation
+    }
+
+    /// The `bal-help` stub's bytes with one byte changed.
+    fn changed_stub_bytes() -> Vec<u8> {
+        let mut bytes = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.identity == "bal-help")
+            .unwrap()
+            .bytes;
+        bytes[0] ^= 1;
+        bytes
+    }
+
+    /// Settings and hook in one document edited by `edit`, otherwise quiet.
+    fn one_document_of(edit: impl FnOnce(&mut serde_json::Value)) -> Observation {
+        let mut document = composed_value(&[SETTINGS]);
+        edit(&mut document);
+        let mut observation = observed(
+            map(None, None, None, Some(SETTINGS), Some(SETTINGS)),
+            vec![(
+                SETTINGS,
+                FileState::Bytes(serde_json::to_vec(&document).unwrap()),
+            )],
+        );
+        observation.health = user_health(false);
+        observation
+    }
+
+    #[test]
+    fn an_unknown_placement_raising_the_code_or_a_host_gap_left_at_zero_is_caught() {
+        use serde_json::json;
+
+        let code = |observation: &Observation| report_of(observation).code;
+        let quiet_report = report_of(&quiet());
+        assert_eq!(quiet_report.code, 0, "{:?}", quiet_report.lines);
+        let mut invalid = quiet();
+        invalid.server = server_call(Some("/w/gone"), false, "/w/other");
+        assert_eq!(code(&invalid), 0);
+
+        let matcher_without_bash = "Monitor|PowerShell|Read|Grep|Glob|Write|Edit|NotebookEdit";
+        let mut stub = observed(
+            map(None, Some(HELP), None, None, None),
+            vec![(HELP, FileState::Bytes(changed_stub_bytes()))],
+        );
+        stub.health = user_health(false);
+        let mut no_bwrap = quiet();
+        no_bwrap.prerequisites = found_on("linux", &["socat"]);
+        let mut freebsd = quiet();
+        freebsd.prerequisites = found_on("freebsd", &[]);
+        let mut newer = quiet();
+        newer.health.epoch = baley_store_sqlite::EPOCH + 1;
+        let mut behind = quiet();
+        behind.health = user_health(true);
+        let singles = [
+            ("a changed stub", stub),
+            (
+                "the sandbox off",
+                one_document_of(|d| d["sandbox"]["enabled"] = json!(false)),
+            ),
+            (
+                "Bash dropped from the matcher",
+                one_document_of(|d| {
+                    d["hooks"]["PreToolUse"][0]["matcher"] = json!(matcher_without_bash)
+                }),
+            ),
+            ("bwrap not found", no_bwrap),
+            ("freebsd", freebsd),
+            ("a newer epoch", newer),
+            ("user behind", behind),
+        ];
+        for (name, observation) in &singles {
+            let report = report_of(observation);
+            assert_eq!(report.code, 1, "{name}: {:?}", report.lines);
+        }
+
+        let mut all = one_document_of(|d| {
+            d["sandbox"]["enabled"] = json!(false);
+            d["hooks"]["PreToolUse"][0]["matcher"] = json!(matcher_without_bash);
+        });
+        let mapped = all.host.as_mut().unwrap();
+        mapped.map = map(None, Some(HELP), None, Some(SETTINGS), Some(SETTINGS));
+        mapped.reads.push(PlacedRead {
+            path: HELP.into(),
+            state: FileState::Bytes(changed_stub_bytes()),
+        });
+        all.prerequisites = found_on("linux", &["socat"]);
+        all.health = user_health(true);
+        all.health.epoch = baley_store_sqlite::EPOCH + 1;
+        let report = report_of(&all);
+        assert_eq!(report.code, 1, "{:?}", report.lines);
     }
 }
