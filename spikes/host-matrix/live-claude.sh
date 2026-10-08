@@ -161,3 +161,71 @@ grep -q '^checkout-status: DIRTY' "$OUT/pins.txt" \
 XDG_DATA_HOME="$DATA"
 XDG_CONFIG_HOME="$CONF"
 export XDG_DATA_HOME XDG_CONFIG_HOME
+
+# The disposable repositories. Each carries its own identity and no signing, so the commits the agent
+# is allowed to make depend on neither a global identity nor the owner's signing agent. Nothing here
+# touches the global git config or this repository's.
+mkrepo() {
+  git init -q -b main "$1" || exit 1
+  git -C "$1" config user.name "Baley live run"
+  git -C "$1" config user.email "live-run@example.invalid"
+  git -C "$1" config commit.gpgsign false
+}
+project_id() {
+  sed -n 's/^id = "\(.*\)"$/\1/p' "$1/baley.toml"
+}
+# Ties a repository to a ledger project, keeps the command's output and exit status for the
+# owner-init row, then commits the setting the guard reads: a commit on main is refused.
+init_project() {
+  NAME=$1
+  ( cd "$PROJ/$NAME" && "$BIN" init ) > "$OUT/init-$NAME.txt" 2>&1
+  STATUS=$?
+  echo "$STATUS" > "$OUT/init-$NAME.status"
+  if [ "$STATUS" -ne 0 ]; then
+    echo "baley init failed in $PROJ/$NAME (exit $STATUS):" >&2
+    cat "$OUT/init-$NAME.txt" >&2
+    exit 1
+  fi
+  printf '\n[git]\non_protected = "refuse"\n' >> "$PROJ/$NAME/baley.toml"
+  git -C "$PROJ/$NAME" add baley.toml
+  git -C "$PROJ/$NAME" commit -q -m "refuse commits on a protected branch"
+}
+
+git init -q --bare -b main "$REM/one.git" || exit 1
+git init -q --bare -b main "$REM/fork.git" || exit 1
+
+# Project one: the start folder of the user-scope session is its tracked sub folder, so the project and
+# the working directory differ. fixtures/large.txt is plain ASCII of 33,000 bytes, a capture whose
+# document read arrives in parts, the first a full 24,576 bytes.
+mkrepo "$PROJ/one"
+mkdir -p "$PROJ/one/sub" "$PROJ/one/fixtures"
+echo "a tracked file in a sub folder" > "$PROJ/one/sub/note.txt"
+echo "project one" > "$PROJ/one/README.md"
+awk 'BEGIN { for (i = 1; i <= 600; i++) printf "line %04d: the quick brown fox jumps over the lazy dog\n", i }' > "$PROJ/one/fixtures/large.txt"
+git -C "$PROJ/one" add -A
+git -C "$PROJ/one" commit -q -m "initial"
+git -C "$PROJ/one" remote add origin "$REM/one.git"
+init_project one
+
+# Project two is the /cd target: initialised the same way, with no remote.
+mkrepo "$PROJ/two"
+echo "project two" > "$PROJ/two/README.md"
+git -C "$PROJ/two" add -A
+git -C "$PROJ/two" commit -q -m "initial"
+init_project two
+
+# The fork is a clone of project one whose origin is another remote and which is not initialised
+# again, so it shares project one's id under a different remote.
+git clone -q "$PROJ/one" "$PROJ/fork" || exit 1
+git -C "$PROJ/fork" config user.name "Baley live run"
+git -C "$PROJ/fork" config user.email "live-run@example.invalid"
+git -C "$PROJ/fork" config commit.gpgsign false
+git -C "$PROJ/fork" remote set-url origin "$REM/fork.git"
+
+ID_ONE=$(project_id "$PROJ/one")
+ID_TWO=$(project_id "$PROJ/two")
+{
+  echo "project-one-id: $ID_ONE"
+  echo "project-two-id: $ID_TWO"
+  echo "project-fork-id: $(project_id "$PROJ/fork")"
+} >> "$OUT/pins.txt"
