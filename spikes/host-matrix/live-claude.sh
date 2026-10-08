@@ -526,7 +526,7 @@ EOF
   row ses.a.smoke-capture "Session A smoke: capture one note through baley_apply (the third call of the tools check)" "A receipt with a capture id"
   row ses.a.smoke-commit "Session A smoke: git commit --allow-empty -m smoke on main in project one" "Denied by the guard (design 0010 GRD-R5), git log unchanged"
   row ses.a.smoke-ledger "Session A smoke: sqlite3 -readonly on the disposable baley.db" "The capture and the guard answer are both in the disposable ledger and nowhere else"
-  row ses.b.login "Session B: log in once inside the isolated configuration" "Claude Code starts with CLAUDE_CONFIG_DIR set" observed
+  row ses.b.login "Session B: starts after the owner's login into the isolated configuration" "Session B starts with no login screen, after the owner's login in Part 0; claude-config holds a credentials file (presence only)"
   row ses.b.registered "Session B: claude mcp add-json --scope user baley, then /mcp" "The baley server is listed from the user scope" observed
 
   section "Barriers: home" "One row per tool, folder and access for Baley's home, $HOMEF."
@@ -707,8 +707,9 @@ TEXT
   cat <<TEXT
 In resume-id, replace SESSION_ID with the native id of the seed conversation started in project one (live-claude.md Part 9 says where to read it).
 
-One-time registration for session B, run before it starts (the isolated configuration needs its own
-login on the first start):
+One-time registration for session B, run before it starts. The isolated configuration needs its own
+login first, which is your step (live-claude.md Part 0 step 10). A coding agent driving the run stops
+and asks you for it. After the login, run:
     cd $PROJ/one/sub && env -u BALEY_HOME DISABLE_AUTOUPDATER=1 XDG_DATA_HOME=$DATA XDG_CONFIG_HOME=$CONF CLAUDE_CONFIG_DIR=$CC claude mcp add-json --scope user baley "\$(cat $OUT/user-scope-entry.json)"
 
 Only if session B does not list the bal-help skill from the isolated configuration, place the stub
