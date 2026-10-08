@@ -24,10 +24,12 @@ if [ -n "${BALEY_HOME+set}" ]; then
   exit 1
 fi
 
-# Git's own configuration variables would send the fixture config writes below to the owner's files
-# instead of the disposable repositories, so none of them reaches this script's git or baley commands.
-for NAME in $(env | sed -n 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$NAME"; done
-unset GIT_CONFIG
+# An inherited GIT_ variable can pick another repository, work tree, index or object store, or point the
+# config writes at the owner's files, so git would act outside the disposable repositories. None of them
+# reaches this script's git or baley commands. Only GIT_EXEC_PATH stays, because it says where git lives.
+for NAME in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  [ "$NAME" = GIT_EXEC_PATH ] || unset "$NAME"
+done
 
 # The paths go into JSON and shell commands unquoted, so only plain path characters are allowed.
 case "${HOME:-}" in

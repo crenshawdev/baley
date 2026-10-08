@@ -23,10 +23,12 @@ if [ -n "${BALEY_HOME+set}" ]; then
   exit 1
 fi
 
-# Git's own configuration variables would send the commit below to the owner's files instead of the
-# disposable repository, so none of them reaches this script's git or baley commands.
-for NAME in $(env | sed -n 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$NAME"; done
-unset GIT_CONFIG
+# An inherited GIT_ variable can pick another repository, work tree, index or object store, so the commit
+# below could land in the owner's files instead of the disposable repository. None of them reaches this
+# script's git or baley commands. Only GIT_EXEC_PATH stays, because it says where git lives.
+for NAME in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  [ "$NAME" = GIT_EXEC_PATH ] || unset "$NAME"
+done
 
 ROOT="$HOME/.local/share/baley-live"
 DATA="$ROOT/data"
