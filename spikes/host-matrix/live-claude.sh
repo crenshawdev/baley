@@ -58,6 +58,32 @@ REM="$ROOT/remotes"
 OUT="$ROOT/results"
 REN="$OUT/rendered"
 
+# Clearing the root deletes everything under it, so a claude command that lives there would be deleted
+# with it. Both ways the owner's claude command is found are resolved first, and the script stops before it
+# clears or creates anything when either one lies under the root. It never relinks the launcher.
+under_root() {
+  case "$1" in
+    "$ROOT"|"$ROOT"/*|"$ROOT_RESOLVED"|"$ROOT_RESOLVED"/*) return 0 ;;
+  esac
+  return 1
+}
+ROOT_RESOLVED="$(readlink -f "$HOME" 2>/dev/null || echo "$HOME")/.local/share/baley-live"
+CLAUDE_FOUND=$(command -v claude 2>/dev/null || true)
+CLAUDE_RESOLVED=""
+case "$CLAUDE_FOUND" in /*) CLAUDE_RESOLVED=$(readlink -f "$CLAUDE_FOUND" 2>/dev/null || true) ;; esac
+LAUNCHER_RESOLVED=""
+if [ -e "$HOME/.local/bin/claude" ] || [ -L "$HOME/.local/bin/claude" ]; then
+  LAUNCHER_RESOLVED=$(readlink -f "$HOME/.local/bin/claude" 2>/dev/null || true)
+fi
+if under_root "$CLAUDE_RESOLVED" || under_root "$LAUNCHER_RESOLVED"; then
+  echo "your claude command resolves inside the disposable root, so clearing it would delete the binary your claude runs:" >&2
+  echo "  command -v claude: ${CLAUDE_FOUND:-none}, resolved to ${CLAUDE_RESOLVED:-nothing}" >&2
+  echo "  $HOME/.local/bin/claude resolved to ${LAUNCHER_RESOLVED:-nothing}" >&2
+  echo "  root: $ROOT" >&2
+  echo "Point your claude command at a file outside the root first. This script repairs nothing and relinks nothing." >&2
+  exit 1
+fi
+
 # The only deletion in this script: the tree has to be exactly the root named above, with no
 # symbolic link from HOME down to it, so the delete cannot land somewhere else, and owned by this user.
 fresh() {
@@ -635,7 +661,7 @@ write_sheet > "$SHEET"
 launch() {
   MCP=""
   [ -n "$4" ] && MCP=" --mcp-config $OUT/$4 --strict-mcp-config"
-  printf '  %s\n    cd %s && env -u BALEY_HOME XDG_DATA_HOME=%s XDG_CONFIG_HOME=%s %sclaude --settings %s%s%s --debug-file %s/debug-%s.log\n\n' \
+  printf '  %s\n    cd %s && env -u BALEY_HOME DISABLE_AUTOUPDATER=1 XDG_DATA_HOME=%s XDG_CONFIG_HOME=%s %sclaude --settings %s%s%s --debug-file %s/debug-%s.log\n\n' \
     "$1" "$2" "$DATA" "$CONF" "$3" "$OUT/settings.json" "$MCP" "$5" "$OUT" "$1"
 }
 print_launches() {
@@ -662,7 +688,7 @@ In resume-id, replace SESSION_ID with the native id of the seed conversation sta
 
 One-time registration for session B, run before it starts (the isolated configuration needs its own
 login on the first start):
-    cd $PROJ/one/sub && env -u BALEY_HOME XDG_DATA_HOME=$DATA XDG_CONFIG_HOME=$CONF CLAUDE_CONFIG_DIR=$CC claude mcp add-json --scope user baley "\$(cat $OUT/user-scope-entry.json)"
+    cd $PROJ/one/sub && env -u BALEY_HOME DISABLE_AUTOUPDATER=1 XDG_DATA_HOME=$DATA XDG_CONFIG_HOME=$CONF CLAUDE_CONFIG_DIR=$CC claude mcp add-json --scope user baley "\$(cat $OUT/user-scope-entry.json)"
 
 Only if session B does not list the bal-help skill from the isolated configuration, place the stub
 uncommitted in project one instead:
