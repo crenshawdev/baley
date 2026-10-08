@@ -69,8 +69,9 @@ WORK=$(mktemp -d "$OUT/.restore.XXXXXX") || { echo "could not create a scratch f
 trap 'rm -rf "$WORK"' EXIT
 
 # The copy and the restore need Baley stopped (design 0001, "Copies of the store"). The process list is
-# written to a file first, so this script's own command line is never part of what is searched.
-ps -eo pid=,args= > "$WORK/processes" 2>/dev/null
+# written to a file first, so this script's own command line is never part of what is searched. -ww keeps
+# ps from cutting each line to an exported COLUMNS, which would hide the path from the search.
+ps -ww -eo pid=,args= > "$WORK/processes" 2>/dev/null
 if grep -F -- "$BIN" "$WORK/processes" > "$WORK/running"; then
   echo "a running process names $BIN, so the ledger is not stopped:" >&2
   cat "$WORK/running" >&2
