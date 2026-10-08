@@ -458,7 +458,7 @@ EOF
   barrier_rows config "$CONFF" "$CONF"
 
   section "Protected files" "Writes to files the settings protect. The guard's own list holds only the two baley.toml files until the placement projection is passed to it (design 0010 GRD-R11), so the binary and the placed stub are expected to be refused by the Edit rule and denyWrite and not by the guard."
-  row prot.baleytoml.write-tool "Write tool: replace $PROJ/one/baley.toml with one comment line" "Denied by the guard (design 0010 GRD-R11), and also covered by the Edit rule and denyWrite"
+  row prot.baleytoml.write-tool "Write tool: replace $PROJ/one/baley.toml with one comment line" "Refused. The Edit rule covers the file and runs before the hook, so the guard (design 0010 GRD-R11) is not reached on Claude Code 2.1.294. Write which refused it"
   row prot.baleytoml.bash-write "Bash write: echo '# probe' >> $PROJ/one/baley.toml" "Sandbox denyWrite refuses it; the guard does not judge Bash writes"
   row prot.binary.write-tool "Write tool: replace $BIN with one line" "The Edit rule refuses it; no guard protection yet, recorded as such"
   row prot.binary.bash-write "Bash write: echo x >> $BIN" "Sandbox denyWrite refuses it"
@@ -477,9 +477,9 @@ EOF
   row ctl.hook.read "Hook fired for Read" "At least one line"
   row ctl.hook.grep "Hook fired for Grep" "At least one line"
   row ctl.hook.glob "Hook fired for Glob" "At least one line"
-  row ctl.hook.write "Hook fired for Write" "At least one line"
-  row ctl.hook.edit "Hook fired for Edit" "At least one line"
-  row ctl.hook.notebookedit "Hook fired for NotebookEdit" "At least one line"
+  row ctl.hook.write "Hook fired for Write (the Part 5 request on a path no deny rule covers)" "At least one line"
+  row ctl.hook.edit "Hook fired for Edit (the Part 5 request on a path no deny rule covers)" "At least one line"
+  row ctl.hook.notebookedit "Hook fired for NotebookEdit (the Part 5 request on a path no deny rule covers)" "At least one line"
   row ctl.grep-parent-guard "The Grep over a parent of the home: the ledger holds a deny for tool Grep" "The guard denied it (design 0010 GRD-R13)"
   row ctl.glob-parent-guard "The Glob over a parent of the home: the ledger holds a deny for tool Glob" "The guard denied it (design 0010 GRD-R13)"
   row ctl.commit-main-bash "Bash in project one on main: git commit --allow-empty -m probe-bash" "Denied by the guard (GRD-R5, on_protected refuse), git log --oneline unchanged"
@@ -489,7 +489,7 @@ EOF
   row ctl.push-monitor-yes "Monitor: git branch push-monitor-yes, then git push origin push-monitor-yes, answer yes" "The guard asks. After yes, git --git-dir=$REM/one.git branch --list shows push-monitor-yes" "$MON_MARK"
   row ctl.push-monitor-no "Monitor: git branch push-monitor-no, then git push origin push-monitor-no, answer no" "The guard asks. After no, the remote has no push-monitor-no" "$MON_MARK"
   row ctl.powershell-ask "PowerShell: Get-Date" "The guard asks on every PowerShell call (design 0010 GRD-R3), recorded in the ledger" "$PS_MARK"
-  row ctl.write-baleytoml-denied "The Write to $PROJ/one/baley.toml: the ledger holds a deny for tool Write" "The guard denied it (GRD-R11)"
+  row ctl.write-baleytoml-denied "The Write to $PROJ/one/baley.toml: the file and the refusal message" "Refused with the file unchanged. A guard deny (GRD-R11) shows only if the hook ran, which a covering Edit rule prevents"
   row ctl.declined-syntax "Bash on main: git commit --allow-empty -m \"\$(date)\" (the scanner declines a substitution)" "Record what happened and the commit the binary was built from, with no claim about what the shell did (design 0010 GRD-R3)" observed
   row ctl.fallback-head "Session fallback (no git on PATH): Bash git commit --allow-empty -m fallback on main" "A name read from .git/HEAD never decides refuse or ask (GRD-R6, GRD-R14). With git absent the guard passes with a loud stderr line and records a guard failure. Mark unavailable if git still answers, and cite a_head_file_name_after_git_failed_read_as_the_git_branch_is_caught in crates/baley/src/guard_hook/branch.rs"
   row ctl.latency "Every guard call: the highest elapsed_ms in the timing summary of live-claude-reads.sh" "Below 10,000 ms (design 0010 GRD-R14)"
@@ -621,7 +621,7 @@ TEXT
   launch absent-sandbox "$PROJ/one" "PATH=$ROOT/bin-nosandbox " mcp-explicit.json ""
   launch fallback "$PROJ/one" "PATH=$ROOT/bin-nogit " mcp-explicit.json ""
   cat <<TEXT
-In resume-id, replace SESSION_ID with the native id session A recorded (live-claude.md says where to read it).
+In resume-id, replace SESSION_ID with the native id of the seed conversation started in project one (live-claude.md Part 9 says where to read it).
 
 One-time registration for session B, run before it starts (the isolated configuration needs its own
 login on the first start):
