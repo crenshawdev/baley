@@ -53,8 +53,11 @@ pub enum Conflict {
         /// The entry as written.
         entry: String,
     },
-    /// A `sandbox.excludedCommands` entry matches the executable, so Baley's
-    /// own commands would run outside the sandbox (D-19).
+    /// A `sandbox.excludedCommands` entry, whatever it names. The host runs
+    /// a listed command outside the sandbox even with
+    /// `allowUnsandboxedCommands` false, so any entry, `sh`, `docker` or `*`,
+    /// lets a command reach Baley's folders. An entry naming the executable
+    /// is one of these (D-19). The entry stays in the document.
     Excluded(String),
 }
 
@@ -221,9 +224,7 @@ fn scan(
     }
 
     for entry in strings(document, "/sandbox/excludedCommands") {
-        if names_executable(entry, executable) {
-            conflicts.push(Conflict::Excluded(entry.to_owned()));
-        }
+        conflicts.push(Conflict::Excluded(entry.to_owned()));
     }
 }
 
@@ -235,32 +236,6 @@ fn runs_guard(item: &Value) -> bool {
         .flatten()
         .filter_map(|handler| handler.get("command").and_then(Value::as_str))
         .any(|command| command.split_whitespace().last() == Some("guard"))
-}
-
-/// Whether an exclusion's program matches the executable by its path or its
-/// file name. Entries use Bash rule syntax, where `*` matches any text and a
-/// trailing `:*` is the older prefix form.
-fn names_executable(entry: &str, executable: &Executable) -> bool {
-    let entry = entry.strip_suffix(":*").unwrap_or(entry);
-    let Some(program) = entry.split_whitespace().next() else {
-        return false;
-    };
-    let program = program.trim_matches(['\'', '"']);
-    let path = executable.as_str();
-    let name = path.rsplit('/').next().unwrap_or(path);
-    wildcard(program, path) || wildcard(program, name)
-}
-
-fn wildcard(pattern: &str, text: &str) -> bool {
-    match pattern.split_once('*') {
-        None => pattern == text,
-        Some((head, rest)) => text.strip_prefix(head).is_some_and(|tail| {
-            tail.char_indices()
-                .map(|(index, _)| index)
-                .chain([tail.len()])
-                .any(|index| wildcard(rest, &tail[index..]))
-        }),
-    }
 }
 
 #[cfg(test)]
@@ -475,6 +450,42 @@ mod tests {
             assert!(!result.is_complete(), "{existing}");
             assert_secure(&result.document);
         }
+    }
+
+    #[test]
+    fn an_excluded_command_other_than_the_executable_kept_as_success_is_caught() {
+        let existing = json!({"sandbox": {"excludedCommands": ["sh", "bash *"]}});
+        let result = composed(&existing, &settings());
+        assert_eq!(
+            result.conflicts,
+            [
+                Conflict::Excluded("sh".into()),
+                Conflict::Excluded("bash *".into()),
+            ]
+        );
+        assert!(!result.is_complete());
+        assert_eq!(
+            result.document["sandbox"]["excludedCommands"],
+            json!(["sh", "bash *"])
+        );
+
+        let existing = json!({"sandbox": {"excludedCommands": ["sh"]}});
+        let result = composed(&existing, &[hook::render(&executable())]);
+        assert_eq!(result.conflicts, [Conflict::Excluded("sh".into())]);
+        assert!(!result.is_complete());
+        assert_eq!(
+            result.document["sandbox"]["excludedCommands"],
+            json!(["sh"])
+        );
+    }
+
+    #[test]
+    fn a_many_star_exclusion_left_unreported_or_stalling_composition_is_caught() {
+        let entry = "********************Z";
+        let existing = json!({"sandbox": {"excludedCommands": [entry]}});
+        let result = composed(&existing, &settings());
+        assert_eq!(result.conflicts, [Conflict::Excluded(entry.into())]);
+        assert!(!result.is_complete());
     }
 
     #[test]

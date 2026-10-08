@@ -32,6 +32,13 @@
 //!   keeps a `denyWrite` entry inside an otherwise writable path. A narrower
 //!   `allowRead` entry does re-open a `denyRead` folder.
 //!
+//! Host facts the judge depends on, read on 2026-10-07 from Claude Code
+//! 2.1.293's bundle:
+//! - A command listed in `sandbox.excludedCommands` runs outside the sandbox
+//!   even when `allowUnsandboxedCommands` is false, and the host's own
+//!   settings check names any non-empty list as exempting commands. So
+//!   every entry, whatever it names, voids each verdict the sandbox carries.
+//!
 //! One gap runs the other way and is written down here: an `allowRead` or
 //! `allowWrite` entry is judged only when it is absolute. A `~/` entry needs
 //! the owner's home folder and a relative one the settings file's place, and
@@ -142,6 +149,11 @@ pub enum Cause {
     /// `failIfUnavailable`, `allowUnsandboxedCommands` or
     /// `filesystem.disabled`.
     SandboxSetting(&'static str),
+    /// A `sandbox.excludedCommands` entry, as written. The host runs a
+    /// listed command outside the sandbox even with
+    /// `allowUnsandboxedCommands` false, and that program can reach any
+    /// path, so no entry is safe by what it names.
+    Excluded(String),
     /// A sandbox deny list (`denyRead` or `denyWrite`) does not name the
     /// path.
     NotDenied {
@@ -359,6 +371,9 @@ fn sandbox_settings(inputs: &Inputs<'_>) -> Vec<Cause> {
     }
     if inputs.settings.pointer("/sandbox/filesystem/disabled") == Some(&Value::Bool(true)) {
         causes.push(Cause::SandboxSetting("filesystem.disabled"));
+    }
+    for entry in strings(inputs.settings, "/sandbox/excludedCommands") {
+        causes.push(Cause::Excluded(entry.to_owned()));
     }
     causes
 }
@@ -771,6 +786,56 @@ mod tests {
             gap(&coverage, Tool::Bash, Access::Read),
             [Cause::SandboxSetting("filesystem.disabled")]
         );
+    }
+
+    #[test]
+    fn an_excluded_command_read_as_sandbox_coverage_is_caught() {
+        let excluding = |entries: Value| {
+            let mut settings = ours();
+            settings["sandbox"]["excludedCommands"] = entries;
+            judged(&settings, &guard_hook(), &[])
+        };
+        let cases = [
+            (json!(["*"]), vec![Cause::Excluded("*".into())]),
+            (json!(["sh"]), vec![Cause::Excluded("sh".into())]),
+            (
+                json!(["sh", "docker"]),
+                vec![
+                    Cause::Excluded("sh".into()),
+                    Cause::Excluded("docker".into()),
+                ],
+            ),
+        ];
+        for (entries, expected) in cases {
+            let coverage = excluding(entries.clone());
+            for tool in SHELL_TOOLS {
+                for access in [Access::Read, Access::Write] {
+                    assert_eq!(
+                        gap(&coverage, tool, access),
+                        expected,
+                        "{entries} {tool:?} {access:?}"
+                    );
+                }
+            }
+            assert_eq!(coverage.files.len(), 2);
+            for file in &coverage.files {
+                assert_eq!(file.write, Verdict::Gap(expected.clone()), "{entries}");
+            }
+            for tool in FILE_TOOLS {
+                let access = file_tool_access(tool);
+                assert!(covered(&coverage, tool, access), "{entries} {tool:?}");
+            }
+        }
+        let coverage = excluding(json!([]));
+        for judged in &coverage.tools {
+            assert!(
+                matches!(judged.verdict, Verdict::Covered { .. }),
+                "{judged:?}"
+            );
+        }
+        for file in &coverage.files {
+            assert!(matches!(file.write, Verdict::Covered { .. }), "{file:?}");
+        }
     }
 
     #[test]
