@@ -154,6 +154,7 @@ The architecture is in [0002: System design](../0002-system-design.md); the stor
 - **Seam 2: the decision core.** Hardin and the domain rules are plain synchronous code, tested directly with plain values. This is the highest seam where every process decision can be checked without a host.
 - **Seam 3: the MCP operation boundary.** A typed request in, a typed answer or refusal out, tested inside the process with no host attached.
 - **Live behavior** on Claude Code is checked by an acceptance run before release, not by tests.
+- **Tests Baley derives for managed projects.** They follow the rule above with one exception: a truth whose outcome depends on several of the project's own units working together is proven by an integration check. It runs those units together for real and mocks every outside boundary (database, network, third-party API, clock, filesystem, host program) behind an interface the project owns, so it still gives the same result on any machine. Real persistence, real services, GUI interaction and performance are left to the owner's observation ([ADR 0042](../../adr/0042-mocked-boundary-integration-checks.md)).
 - **Prior art.** The SQLite store adapter's tests and the conformance harness in the store crates.
 
 ## Out of Scope

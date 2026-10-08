@@ -5,7 +5,7 @@
 | Status | Accepted |
 | Date | 2026-10-08 |
 | Deciders | John Crenshaw |
-| Design document | [0005: Context, plans and acceptance](../design/0005-context-plans-and-acceptance.md), [0007: Verification](../design/0007-verification.md), [0002: System design](../design/0002-system-design.md) |
+| Design document | [0005: Context, plans and acceptance](../design/0005-context-plans-and-acceptance.md), [0006: Execution](../design/0006-execution.md), [0007: Verification](../design/0007-verification.md), [0002: System design](../design/0002-system-design.md) |
 | Supersedes | |
 | Superseded by | |
 

@@ -336,7 +336,7 @@ The one contract between Baley and every worker, including the outside reviews t
 - **Resources.** Memory use and read cost are defects a user sees: no loading the whole store, bounded reads, streaming.
 - **Concurrency.** One user, one machine, one server process per session; several processes write the one per-user ledger through the store, with no single writer, and optimistic concurrency keeps them from overwriting each other (SYS-R6). No parallel or worktree execution.
 - **Observability.** Every decision records its inputs, including the setting that decided a route.
-- **Testing.** Baley's own tests and the tests Baley derives for the projects it manages follow the same rules: a test checks one behavior of one unit with plain values, depends only on the language toolchain and its test libraries, starts no program, and gives the same result on any machine. There are no end-to-end tests; live behavior is checked by an acceptance run on Claude Code before release.
+- **Testing.** Baley's own tests and the tests Baley derives for the projects it manages depend only on the language toolchain and its test libraries, start no program, and give the same result on any machine. Baley's own tests check one behavior of one unit with plain values. A managed project's check is a unit check, or an integration check when its truth depends on two or more of the project's own units working together: those units run together for real and every outside boundary is mocked behind an interface the project owns ([ADR 0042](../adr/0042-mocked-boundary-integration-checks.md)). There are no end-to-end tests; live behavior is checked by an acceptance run on Claude Code before release.
 
 ## 11. Decisions
 
@@ -354,6 +354,7 @@ Decision records this design produces.
 - Support only hosts whose sandboxing and execution controls meet Baley's requirements (SYS-P12): [ADR 0033](../adr/0033-host-security-bar.md), superseding ADR 0008, 0018, 0020, 0027 and 0029 in part
 - One-command installation and opt-in verified updates: [ADR 0038](../adr/0038-installer-and-opt-in-updates.md)
 - Session-owned credentials, API-only outside reviews and imported model lists (SYS-R9 to SYS-R12): [ADR 0039](../adr/0039-session-owned-provider-credentials.md)
+- Mocked-boundary integration checks for assembled behavior in managed projects: [ADR 0042](../adr/0042-mocked-boundary-integration-checks.md)
 
 ## 12. Open questions
 
