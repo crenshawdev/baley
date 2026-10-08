@@ -9,7 +9,9 @@
 //!
 //! [`gather`] is the one place that touches the filesystem: it reads each
 //! placed file once and asks about the executable, and owns no rule. The
-//! readers and their judgements are in [`placed`].
+//! readers and their judgements are in [`placed`]. [`protection`] runs the
+//! coverage judge once over the settings and hook documents the map
+//! places, with the map's protected paths as the write-only list.
 //!
 //! The held delivery doctor (Build 3 T17) takes the same three steps over a
 //! placement map `baley install` supplies. Nothing here writes a file, the
@@ -18,6 +20,7 @@
 //! installed, and that alone never raises the exit status.
 
 pub mod placed;
+pub mod protection;
 pub mod report;
 
 use std::path::{Path, PathBuf};
@@ -26,6 +29,7 @@ pub use report::Report;
 
 use placed::{ExecutableGap, FileState, RegistrationJudgement, StubJudgement};
 
+use crate::folders::Folders;
 use crate::host_artifacts::executable::{Executable, MissingPrerequisite};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
 use crate::host_artifacts::stubs;
@@ -99,12 +103,20 @@ pub struct Mapped {
 pub struct Observation {
     /// What was found for the placement map, or why none could be built.
     pub host: Result<Mapped, MapFault>,
+    /// Baley's resolved folders, which the coverage judge protects.
+    pub folders: Folders,
+    /// The discovered checkout's `baley.toml`, which is write-only too.
+    pub checkout_file: Option<PathBuf>,
 }
 
 /// Gathers the observation for a placement map: reads each expected file
 /// once and asks the filesystem about the executable. Nothing is written,
 /// opened for writing or run. It owns no rule and has no unit test.
-pub fn gather(placement: Result<PlacementMap, MapFault>) -> Observation {
+pub fn gather(
+    placement: Result<PlacementMap, MapFault>,
+    folders: Folders,
+    checkout_file: Option<PathBuf>,
+) -> Observation {
     let host = placement.map(|map| {
         let executable = placed::observe_executable(Path::new(map.executable().as_str()));
         let mut reads: Vec<PlacedRead> = Vec::new();
@@ -122,7 +134,11 @@ pub fn gather(placement: Result<PlacementMap, MapFault>) -> Observation {
             reads,
         }
     });
-    Observation { host }
+    Observation {
+        host,
+        folders,
+        checkout_file,
+    }
 }
 
 /// What the judgement found out about one artifact.
@@ -237,6 +253,9 @@ pub struct Findings {
     pub executable: Option<(String, ExecutableGap)>,
     /// Each document the map places artifacts in.
     pub documents: Vec<Document>,
+    /// What the settings and hook documents configure, or why that was not
+    /// judged. None when there is no map.
+    pub coverage: Option<Result<protection::Judged, protection::NotJudged>>,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -260,6 +279,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 artifacts: Vec::new(),
                 executable: None,
                 documents: Vec::new(),
+                coverage: None,
             };
         }
     };
@@ -359,6 +379,13 @@ pub fn judge(observation: &Observation) -> Findings {
             .executable
             .clone()
             .map(|gap| (mapped.map.executable().as_str().to_owned(), gap)),
+        coverage: Some(protection::judge(
+            &mapped.map,
+            &documents,
+            &observation.folders,
+            observation.checkout_file.as_deref(),
+            &[],
+        )),
         documents,
     }
 }
@@ -372,9 +399,19 @@ pub(crate) mod fixtures {
     pub(crate) const HELP: &str = "/home/o/.claude/skills/bal-help/SKILL.md";
     pub(crate) const REGISTRATION: &str = "/home/o/.claude.json";
     pub(crate) const SETTINGS: &str = "/home/o/.claude/settings.json";
+    pub(crate) const HOOKS: &str = "/home/o/.claude/hooks.json";
+    pub(crate) const HOME: &str = "/home/o/.local/share/crenshawdev/baley";
+    pub(crate) const CONFIG: &str = "/home/o/.config/crenshawdev/baley";
 
     pub(crate) fn executable() -> Executable {
         Executable::new(EXECUTABLE).unwrap()
+    }
+
+    pub(crate) fn folders() -> Folders {
+        Folders {
+            home: HOME.into(),
+            config: CONFIG.into(),
+        }
     }
 
     /// A map with the given places and every other placement unknown.
@@ -409,6 +446,15 @@ pub(crate) mod fixtures {
         .unwrap()
     }
 
+    /// The observation of a host for which no map could be built.
+    pub(crate) fn unmapped(fault: MapFault) -> Observation {
+        Observation {
+            host: Err(fault),
+            folders: folders(),
+            checkout_file: None,
+        }
+    }
+
     /// The observation of a map whose executable is a regular file and
     /// whose files were read as given.
     pub(crate) fn observed(map: PlacementMap, reads: Vec<(&str, FileState)>) -> Observation {
@@ -424,6 +470,8 @@ pub(crate) mod fixtures {
                     })
                     .collect(),
             }),
+            folders: folders(),
+            checkout_file: None,
         }
     }
 }

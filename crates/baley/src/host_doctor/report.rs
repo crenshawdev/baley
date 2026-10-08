@@ -1,6 +1,10 @@
 //! The report: findings as owner lines and an exit code.
 
+use std::path::Path;
+
+use super::protection::{Judged, NotJudged};
 use super::{ArtifactState, Findings, MapFault};
+use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
 
 /// The heading that opens the host section.
 const HEADING: &str = "Claude Code host checks";
@@ -84,10 +88,160 @@ impl Report {
                 "executable {path} {gap_found}, and the hook and the registration run it"
             ));
         }
+        match &findings.coverage {
+            None => {}
+            Some(Err(NotJudged::Unknown(missing))) => {
+                let names: Vec<String> = missing.iter().map(ToString::to_string).collect();
+                lines.push(if names.len() == 1 {
+                    format!(
+                        "coverage: not judged because the {} placement is unknown",
+                        names[0]
+                    )
+                } else {
+                    "coverage: not judged because the settings and hook placements are unknown"
+                        .to_owned()
+                });
+            }
+            Some(Err(NotJudged::Unusable)) => lines.push(
+                "coverage: not judged because a settings or hook document above could not be used"
+                    .to_owned(),
+            ),
+            Some(Ok(judged)) => gap |= coverage_lines(judged, &mut lines),
+        }
         Report {
             lines,
             code: u8::from(gap),
         }
+    }
+}
+
+/// The coverage section: one line per tool access and per write-only file,
+/// worded as configuration of the named documents, then two lines on what
+/// the verdicts do not say. Returns whether any verdict is a gap.
+fn coverage_lines(judged: &Judged, lines: &mut Vec<String>) -> bool {
+    let (settings, hook) = (judged.settings.as_path(), judged.hook.as_path());
+    let mut gap = false;
+    lines.push(if settings == hook {
+        format!(
+            "coverage judged over the settings and hook in {}",
+            settings.display()
+        )
+    } else {
+        format!(
+            "coverage judged over the settings in {} and the hook in {}",
+            settings.display(),
+            hook.display()
+        )
+    });
+    for judged_tool in &judged.coverage.tools {
+        let tool = judged_tool.tool;
+        let rules = match tool {
+            Tool::Read | Tool::Grep | Tool::Glob => "Read",
+            _ => "Edit",
+        };
+        let access = match judged_tool.access {
+            Access::Read => "read",
+            Access::Write => "write",
+        };
+        let best_effort = if matches!(tool, Tool::Grep | Tool::Glob) {
+            " (best-effort)"
+        } else {
+            ""
+        };
+        gap |= matches!(judged_tool.verdict, Verdict::Gap(_));
+        lines.push(format!(
+            "tool {}, {access} access: {}{best_effort}",
+            tool.name(),
+            verdict_text(&judged_tool.verdict, rules, settings, hook)
+        ));
+    }
+    for file in &judged.coverage.files {
+        gap |= matches!(file.write, Verdict::Gap(_));
+        lines.push(format!(
+            "write-only file {}: write access {}",
+            file.path.display(),
+            verdict_text(&file.write, "Edit", settings, hook)
+        ));
+    }
+    let documents = if settings == hook {
+        settings.display().to_string()
+    } else {
+        format!("{} and {}", settings.display(), hook.display())
+    };
+    lines.push(format!(
+        "These verdicts describe configuration in {documents} and are not proof that Claude Code enforces it."
+    ));
+    lines.push(
+        "Other Claude Code settings files (managed, command line, local, project and user) and the sandbox.enabledPlatforms policy setting can change what applies: lists combine across files and a single value comes from the highest file.".to_owned(),
+    );
+    gap
+}
+
+/// One verdict as configuration: the mechanisms that carry it, or each gap
+/// with the setting to change.
+fn verdict_text(verdict: &Verdict, rules: &str, settings: &Path, hook: &Path) -> String {
+    match verdict {
+        Verdict::Covered { by, .. } => {
+            let by: Vec<String> = by
+                .iter()
+                .map(|mechanism| match mechanism {
+                    Mechanism::Sandbox => format!("the sandbox in {}", settings.display()),
+                    Mechanism::PermissionRules => {
+                        format!("the {rules} deny rules in {}", settings.display())
+                    }
+                    Mechanism::Hook => format!("the guard hook in {}", hook.display()),
+                })
+                .collect();
+            format!("configured as covered by {}", by.join(" and "))
+        }
+        Verdict::Gap(causes) => {
+            let causes: Vec<String> = causes
+                .iter()
+                .map(|cause| cause_text(cause, settings, hook))
+                .collect();
+            format!("configured with a gap: {}", causes.join("; "))
+        }
+    }
+}
+
+/// What one cause of a gap asks the owner to change, naming the document
+/// the coverage judge read it from.
+fn cause_text(cause: &Cause, settings: &Path, hook: &Path) -> String {
+    let (s, h) = (settings.display(), hook.display());
+    match cause {
+        Cause::Unsupported(mechanism) => format!(
+            "{} cannot run on this machine",
+            match mechanism {
+                Mechanism::Sandbox => "the sandbox",
+                Mechanism::PermissionRules => "the permission rules",
+                Mechanism::Hook => "the guard hook",
+            }
+        ),
+        Cause::SandboxSetting(key) => {
+            let secure = if *key == "allowUnsandboxedCommands" || *key == "filesystem.disabled" {
+                "false"
+            } else {
+                "true"
+            };
+            format!("set sandbox.{key} to {secure} in {s}")
+        }
+        Cause::Excluded(entry) => format!(
+            "remove \"{entry}\" from sandbox.excludedCommands in {s}, since a listed command runs outside the sandbox"
+        ),
+        Cause::NotDenied { list, path } => {
+            format!("add {path} to sandbox.filesystem.{list} in {s}")
+        }
+        Cause::Reopened { list, entry } => format!(
+            "remove {entry} from sandbox.filesystem.{list} in {s}, since it re-opens a protected path"
+        ),
+        Cause::Unjudged { list, entry } => format!(
+            "{entry} in sandbox.filesystem.{list} in {s} does not start with / and cannot be judged"
+        ),
+        Cause::NoRule(rule) => format!("add {rule} to permissions.deny in {s}"),
+        Cause::NoGuard => format!("no PreToolUse item in {h} runs the guard for it"),
+        Cause::HooksDisabled if settings == hook => format!("disableAllHooks is true in {h}"),
+        Cause::HooksDisabled => format!("disableAllHooks is true in {h} or {s}"),
+        Cause::Unrendered(report) => report.to_string(),
     }
 }
 
@@ -99,7 +253,9 @@ mod tests {
     use super::super::placed::{Fault, FileState};
     use super::super::{MapFault, Observation, all_unknown, judge};
     use super::*;
+    use crate::host_artifacts::compose::compose;
     use crate::host_artifacts::executable::{MissingPrerequisite, PathFault};
+    use crate::host_artifacts::{hook, security};
 
     fn unknown_observation() -> Observation {
         let map = all_unknown(Ok(PathBuf::from(EXECUTABLE))).unwrap();
@@ -150,14 +306,12 @@ mod tests {
 
     #[test]
     fn an_unusable_binary_path_dropped_from_the_report_is_caught() {
-        let relative = Observation {
-            host: Err(MapFault::Executable {
-                path: PathBuf::from("baley"),
-                refusal: MissingPrerequisite {
-                    fault: PathFault::Relative,
-                },
-            }),
-        };
+        let relative = unmapped(MapFault::Executable {
+            path: PathBuf::from("baley"),
+            refusal: MissingPrerequisite {
+                fault: PathFault::Relative,
+            },
+        });
         let report = report_of(&relative);
         let named: Vec<&String> = report
             .lines
@@ -169,9 +323,7 @@ mod tests {
         assert!(!report.lines.iter().any(|line| says_installed(line)));
 
         let cause = "No such file or directory (os error 2)";
-        let unreadable = Observation {
-            host: Err(MapFault::PathUnreadable(cause.into())),
-        };
+        let unreadable = unmapped(MapFault::PathUnreadable(cause.into()));
         let report = report_of(&unreadable);
         let named: Vec<&String> = report
             .lines
@@ -257,5 +409,173 @@ mod tests {
         );
         assert!(!equal.lines.iter().any(|line| line.contains("differs")));
         assert_eq!(equal.code, 0);
+    }
+    /// Baley's proposal and hook composed into one document, as a read.
+    fn composed(write_only: &[&str]) -> Vec<u8> {
+        let exe = executable();
+        let write_only: Vec<PathBuf> = write_only.iter().map(PathBuf::from).collect();
+        let proposal = security::propose(&folders(), &exe, &write_only).settings;
+        let document = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
+        serde_json::to_vec(&document).unwrap()
+    }
+
+    /// Settings and hook placed in one document, the document composed from
+    /// Baley's own values.
+    fn one_document() -> Report {
+        report_of(&observed(
+            map(None, None, None, Some(SETTINGS), Some(SETTINGS)),
+            vec![(SETTINGS, FileState::Bytes(composed(&[SETTINGS])))],
+        ))
+    }
+
+    /// The tool and write-only file verdict lines.
+    fn verdict_lines(report: &Report) -> Vec<&String> {
+        report
+            .lines
+            .iter()
+            .filter(|line| line.starts_with("tool ") || line.starts_with("write-only file "))
+            .collect()
+    }
+
+    /// What a verdict line claims, after the tool or file it is about.
+    fn claim(line: &str) -> &str {
+        line.split_once(": ").unwrap().1
+    }
+
+    fn tool_lines<'r>(report: &'r Report, tool: &str) -> Vec<&'r String> {
+        let prefix = format!("tool {tool}, ");
+        let lines: Vec<&String> = report
+            .lines
+            .iter()
+            .filter(|line| line.starts_with(&prefix))
+            .collect();
+        assert!(!lines.is_empty(), "{tool}: {:?}", report.lines);
+        lines
+    }
+
+    #[test]
+    fn a_coverage_verdict_shown_as_proof_or_grep_and_glob_unlabelled_is_caught() {
+        let report = one_document();
+        let verdicts = verdict_lines(&report);
+        assert_eq!(verdicts.len(), 14, "{:?}", report.lines);
+        for line in &verdicts {
+            assert!(
+                line.contains(SETTINGS) && line.contains("configured"),
+                "{line}"
+            );
+            assert!(
+                !line.contains("enforced") && !line.contains("proven"),
+                "{line}"
+            );
+            let labelled = line.starts_with("tool Grep,") || line.starts_with("tool Glob,");
+            assert_eq!(line.contains("best-effort"), labelled, "{line}");
+        }
+        let notes: Vec<&String> = report
+            .lines
+            .iter()
+            .filter(|line| line.contains("configuration") && line.contains("not proof"))
+            .collect();
+        assert_eq!(notes.len(), 1, "{:?}", report.lines);
+        assert_eq!(report.code, 0, "{:?}", report.lines);
+
+        let split = report_of(&observed(
+            map(None, None, None, Some(HOOKS), Some(SETTINGS)),
+            vec![
+                (
+                    SETTINGS,
+                    FileState::Bytes(
+                        serde_json::to_vec(
+                            &security::propose(
+                                &folders(),
+                                &executable(),
+                                &[SETTINGS.into(), HOOKS.into()],
+                            )
+                            .settings,
+                        )
+                        .unwrap(),
+                    ),
+                ),
+                (
+                    HOOKS,
+                    FileState::Bytes(serde_json::to_vec(&hook::render(&executable())).unwrap()),
+                ),
+            ],
+        ));
+        for tool in ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit"] {
+            for line in tool_lines(&split, tool) {
+                assert!(line.contains(SETTINGS) && line.contains(HOOKS), "{line}");
+            }
+        }
+        let shell = ["Bash", "Monitor", "PowerShell"]
+            .iter()
+            .flat_map(|tool| tool_lines(&split, tool))
+            .collect::<Vec<_>>();
+        let files: Vec<&String> = split
+            .lines
+            .iter()
+            .filter(|line| line.starts_with("write-only file "))
+            .collect();
+        assert_eq!(files.len(), 3, "{:?}", split.lines);
+        for line in shell.into_iter().chain(files) {
+            let claim = claim(line);
+            assert!(claim.contains(SETTINGS) && !claim.contains(HOOKS), "{line}");
+        }
+    }
+
+    #[test]
+    fn shell_sandboxing_and_file_tool_rules_reported_as_one_mechanism_is_caught() {
+        let report = one_document();
+        for tool in ["Bash", "Monitor", "PowerShell"] {
+            for line in tool_lines(&report, tool) {
+                assert!(line.contains("the sandbox"), "{line}");
+                assert!(!line.contains("deny rules"), "{line}");
+            }
+        }
+        for tool in ["Read", "Grep", "Glob"] {
+            for line in tool_lines(&report, tool) {
+                assert!(
+                    line.contains("Read deny rules") && line.contains("guard hook"),
+                    "{line}"
+                );
+                assert!(
+                    !line.contains("Edit deny rules") && !line.contains("sandbox"),
+                    "{line}"
+                );
+            }
+        }
+        for tool in ["Write", "Edit", "NotebookEdit"] {
+            for line in tool_lines(&report, tool) {
+                assert!(
+                    line.contains("Edit deny rules") && line.contains("guard hook"),
+                    "{line}"
+                );
+                assert!(
+                    !line.contains("Read deny rules") && !line.contains("sandbox"),
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn other_settings_scopes_left_unmentioned_beside_coverage_is_caught() {
+        let mentions = |report: &Report| -> Vec<String> {
+            report
+                .lines
+                .iter()
+                .filter(|line| line.contains("sandbox.enabledPlatforms"))
+                .cloned()
+                .collect()
+        };
+        let judged = mentions(&one_document());
+        assert_eq!(judged.len(), 1, "{judged:?}");
+        assert!(judged[0].contains("settings files"), "{}", judged[0]);
+        assert!(
+            judged[0].contains("can change what applies"),
+            "{}",
+            judged[0]
+        );
+        assert!(!judged[0].contains("cannot"), "{}", judged[0]);
+        assert!(mentions(&report_of(&unknown_observation())).is_empty());
     }
 }
