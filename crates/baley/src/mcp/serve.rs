@@ -3,18 +3,22 @@
 //! Start gathers the project and the store and serves the handler over stdio.
 //! The one opened ledger goes to the handler for every project call and stays
 //! here for the exit checkpoint.
-//! End is driven by [`super::lifecycle`]: input ending or SIGTERM closes
-//! admission, accepted work gets up to ten seconds, and exactly one checkpoint
-//! attempt follows. Nothing here runs a checkpoint or a timer while the
-//! connection is open. The orchestration is gathering and has no unit test.
-//! Its words for stderr come from pure functions that do.
+//! End is driven by [`super::lifecycle`]: input ending, SIGINT or SIGTERM
+//! closes admission, accepted work gets up to ten seconds, and exactly one
+//! checkpoint attempt follows. Nothing here runs a checkpoint or a timer while
+//! the connection is open. The orchestration is gathering and has no unit test.
+//! The list of end signals and the words for stderr have their own tests.
 
+use std::future::poll_fn;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Instant;
 
 use baley_store_sqlite::{ExitCheckpoint, SkipReason, StartupHealth};
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
+#[cfg(unix)]
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::task::{JoinError, JoinHandle};
 
 use super::context::{Observation, judge};
@@ -92,17 +96,31 @@ fn open_store() -> Option<SessionLedger> {
     })
 }
 
+/// The signals that end a session the way input ending does. Claude Code
+/// stops a stdio server with SIGINT when its session ends. Any other signal
+/// keeps its default action.
 #[cfg(unix)]
-type Terminate = tokio::signal::unix::Signal;
+const END_SIGNALS: [SignalKind; 2] = [SignalKind::interrupt(), SignalKind::terminate()];
 
 #[cfg(unix)]
-fn listen_for_terminate() -> std::io::Result<Terminate> {
-    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+fn listen_for_end() -> std::io::Result<Vec<Signal>> {
+    END_SIGNALS.into_iter().map(signal).collect()
 }
 
+/// Resolves when any end signal arrives.
 #[cfg(unix)]
-async fn terminated(signal: &mut Terminate) {
-    signal.recv().await;
+async fn signalled(signals: &mut [Signal]) {
+    poll_fn(|context| {
+        if signals
+            .iter_mut()
+            .any(|signal| signal.poll_recv(context).is_ready())
+        {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 /// Whether the service task did well, judged from what is already known. A
@@ -122,16 +140,16 @@ async fn service_went_well(
     result.is_none_or(|result| result.unwrap_or(false))
 }
 
-/// Serves one session on stdin and stdout until input ends or SIGTERM, then
-/// drains and makes the one checkpoint attempt. Returns whether the run ended
-/// cleanly: the service started, input did not fail and the drain finished
-/// inside its bound. The checkpoint's outcome does not change that, since the
-/// attempt is best effort.
+/// Serves one session on stdin and stdout until input ends or SIGINT or SIGTERM
+/// arrives, then drains and makes the one checkpoint attempt. Returns whether
+/// the run ended cleanly: the service started, input did not fail and the
+/// drain finished inside its bound. The checkpoint's outcome does not change
+/// that, since the attempt is best effort.
 pub async fn run() -> bool {
-    let mut terminate = match listen_for_terminate() {
-        Ok(signal) => signal,
+    let mut signals = match listen_for_end() {
+        Ok(signals) => signals,
         Err(error) => {
-            eprintln!("baley: cannot listen for SIGTERM: {error}");
+            eprintln!("baley: cannot listen for SIGINT or SIGTERM: {error}");
             return false;
         }
     };
@@ -166,7 +184,7 @@ pub async fn run() -> bool {
     let mut read = None;
     let first = tokio::select! {
         _ = control.input_ended() => Event::InputEnded,
-        _ = terminated(&mut terminate) => Event::Terminate,
+        _ = signalled(&mut signals) => Event::Terminate,
         finished = &mut service => {
             read = Some(finished);
             Event::InputEnded
@@ -326,6 +344,14 @@ mod tests {
             std::task::Poll::Ready(went_well) => assert!(went_well),
             std::task::Poll::Pending => panic!("judging waited for a running service"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sigint_is_left_to_its_default_action_and_kills_the_server_before_its_exit_checkpoint() {
+        // Claude Code 2.1.294 stops a stdio server with SIGINT at /exit.
+        assert!(END_SIGNALS.contains(&SignalKind::interrupt()));
+        assert!(END_SIGNALS.contains(&SignalKind::terminate()));
     }
 
     #[test]
