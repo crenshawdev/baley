@@ -39,6 +39,7 @@ for TOOL in jq git; do
 done
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+GUIDE="$SCRIPT_DIR/live-claude.md"
 
 ROOT="$HOME/.local/share/baley-live"
 DATA="$ROOT/data"
@@ -69,6 +70,31 @@ fresh() {
   fi
   rm -rf "$1" && mkdir -p "$1"
 }
+
+# Refuse a moved help spelling here, before anything is cleared or created. Each block of the
+# procedure sits under a heading naming its command.
+SCRATCH=$(mktemp -d) || exit 1
+trap 'rm -rf "$SCRATCH"' EXIT
+help_block() {
+  awk -v heading="### \`$1\`" '
+    $0 == heading { found = 1; next }
+    found && /^```/ { if (open) exit; open = 1; next }
+    found && open { print }
+  ' "$GUIDE"
+}
+[ -f "$GUIDE" ] || { echo "missing $GUIDE" >&2; exit 1; }
+for SUB in "" manifest stub registration hook settings; do
+  CMD="baley artifact${SUB:+ $SUB} --help"
+  help_block "$CMD" > "$SCRATCH/copied"
+  # shellcheck disable=SC2086
+  "$SUPPLIED" artifact $SUB --help > "$SCRATCH/actual" 2>&1
+  if [ ! -s "$SCRATCH/copied" ] || ! diff "$SCRATCH/copied" "$SCRATCH/actual" > "$SCRATCH/difference"; then
+    echo "the help of '$CMD' differs from the copy in live-claude.md (left: copy, right: this binary)" >&2
+    cat "$SCRATCH/difference" >&2
+    echo "Rebuild baley at the commit the procedure names, or update the procedure first." >&2
+    exit 1
+  fi
+done
 
 # The owner's real Baley folders as the binary resolves them (folders.rs), listed now and again
 # by live-claude-reads.sh, so a hook or server that missed the exported variables shows up as a change.
@@ -460,7 +486,7 @@ EOF
   row ctl.commit-main-monitor "Monitor in project one on main: git commit --allow-empty -m probe-monitor" "Denied by the guard (GRD-R3, GRD-R5), git log --oneline unchanged" "$MON_MARK"
   row ctl.push-bash-yes "Bash: git push origin main, answer yes" "The guard asks (GRD-R4). After yes, git --git-dir=$REM/one.git branch --list shows main"
   row ctl.push-bash-no "Bash: git branch push-bash-no, then git push origin push-bash-no, answer no" "The guard asks. After no, the remote has no push-bash-no"
-  row ctl.push-monitor-yes "Monitor: git push origin main, answer yes" "The guard asks. After yes, the remote shows main (unchanged if the Bash push already created it, so push a new commit first)" "$MON_MARK"
+  row ctl.push-monitor-yes "Monitor: git branch push-monitor-yes, then git push origin push-monitor-yes, answer yes" "The guard asks. After yes, git --git-dir=$REM/one.git branch --list shows push-monitor-yes" "$MON_MARK"
   row ctl.push-monitor-no "Monitor: git branch push-monitor-no, then git push origin push-monitor-no, answer no" "The guard asks. After no, the remote has no push-monitor-no" "$MON_MARK"
   row ctl.powershell-ask "PowerShell: Get-Date" "The guard asks on every PowerShell call (design 0010 GRD-R3), recorded in the ledger" "$PS_MARK"
   row ctl.write-baleytoml-denied "The Write to $PROJ/one/baley.toml: the ledger holds a deny for tool Write" "The guard denied it (GRD-R11)"
@@ -468,7 +494,7 @@ EOF
   row ctl.fallback-head "Session fallback (no git on PATH): Bash git commit --allow-empty -m fallback on main" "A name read from .git/HEAD never decides refuse or ask (GRD-R6, GRD-R14). With git absent the guard passes with a loud stderr line and records a guard failure. Mark unavailable if git still answers, and cite a_head_file_name_after_git_failed_read_as_the_git_branch_is_caught in crates/baley/src/guard_hook/branch.rs"
   row ctl.latency "Every guard call: the highest elapsed_ms in the timing summary of live-claude-reads.sh" "Below 10,000 ms (design 0010 GRD-R14)"
   row ctl.timeout-not-denial "A hook that timed out, if one did" "Recorded as a timeout and not as a denial. Mark unavailable if none timed out"
-  row ctl.contention-exit "Guard calls while another session exits (the exit.overlap rows)" "Every call answers inside its time"
+  row ctl.contention-exit "Guard calls while another session exits (rows exit.overlap-1, exit.overlap-2 and exit.overlap-3)" "Every call answers inside its time"
   row ctl.redelivery "A tool_use_id seen twice in the timing summary, if any" "The second answer equals the first (design 0010 GRD-R10). Mark unavailable if none repeated"
   row ctl.stderr-line "Where the guard's loud standard-error line appears (the fallback session, hook-calls/*.err, the debug log)" "Recorded as observed. Claude Code sends a hook's stderr on exit 0 to its debug log only (design 0010 GRD-R6 and GRD-R9)" observed
 
