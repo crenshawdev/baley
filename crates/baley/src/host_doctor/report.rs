@@ -51,6 +51,31 @@ impl Report {
                     format!("{artifact}: {} {fault}", path.display())
                 }
                 ArtifactState::Read { path } => format!("{artifact}: read {}", path.display()),
+                ArtifactState::StubMatches { path, digest } => format!(
+                    "{artifact}: {} matches the stub Baley renders, sha256 {digest}",
+                    path.display()
+                ),
+                ArtifactState::StubDiffers {
+                    path,
+                    expected,
+                    found,
+                } => format!(
+                    "{artifact}: {} differs from the stub Baley renders: expected sha256 {expected}, found sha256 {found}",
+                    path.display()
+                ),
+                ArtifactState::RegistrationMatches { path } => format!(
+                    "{artifact}: {} holds the entry Baley renders for this binary",
+                    path.display()
+                ),
+                ArtifactState::RegistrationMissing { path } => format!(
+                    "{artifact}: {} has no mcpServers entry under the key {}",
+                    path.display(),
+                    crate::host_artifacts::registration::KEY
+                ),
+                ArtifactState::RegistrationDiffers { path, found } => format!(
+                    "{artifact}: {} runs another command or arguments than Baley renders: {found}",
+                    path.display()
+                ),
             });
         }
         if let Some((path, gap_found)) = &findings.executable {
@@ -192,5 +217,45 @@ mod tests {
             assert!(line.contains(SETTINGS) && line.contains(words), "{line}");
             assert_eq!(report.code, 1, "{line}");
         }
+    }
+    #[test]
+    fn a_differing_stub_reported_without_both_digests_is_caught() {
+        use sha2::{Digest, Sha256};
+
+        let manifest =
+            crate::host_artifacts::stubs::manifest(&crate::host_artifacts::stubs::front_doors())
+                .unwrap();
+        let help = manifest
+            .iter()
+            .find(|entry| entry.identity == "bal-help")
+            .unwrap();
+        let mut changed = help.bytes.clone();
+        changed[0] ^= 1;
+        let found: String = Sha256::digest(&changed)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+
+        let differing = report_of(&observed(
+            map(None, Some(HELP), None, None, None),
+            vec![(HELP, FileState::Bytes(changed))],
+        ));
+        let line = line_for(&differing, "stub `bal-help`");
+        for part in [HELP, help.digest.as_str(), found.as_str()] {
+            assert!(line.contains(part), "{part} missing from {line}");
+        }
+        assert_eq!(differing.code, 1);
+
+        let equal = report_of(&observed(
+            map(None, Some(HELP), None, None, None),
+            vec![(HELP, FileState::Bytes(help.bytes.clone()))],
+        ));
+        let line = line_for(&equal, "stub `bal-help`");
+        assert!(
+            line.contains("matches") && !line.contains("differs"),
+            "{line}"
+        );
+        assert!(!equal.lines.iter().any(|line| line.contains("differs")));
+        assert_eq!(equal.code, 0);
     }
 }

@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 pub use report::Report;
 
-use placed::{ExecutableGap, FileState};
+use placed::{ExecutableGap, FileState, RegistrationJudgement, StubJudgement};
 
 use crate::host_artifacts::executable::{Executable, MissingPrerequisite};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
@@ -126,7 +126,7 @@ pub fn gather(placement: Result<PlacementMap, MapFault>) -> Observation {
 }
 
 /// What the judgement found out about one artifact.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ArtifactState {
     /// No place is known for it, so nothing was looked for.
     NotInstalled,
@@ -152,6 +152,39 @@ pub enum ArtifactState {
         /// The place.
         path: PathBuf,
     },
+    /// The stub is the manifest entry's, byte for byte.
+    StubMatches {
+        /// The place.
+        path: PathBuf,
+        /// The manifest entry's SHA-256, which the bytes found share.
+        digest: String,
+    },
+    /// The stub differs from the manifest entry.
+    StubDiffers {
+        /// The place.
+        path: PathBuf,
+        /// The manifest entry's SHA-256.
+        expected: String,
+        /// The SHA-256 of the bytes found.
+        found: String,
+    },
+    /// The registration document holds the entry Baley renders.
+    RegistrationMatches {
+        /// The place.
+        path: PathBuf,
+    },
+    /// The registration document has no entry under Baley's key.
+    RegistrationMissing {
+        /// The place.
+        path: PathBuf,
+    },
+    /// The registration document's entry runs another command or arguments.
+    RegistrationDiffers {
+        /// The place.
+        path: PathBuf,
+        /// The entry found.
+        found: serde_json::Value,
+    },
 }
 
 impl ArtifactState {
@@ -160,7 +193,10 @@ impl ArtifactState {
     pub fn is_gap(&self) -> bool {
         !matches!(
             self,
-            ArtifactState::NotInstalled | ArtifactState::Read { .. }
+            ArtifactState::NotInstalled
+                | ArtifactState::Read { .. }
+                | ArtifactState::StubMatches { .. }
+                | ArtifactState::RegistrationMatches { .. }
         )
     }
 }
@@ -267,6 +303,19 @@ pub fn judge(observation: &Observation) -> Findings {
                     path,
                     fault: fault.clone(),
                 },
+                Content::Object(value) if file.artifact == Artifact::Registration => {
+                    match placed::registration(value, mapped.map.executable()) {
+                        RegistrationJudgement::Matches => {
+                            ArtifactState::RegistrationMatches { path }
+                        }
+                        RegistrationJudgement::Missing => {
+                            ArtifactState::RegistrationMissing { path }
+                        }
+                        RegistrationJudgement::Differs(found) => {
+                            ArtifactState::RegistrationDiffers { path, found }
+                        }
+                    }
+                }
                 Content::Object(_) => ArtifactState::Read { path },
             },
             None => match read(file.path) {
@@ -276,7 +325,20 @@ pub fn judge(observation: &Observation) -> Findings {
                     path,
                     fault: fault.clone(),
                 },
-                Some(FileState::Bytes(_)) => ArtifactState::Read { path },
+                Some(FileState::Bytes(bytes)) => match file.stub {
+                    Some(entry) => match placed::stub(entry, bytes) {
+                        StubJudgement::Matches => ArtifactState::StubMatches {
+                            path,
+                            digest: entry.digest.clone(),
+                        },
+                        StubJudgement::Differs { found_digest } => ArtifactState::StubDiffers {
+                            path,
+                            expected: entry.digest.clone(),
+                            found: found_digest,
+                        },
+                    },
+                    None => ArtifactState::Read { path },
+                },
             },
         };
         artifacts.push((file.artifact, state));

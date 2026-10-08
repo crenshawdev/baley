@@ -13,7 +13,12 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::host_artifacts::compose::same_server;
+use crate::host_artifacts::executable::Executable;
+use crate::host_artifacts::registration;
+use crate::host_artifacts::stubs::Entry;
 use crate::settings::{self, Seen};
+use crate::store::model::digest;
 
 /// Why a placed file cannot be used as found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +148,59 @@ pub(crate) fn executable_gap(seen: ExecutableSeen) -> Option<ExecutableGap> {
     }
 }
 
+/// How a placed stub compares with the manifest's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StubJudgement {
+    /// The bytes are the manifest entry's, byte for byte.
+    Matches,
+    /// The bytes differ.
+    Differs {
+        /// Lowercase hex SHA-256 of the bytes found, to set beside the
+        /// entry's own digest.
+        found_digest: String,
+    },
+}
+
+/// Compares the bytes found at a stub's place with the manifest entry's
+/// bytes. Only equality counts: a stub that is longer, shorter or changed
+/// by one byte is a different stub.
+pub fn stub(entry: &Entry, found: &[u8]) -> StubJudgement {
+    if found == entry.bytes.as_slice() {
+        StubJudgement::Matches
+    } else {
+        StubJudgement::Differs {
+            found_digest: digest(found),
+        }
+    }
+}
+
+/// How a registration document compares with the entry Baley renders.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegistrationJudgement {
+    /// The `mcpServers` entry under Baley's key runs the same command with
+    /// the same arguments.
+    Matches,
+    /// The document has no entry under Baley's key.
+    Missing,
+    /// The entry runs another command or other arguments; the entry found.
+    Differs(Value),
+}
+
+/// Judges the entry under `mcpServers.baley` by composition's rule: equal
+/// `command` and `args`, with `alwaysLoad` and any other key ignored.
+pub fn registration(document: &Value, executable: &Executable) -> RegistrationJudgement {
+    let key = registration::KEY;
+    let Some(found) = document.pointer(&format!("/mcpServers/{key}")) else {
+        return RegistrationJudgement::Missing;
+    };
+    let ours = registration::render(executable, false);
+    if same_server(found, &ours["mcpServers"][key]) {
+        RegistrationJudgement::Matches
+    } else {
+        RegistrationJudgement::Differs(found.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::ErrorKind;
@@ -214,5 +272,70 @@ mod tests {
         assert_eq!(seen(Ok(false), Ok(false)), Some(ExecutableGap::NotRegular));
         assert_eq!(seen(Ok(true), Ok(true)), None);
         assert_eq!(seen(Ok(false), Ok(true)), None);
+    }
+    fn entry(identity: &str) -> Entry {
+        let manifest =
+            crate::host_artifacts::stubs::manifest(&crate::host_artifacts::stubs::front_doors())
+                .unwrap();
+        manifest
+            .into_iter()
+            .find(|entry| entry.identity == identity)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_stub_judged_by_length_or_prefix_is_caught() {
+        let help = entry("bal-help");
+        let mut changed = help.bytes.clone();
+        changed[0] ^= 1;
+        let mut appended = help.bytes.clone();
+        appended.push(b'\n');
+        let mut cut = help.bytes.clone();
+        cut.pop();
+        assert_eq!(stub(&help, &help.bytes), StubJudgement::Matches);
+        for found in [changed, appended, cut] {
+            assert_eq!(
+                stub(&help, &found),
+                StubJudgement::Differs {
+                    found_digest: digest(&found)
+                }
+            );
+        }
+        let capture = entry("bal-capture");
+        assert_eq!(stub(&capture, &capture.bytes), StubJudgement::Matches);
+    }
+
+    #[test]
+    fn a_registration_with_always_load_called_different_or_other_arguments_accepted_is_caught() {
+        let exe = Executable::new("/usr/local/bin/baley").unwrap();
+        let entry_of = |document: &Value| document["mcpServers"][registration::KEY].clone();
+        let with = |edit: &dyn Fn(&mut Value)| {
+            let mut document = registration::render(&exe, false);
+            edit(&mut document["mcpServers"][registration::KEY]);
+            document
+        };
+        let described = with(&|entry| entry["description"] = "x".into());
+        let other_args = with(&|entry| entry["args"] = serde_json::json!(["serve", "--x"]));
+        let other_command = with(&|entry| entry["command"] = "/other/baley".into());
+        assert_eq!(
+            registration(&registration::render(&exe, true), &exe),
+            RegistrationJudgement::Matches
+        );
+        assert_eq!(
+            registration(&described, &exe),
+            RegistrationJudgement::Matches
+        );
+        assert_eq!(
+            registration(&other_args, &exe),
+            RegistrationJudgement::Differs(entry_of(&other_args))
+        );
+        assert_eq!(
+            registration(&other_command, &exe),
+            RegistrationJudgement::Differs(entry_of(&other_command))
+        );
+        assert_eq!(
+            registration(&serde_json::json!({}), &exe),
+            RegistrationJudgement::Missing
+        );
     }
 }
