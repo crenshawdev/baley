@@ -28,11 +28,12 @@ pub mod prerequisites;
 pub mod protection;
 pub mod report;
 pub mod server_context;
+pub mod store_health;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use baley_store::{Ledger, ProjectId};
+use baley_store::{Health, Ledger, ProjectId};
 
 pub use report::Report;
 
@@ -120,6 +121,9 @@ pub struct Observation {
     pub prerequisites: prerequisites::Observed,
     /// The last server call the ledger records.
     pub server: server_context::Observed,
+    /// What the store's doctor returned, which the compatibility and
+    /// folder lines are judged from.
+    pub health: Health,
 }
 
 /// The ledger side of the gather: the store to read history from and the
@@ -129,6 +133,8 @@ pub struct Stored<'a, S> {
     pub store: &'a S,
     /// Every project in the ledger, in id order.
     pub projects: &'a [ProjectId],
+    /// What the store's doctor already returned.
+    pub health: &'a Health,
 }
 
 /// Gathers the observation for a placement map: reads each expected file
@@ -168,6 +174,7 @@ pub fn gather<S: Ledger>(
         checkout_file,
         prerequisites: prerequisites::gather(path, os),
         server: server_context::gather(stored.store, stored.projects),
+        health: stored.health.clone(),
     }
 }
 
@@ -293,6 +300,8 @@ pub struct Findings {
     pub prerequisites: prerequisites::Judged,
     /// What the last recorded server call shows of the server's context.
     pub server: server_context::Judged,
+    /// The stored epoch against this binary's, and the folders.
+    pub store: store_health::Judged,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -320,6 +329,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 nine_tools: None,
                 prerequisites: prerequisites::judge(&observation.prerequisites),
                 server: server_context::judge(&observation.server),
+                store: store_health::judge(&observation.health, &observation.folders),
             };
         }
     };
@@ -431,6 +441,7 @@ pub fn judge(observation: &Observation) -> Findings {
         nine_tools: protection::nine_tools(&mapped.map, &documents),
         prerequisites,
         server: server_context::judge(&observation.server),
+        store: store_health::judge(&observation.health, &observation.folders),
         documents,
     }
 }
@@ -491,6 +502,19 @@ pub(crate) mod fixtures {
         .unwrap()
     }
 
+    /// The store's health with nothing to find: this binary's epoch, a clean
+    /// integrity check and no projects.
+    pub(crate) fn clean_health() -> Health {
+        Health {
+            epoch: baley_store_sqlite::EPOCH,
+            scrub_pending: None,
+            integrity: vec!["ok".into()],
+            database_bytes: 8192,
+            log_bytes: 0,
+            projects: vec![],
+        }
+    }
+
     /// A Linux search that finds both sandbox programs.
     pub(crate) fn linux_with_both() -> prerequisites::Observed {
         found_on("linux", &["bwrap", "socat"])
@@ -524,6 +548,7 @@ pub(crate) mod fixtures {
             checkout_file: None,
             prerequisites: linux_with_both(),
             server: server_context::Observed::NoCall,
+            health: clean_health(),
         }
     }
 
@@ -546,6 +571,7 @@ pub(crate) mod fixtures {
             checkout_file: None,
             prerequisites: linux_with_both(),
             server: server_context::Observed::NoCall,
+            health: clean_health(),
         }
     }
 }
@@ -722,6 +748,11 @@ mod integration {
 
         let files_before = listing(&place);
         let projects_before = Admin::projects(&store).unwrap();
+        let checks: BTreeMap<ProjectId, baley_store::AnchorCheck> = projects_before
+            .iter()
+            .map(|(id, _)| (id.clone(), baley_store::AnchorCheck::LocalOnly))
+            .collect();
+        let health = Admin::doctor(&store, T0, &checks).unwrap();
         let heads_before = heads(&store);
         let ids: Vec<ProjectId> = projects_before.iter().map(|(id, _)| id.clone()).collect();
         let search: OsString = empty_path.into();
@@ -734,6 +765,7 @@ mod integration {
             Stored {
                 store: &store,
                 projects: &ids,
+                health: &health,
             },
         );
         let _ = Report::new(&judge(&observation));

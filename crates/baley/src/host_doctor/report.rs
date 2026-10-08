@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::prerequisites::{Judged as Prerequisites, Kind};
 use super::protection::{Judged, NotJudged};
+use super::store_health::{Compatibility, Judged as Store};
 use super::{ArtifactState, Findings, MapFault, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
 use crate::mcp::context::ProjectContext;
@@ -136,6 +137,7 @@ impl Report {
             }
         }
         server_lines(&findings.server, &mut lines);
+        gap |= store_lines(&findings.store, &mut lines);
         Report {
             lines,
             code: u8::from(gap),
@@ -174,6 +176,41 @@ fn server_lines(judged: &server_context::Judged, lines: &mut Vec<String>) {
             ));
         }
     }
+}
+
+/// The compatibility, write fence, home and config lines. Returns whether the
+/// ledger is newer than this binary can write, the only finding among them.
+fn store_lines(judged: &Store, lines: &mut Vec<String>) -> bool {
+    let newer = match judged.compatibility {
+        Compatibility::Matches => {
+            lines.push(format!(
+                "compatibility: the ledger is at epoch {0}, the epoch of this binary",
+                baley_store_sqlite::EPOCH
+            ));
+            false
+        }
+        Compatibility::Newer { epoch } => {
+            lines.push(format!(
+                "compatibility: the ledger is at epoch {epoch}, newer than this binary's epoch {}: it is read-only for this binary, which can only read it, and a build at epoch {epoch} is needed to write it",
+                baley_store_sqlite::EPOCH
+            ));
+            true
+        }
+    };
+    lines.push("write fence: the server's startup quick_check is not observed from the command line, and the integrity_check rows above stand in for it".to_owned());
+    lines.push(format!(
+        "home: {} opened with its ownership, mode and link checks passed",
+        judged.home.display()
+    ));
+    lines.push(if judged.one_folder {
+        format!(
+            "config folder: {}, the same folder as the home",
+            judged.config.display()
+        )
+    } else {
+        format!("config folder: {}", judged.config.display())
+    });
+    newer
 }
 
 /// The sandbox prerequisite lines for the platform. Returns whether the
@@ -984,5 +1021,61 @@ mod tests {
             );
         }
         assert_eq!(report.code, 0);
+    }
+
+    fn with_health(health: baley_store::Health) -> Report {
+        let mut observation = unknown_observation();
+        observation.health = health;
+        report_of(&observation)
+    }
+
+    #[test]
+    fn a_newer_ledger_epoch_not_reported_as_read_only_is_caught() {
+        use baley_store_sqlite::EPOCH;
+
+        for newer in [EPOCH + 1, EPOCH + 2] {
+            let mut health = clean_health();
+            health.epoch = newer;
+            let report = with_health(health);
+            let epoch = newer.to_string();
+            let own = EPOCH.to_string();
+            assert!(
+                names(
+                    &report,
+                    &[
+                        epoch.as_str(),
+                        own.as_str(),
+                        "read-only for this binary",
+                        "can only read it",
+                        "a build at epoch"
+                    ]
+                ),
+                "{:?}",
+                report.lines
+            );
+            assert_eq!(report.code, 1, "{:?}", report.lines);
+        }
+    }
+
+    #[test]
+    fn the_write_fence_limit_left_unstated_is_caught() {
+        for integrity in [vec!["ok".to_owned()], vec!["damaged page".to_owned()]] {
+            let mut health = clean_health();
+            health.integrity = integrity.clone();
+            let report = with_health(health);
+            let fences: Vec<&String> = report
+                .lines
+                .iter()
+                .filter(|line| line.contains("quick_check"))
+                .collect();
+            assert_eq!(fences.len(), 1, "{integrity:?}: {:?}", report.lines);
+            assert!(
+                fences[0].contains("not observed from the command line")
+                    && fences[0].contains("integrity_check"),
+                "{}",
+                fences[0]
+            );
+            assert_eq!(report.code, 0, "{integrity:?}: {:?}", report.lines);
+        }
     }
 }

@@ -154,7 +154,7 @@ fn doctor(
         .as_ref()
         .map(|file| file.path.clone());
     let ids: Vec<ProjectId> = projects.iter().map(|(id, _)| id.clone()).collect();
-    let host = host_report(folders.clone(), checkout_file, store, &ids);
+    let host = host_report(folders.clone(), checkout_file, store, &ids, &health);
     Ok(display::with_host(rendered, &host))
 }
 
@@ -166,6 +166,7 @@ fn host_report(
     checkout_file: Option<PathBuf>,
     store: &SqliteStore,
     projects: &[ProjectId],
+    health: &Health,
 ) -> host_doctor::Report {
     let observation = host_doctor::gather(
         host_doctor::all_unknown(std::env::current_exe()),
@@ -173,7 +174,11 @@ fn host_report(
         checkout_file,
         std::env::var_os("PATH").as_deref(),
         std::env::consts::OS,
-        host_doctor::Stored { store, projects },
+        host_doctor::Stored {
+            store,
+            projects,
+            health,
+        },
     );
     host_doctor::Report::new(&host_doctor::judge(&observation))
 }
