@@ -645,7 +645,7 @@ EOF
   row hand.config-show "In project one: baley config show" "Host-specific settings listed with their layers" observed
   row hand.nearer-file "nearer-file session (its server's CLAUDE_PROJECT_DIR is $PROJ/one/sub): the project the capture lands in" "Project one, found by walking up from sub to the nearer baley.toml, with sub as the caller's project_directory"
   row hand.checkout-admission "The ledger's checkout rows for project one" "Project one's checkout admitted" observed
-  row hand.keys-detection "baley models update in the owner's real environment, after the post-run rows" "Reports detection per provider with a key, a failed detection exits 0" observed
+  row hand.keys-detection "Keys and detection with a safe key" "Not run: Build 4 (#25) removes the keys.env reader, the credential wrapper and the model lister this row would exercise" unavailable
   row hand.restore-doctor "baley doctor on the disposable ledger before the restore part" "No finding"
   row hand.restore-report "sh live-claude-restore.sh > $OUT/restore.txt, after reads.txt is saved: the sections of $OUT/restore.txt" "The first anchored verify reports the chain truncated before the remote anchor and prints no purge warning (design 0001, Acknowledging a restore). The acknowledgement and its replay succeed and print the purge warning (ADR 0035). The anchored verify, the local-only verify and doctor that follow list the accepted restore and print the warning, and the warning changes no exit code"
   row hand.parts.help "help read whole" "One part, whole"
