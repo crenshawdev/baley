@@ -24,6 +24,11 @@ if [ -n "${BALEY_HOME+set}" ]; then
   exit 1
 fi
 
+# Git's own configuration variables would send the fixture config writes below to the owner's files
+# instead of the disposable repositories, so none of them reaches this script's git or baley commands.
+for NAME in $(env | sed -n 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$NAME"; done
+unset GIT_CONFIG
+
 # The paths go into JSON and shell commands unquoted, so only plain path characters are allowed.
 case "${HOME:-}" in
   ""|/) echo "HOME must be a real directory" >&2; exit 1 ;;
@@ -109,9 +114,11 @@ list_real() {
 }
 
 umask 077
-fresh "$ROOT"
+# A clear that fails part way can leave a link behind that the writes below would follow out of the
+# tree, so a failed clear stops the script before any write.
+fresh "$ROOT" || { echo "could not clear $ROOT, so nothing was written" >&2; exit 1; }
 mkdir -p "$HOMEF" "$CONFF" "$ROOT/bin" "$CC" "$PROJ" "$REM" "$OUT" "$REN" \
-  "$OUT/server-stderr" "$OUT/hook-calls" "$ROOT/bin-nosandbox" "$ROOT/bin-nogit"
+  "$OUT/server-stderr" "$OUT/hook-calls" "$ROOT/bin-nosandbox" "$ROOT/bin-nogit" || exit 1
 
 # Harmless fixtures in both folders. The key value is fake on purpose, and no real credential enters
 # either folder.
@@ -193,9 +200,9 @@ export XDG_DATA_HOME XDG_CONFIG_HOME
 # touches the global git config or this repository's.
 mkrepo() {
   git init -q -b main "$1" || exit 1
-  git -C "$1" config user.name "Baley live run"
-  git -C "$1" config user.email "live-run@example.invalid"
-  git -C "$1" config commit.gpgsign false
+  git -C "$1" config --local user.name "Baley live run"
+  git -C "$1" config --local user.email "live-run@example.invalid"
+  git -C "$1" config --local commit.gpgsign false
 }
 project_id() {
   sed -n 's/^id = "\(.*\)"$/\1/p' "$1/baley.toml"
@@ -243,9 +250,9 @@ init_project two
 # The fork is a clone of project one whose origin is another remote and which is not initialised
 # again, so it shares project one's id under a different remote.
 git clone -q "$PROJ/one" "$PROJ/fork" || exit 1
-git -C "$PROJ/fork" config user.name "Baley live run"
-git -C "$PROJ/fork" config user.email "live-run@example.invalid"
-git -C "$PROJ/fork" config commit.gpgsign false
+git -C "$PROJ/fork" config --local user.name "Baley live run"
+git -C "$PROJ/fork" config --local user.email "live-run@example.invalid"
+git -C "$PROJ/fork" config --local commit.gpgsign false
 git -C "$PROJ/fork" remote set-url origin "$REM/fork.git"
 
 ID_ONE=$(project_id "$PROJ/one")
@@ -260,7 +267,7 @@ ID_TWO=$(project_id "$PROJ/two")
 # list, so the Edit rule and denyWrite cover them while the guard itself protects only the two
 # baley.toml files until the placement projection is passed to it.
 STUB="$CC/skills/bal-help/SKILL.md"
-LAUNCH_FILES="mcp-explicit.json user-scope-entry.json mcp-invalid-project.json mcp-missing-project.json mcp-no-session-id.json mcp-fork.json"
+LAUNCH_FILES="mcp-explicit.json user-scope-entry.json mcp-invalid-project.json mcp-missing-project.json mcp-no-session-id.json mcp-fork.json mcp-nearer-file.json mcp-stderr-control.json"
 
 # Prints one artifact exactly as the binary renders it into $1. A refusal or a partial settings render
 # exits non-zero, and then the script stops with the standard error shown, so partial settings are
@@ -285,10 +292,15 @@ for FILE in $LAUNCH_FILES; do set -- "$@" --protect "$OUT/$FILE"; done
 render "$REN/settings.json" "$@"
 render "$REN/manifest.json" manifest
 
-# Times each guard call. It keeps the call as it arrived, runs the rendered hook command with that
-# call as standard input, passes the guard's output and exit status through unchanged, and appends
-# one line to hook-timing.jsonl. The line holds no tool_input: the stand-in probe is the per-tool
-# field capture. Tool paths are fixed now, so a session with a narrowed PATH still times its calls.
+# Times each guard call. It keeps the call as it arrived, writes a start line before the guard runs,
+# runs the rendered hook command with that call as standard input, passes the guard's output and exit
+# status through unchanged, and appends one line to hook-timing.jsonl. A call the host kills at the
+# timeout leaves a start line in hook-starts.jsonl and no timing line, and the post-run reads report it.
+# elapsed_ms times the guard alone. The host's timer also covers the wrapper, so the timing line adds
+# wrapper_ms (from the wrapper's first instruction to just before the line is written) and overhead_ms,
+# the difference. The final decision read and the append, a few milliseconds, are not counted. The
+# lines hold no tool_input: the stand-in probe is the per-tool field capture. Tool paths are fixed now,
+# so a session with a narrowed PATH still times its calls.
 JQ_BIN=$(command -v jq)
 DATE_BIN=$(command -v date)
 CAT_BIN=$(command -v cat)
@@ -302,24 +314,37 @@ CAT=$CAT_BIN
 MV=$MV_BIN
 WRAP
 cat >> "$ROOT/bin/guard-timed.sh" <<'WRAP'
+TW0=$($DATE +%s%N)
 PENDING="$OUT/hook-calls/pending.$$"
 $CAT > "$PENDING"
 TOOL=$($JQ -r '.tool_name // empty' "$PENDING" 2>/dev/null)
 ID=$($JQ -r '.tool_use_id // empty' "$PENDING" 2>/dev/null)
 SESSION=$($JQ -r '.session_id // empty' "$PENDING" 2>/dev/null)
 CWD=$($JQ -r '.cwd // empty' "$PENDING" 2>/dev/null)
-CALL="$OUT/hook-calls/${ID:-none}-$$.json"
+# The call id names a file, so only plain characters build the path. Anything else, or a long id,
+# uses a fixed name. The timing lines still hold the id as it arrived.
+case "$ID" in
+  ""|*[!A-Za-z0-9_-]*) NAME=none ;;
+  *) if [ "${#ID}" -gt 100 ]; then NAME=none; else NAME=$ID; fi ;;
+esac
+KEY="$NAME-$$"
+CALL="$OUT/hook-calls/$KEY.json"
 $MV "$PENDING" "$CALL"
 COMMAND=$($JQ -r '.hooks.PreToolUse[0].hooks[0].command' "$OUT/rendered/hook.json")
+$JQ -nc --arg tool "$TOOL" --arg id "$ID" --arg session "$SESSION" --arg cwd "$CWD" --arg key "$KEY" \
+  --argjson start "$((TW0 / 1000000))" \
+  '{tool_name: $tool, tool_use_id: $id, session_id: $session, cwd: $cwd, call: $key, wrapper_start_ms: $start}' >> "$OUT/hook-starts.jsonl"
 T0=$($DATE +%s%N)
 /bin/sh -c "$COMMAND" < "$CALL" > "$CALL.out" 2> "$CALL.err"
 STATUS=$?
 T1=$($DATE +%s%N)
 DECISION=$($JQ -r '.hookSpecificOutput.permissionDecision // empty' "$CALL.out" 2>/dev/null)
-$JQ -nc --arg tool "$TOOL" --arg id "$ID" --arg session "$SESSION" --arg cwd "$CWD" \
+TW1=$($DATE +%s%N)
+$JQ -nc --arg tool "$TOOL" --arg id "$ID" --arg session "$SESSION" --arg cwd "$CWD" --arg key "$KEY" \
   --argjson start "$((T0 / 1000000))" --argjson end "$((T1 / 1000000))" \
-  --argjson elapsed "$(((T1 - T0) / 1000000))" --argjson status "$STATUS" --arg decision "$DECISION" \
-  '{tool_name: $tool, tool_use_id: $id, session_id: $session, cwd: $cwd, start_ms: $start, end_ms: $end, elapsed_ms: $elapsed, exit: $status}
+  --argjson elapsed "$(((T1 - T0) / 1000000))" --argjson wrapper "$(((TW1 - TW0) / 1000000))" \
+  --argjson overhead "$((((TW1 - TW0) - (T1 - T0)) / 1000000))" --argjson status "$STATUS" --arg decision "$DECISION" \
+  '{tool_name: $tool, tool_use_id: $id, session_id: $session, cwd: $cwd, call: $key, start_ms: $start, end_ms: $end, elapsed_ms: $elapsed, wrapper_ms: $wrapper, overhead_ms: $overhead, exit: $status}
    + (if $decision == "" then {} else {permissionDecision: $decision} end)' >> "$OUT/hook-timing.jsonl"
 $CAT "$CALL.out"
 $CAT "$CALL.err" >&2
@@ -373,6 +398,14 @@ launch_file "$REN/registration.json" "$PLAIN" "$ROOT/projects/does-not-exist" mc
 launch_file "$REN/registration.json" "$(server_script 'unset CLAUDE_PROJECT_DIR; ')" "" mcp-missing-project.json
 launch_file "$REN/registration.json" "$(server_script 'unset CLAUDE_CODE_SESSION_ID; ')" "" mcp-no-session-id.json
 launch_file "$REN/registration.json" "$PLAIN" "$PROJ/fork" mcp-fork.json
+# The nearer-file session: discovery starts in sub, which has no baley.toml of its own, so the server has
+# to walk up to project one's file whatever folder Claude Code exports for a session.
+launch_file "$REN/registration.json" "$PLAIN" "$PROJ/one/sub" mcp-nearer-file.json
+# The stderr control: no redirect of the server's standard error, only a marker line the wrapper writes
+# to its own standard error before it executes the server, so the owner can look for known bytes in the
+# host's output. A server that is not redirected leaves no file in server-stderr.
+STDERR_CONTROL='printf "baley-live stderr control marker, pid %s\n" "$$" >&2; exec "$@"'
+launch_file "$REN/registration.json" "$STDERR_CONTROL" "" mcp-stderr-control.json
 
 # The stub goes in the isolated user configuration, an uncommitted skills folder.
 mkdir -p "$CC/skills/bal-help"
@@ -446,7 +479,7 @@ EOF
   section "Sessions" "Startup checks of session A, with the smoke step that has to pass before anything else runs."
   row ses.a.version "claude --version, before any session" "Prints a version; recorded in the header" observed
   row ses.a.panels "In session A: /hooks, /sandbox and /permissions" "The hook is the timed wrapper, the sandbox is on and required, the deny rules name both folders" observed
-  row ses.a.smoke-capture "Session A smoke: capture one note through baley_apply" "A receipt with a capture id" 
+  row ses.a.smoke-capture "Session A smoke: capture one note through baley_apply (the third call of the tools check)" "A receipt with a capture id"
   row ses.a.smoke-commit "Session A smoke: git commit --allow-empty -m smoke on main in project one" "Denied by the guard (design 0010 GRD-R5), git log unchanged"
   row ses.a.smoke-ledger "Session A smoke: sqlite3 -readonly on the disposable baley.db" "The capture and the guard answer are both in the disposable ledger and nowhere else"
   row ses.b.login "Session B: log in once inside the isolated configuration" "Claude Code starts with CLAUDE_CONFIG_DIR set" observed
@@ -492,10 +525,11 @@ EOF
   row ctl.write-baleytoml-denied "The Write to $PROJ/one/baley.toml: the file and the refusal message" "Refused with the file unchanged. A guard deny (GRD-R11) shows only if the hook ran, which a covering Edit rule prevents"
   row ctl.declined-syntax "Bash on main: git commit --allow-empty -m \"\$(date)\" (the scanner declines a substitution)" "Record what happened and the commit the binary was built from, with no claim about what the shell did (design 0010 GRD-R3)" observed
   row ctl.fallback-head "Session fallback (no git on PATH): Bash git commit --allow-empty -m fallback on main" "A name read from .git/HEAD never decides refuse or ask (GRD-R6, GRD-R14). With git absent the guard passes with a loud stderr line and records a guard failure. Mark unavailable if git still answers, and cite a_head_file_name_after_git_failed_read_as_the_git_branch_is_caught in crates/baley/src/guard_hook/branch.rs"
-  row ctl.latency "Every guard call: the highest elapsed_ms in the timing summary of live-claude-reads.sh" "Below 10,000 ms (design 0010 GRD-R14)"
-  row ctl.timeout-not-denial "A hook that timed out, if one did" "Recorded as a timeout and not as a denial. Mark unavailable if none timed out"
+  row ctl.latency "Every guard call: the highest elapsed_ms and the highest wrapper_ms in the timing summary of live-claude-reads.sh" "Both below 10,000 ms. elapsed_ms times the guard alone and wrapper_ms adds the wrapper around it, which the host's timer also counts (design 0010 GRD-R14)"
+  row ctl.timeout-not-denial "A hook that timed out, if one did: a call at or above 10,000 ms, or a start in hook-starts.jsonl with no timing line (the unfinished calls section of live-claude-reads.sh)" "Recorded as a timeout and not as a denial. Mark unavailable if none timed out"
   row ctl.contention-exit "Guard calls while another session exits (rows exit.overlap-1, exit.overlap-2 and exit.overlap-3)" "Every call answers inside its time"
   row ctl.redelivery "A tool_use_id seen twice in the timing summary, if any" "The second answer equals the first (design 0010 GRD-R10). Mark unavailable if none repeated"
+  row ctl.server-stderr-visible "stderr-control session: where Claude Code shows the marker line its server wrote to standard error, with no redirect (the terminal, /mcp, results/debug-stderr-control.log)" "Recorded as observed: each of the three places is named as held or not held, and the same for any exit checkpoint line the server wrote" observed
   row ctl.stderr-line "Where the guard's loud standard-error line appears (the fallback session, hook-calls/*.err, the debug log)" "Recorded as observed. Claude Code sends a hook's stderr on exit 0 to its debug log only (design 0010 GRD-R6 and GRD-R9)" observed
 
   section "Fields" "What tool_input carried for each tool, transcribed from the stand-in probe's hook-stdin.jsonl (probe-claude.sh), never from this run's wrapper."
@@ -511,8 +545,8 @@ EOF
   row fld.notebookedit "NotebookEdit tool_input field names" "notebook_path" observed
 
   section "Identities" "Read from the event.caller column of the disposable ledger. The host session id is recorded and never compared."
-  row id.explicit.startup "Session A: CLAUDE_PROJECT_DIR at startup and the server's working_directory from the ledger" "Both recorded; project_directory is project one, working_directory is what the server ran in" observed
-  row id.user-scope.startup "Session B (started in sub): CLAUDE_PROJECT_DIR at startup and the server's working_directory from the ledger" "Both recorded; project_directory is project one, working_directory is what the server ran in" observed
+  row id.explicit.startup "Session A: CLAUDE_PROJECT_DIR at startup and the server's working_directory from the ledger" "Both recorded and not judged: project_directory is the folder Claude Code exported, working_directory is what the server ran in" observed
+  row id.user-scope.startup "Session B (started in sub): CLAUDE_PROJECT_DIR at startup and the server's working_directory from the ledger" "Both recorded and not judged: project_directory is the folder Claude Code exported, working_directory is what the server ran in" observed
   row id.two-sessions "Two distinct baley_session values bound to project one (sessions A and B)" "Two different UUIDs on events of project one (ADR 0034)"
   row id.subagent-session "A subagent of session A captures a note" "Its caller carries the baley_session of session A"
   row id.cd "/cd to project two, then one capture and one denied commit" "Recorded as observed: the native ids in the server's and the hook's callers" observed
@@ -529,7 +563,12 @@ EOF
   row conc.two-sessions "Sessions A and B at the same time: overlapping baley_version and help calls and distinct captures" "Every call answers and every capture is recorded once, with no loss or silent merge"
   row conc.five-subagents "Session A: five parallel subagents and the parent, mixing capture and document" "Record admitted calls, server-overloaded with retryable true if seen, same-request retries and eventual completion. Otherwise write: saturation not observed (ADR 0034)" observed
 
-  section "Exits" "One row per exiting server. Each server's standard error is in results/server-stderr/<pid>.log."
+  section "Replay" "A capture sent again with its original request id after the server restarted."
+  row rep.same-id "Same request_id and input after a restart" "The original receipt, and the capture count for that request_id stays one"
+  row rep.changed-input "Same request_id with changed text" "Refused as request-id-reuse, with nothing recorded"
+  row rep.stale-expected "Stale expected observations" "Not applicable: no served operation carries one" observed
+
+  section "Exits" "One row per exiting server. Each server's standard error is in results/server-stderr/<pid>.log, except the stderr-control server's, which is not redirected."
   row exit.session-a "Session A exits" "Exactly one 'baley: exit checkpoint' line in its stderr file"
   row exit.session-b "Session B exits" "Exactly one exit checkpoint line"
   row exit.resume-id "The resume-id session exits" "Exactly one exit checkpoint line"
@@ -539,6 +578,7 @@ EOF
   row exit.missing-project "The missing-project session exits" "Exactly one exit checkpoint line"
   row exit.no-session-id "The no-session-id session exits" "Exactly one exit checkpoint line"
   row exit.fork "The fork session exits" "Exactly one exit checkpoint line"
+  row exit.nearer-file "The nearer-file session exits" "Exactly one exit checkpoint line"
   row exit.absent-sandbox "The absent-sandbox session exits" "Exactly one exit checkpoint line, if a server started"
   row exit.fallback "The fallback session exits" "Exactly one exit checkpoint line"
   row exit.other-servers "Any other server file in results/server-stderr (a restart after /cd, /clear or /branch)" "Exactly one exit checkpoint line each, recorded with the command that ended it" observed
@@ -547,11 +587,6 @@ EOF
   row exit.overlap-3 "Overlap 3, as above" "As above"
   row exit.burst "Burst at exit: a burst of calls in flight when a session exits (#190)" "Every call that was read is answered (server-overloaded at worst), and the drain line appears if the 10-second bound passed (ADR 0034)"
   row exit.no-idle-checkpoint "Every stderr file, outside the exit" "No checkpoint line other than at exit: none exists in code"
-
-  section "Replay" "A capture sent again with its original request id after the server restarted."
-  row rep.same-id "Same request_id and input after a restart" "The original receipt, and the capture count for that request_id stays one"
-  row rep.changed-input "Same request_id with changed text" "Refused as request-id-reuse, with nothing recorded"
-  row rep.stale-expected "Stale expected observations" "Not applicable: no served operation carries one" observed
 
   section "Variants" "Sessions whose project or session id is missing, invalid or shared."
   row var.invalid.project-calls "invalid-project session: capture and document" "failed, with a code naming CLAUDE_PROJECT_DIR as the place"
@@ -563,7 +598,7 @@ EOF
   section "Hand-offs" "What the earlier builds hand to this run."
   row hand.init "Owner init: results/init-one.txt and init-one.status" "Exit status 0, baley.toml written, project recorded" observed
   row hand.config-show "In project one: baley config show" "Host-specific settings listed with their layers" observed
-  row hand.nearer-file "Session B started in sub: the project the server bound" "Project one, found by the nearer baley.toml"
+  row hand.nearer-file "nearer-file session (its server's CLAUDE_PROJECT_DIR is $PROJ/one/sub): the project the capture lands in" "Project one, found by walking up from sub to the nearer baley.toml, with sub as the caller's project_directory"
   row hand.checkout-admission "The ledger's checkout rows for project one" "Project one's checkout admitted" observed
   row hand.keys-detection "baley models update in the owner's real environment, after the post-run rows" "Reports detection per provider with a key, a failed detection exits 0" observed
   row hand.restore-doctor "baley doctor and the restore report on the disposable ledger" "No finding on a ledger no restore touched" observed
@@ -572,9 +607,9 @@ EOF
   row hand.parts.document-main "document of the large capture, part 1, in the main session" "A part of exactly 24,576 bytes arrives whole, naming the next part"
   row hand.parts.document-subagent "document of the large capture, part 1, in a subagent" "A part of exactly 24,576 bytes arrives whole, naming the next part"
   row hand.instruction-evidence "instruction for bal-capture, then a capture naming it as instruction" "The capture's caller carries the instruction evidence"
-  row hand.tools.explicit-main "Session A: baley_version, baley_query and baley_apply callable in the main session without a tool search" "All three visible (HST-R20)"
+  row hand.tools.explicit-main "Session A, a fresh session, before any other Baley call: baley_version, baley_query and baley_apply callable in the main session without a tool search" "All three callable with no tool search in the transcript (HST-R20). Record whether tool search was active, since a session that never defers a tool proves nothing"
   row hand.tools.explicit-subagent "Session A: the same three in a subagent" "All three visible (HST-R20)"
-  row hand.tools.user-main "Session B (alwaysLoad registration): the same three in the main session" "All three visible (HST-R20)"
+  row hand.tools.user-main "Session B (alwaysLoad registration), a fresh session, before any other Baley call: the same three in the main session" "All three callable with no tool search in the transcript (HST-R20). Record whether tool search was active"
   row hand.tools.user-subagent "Session B: the same three in a subagent" "All three visible (HST-R20)"
   row hand.skill-listed "Session B: the bal-help skill from the isolated configuration" "Listed in the session"
   row hand.skill-run "Session B: run the bal-help skill" "It calls baley_query, each call asking for approval since a stub carries no allowed-tools line (ADR 0009)"
@@ -586,9 +621,9 @@ EOF
   row post.views-user "baley verify --views user" "Exit status 0"
   row post.doctor "baley doctor" "Exit status 0"
   row post.stream-versions "Per project and stream: stream_version unique and increasing" "No stream with a lowest version other than 1 or a count other than its span"
-  row post.captures-once "Each expected capture exactly once, with its caller" "One capture.recorded per request_id the rows sent"
+  row post.captures-once "Each capture expected to be recorded, exactly once, with its caller (live-claude.md, Request ids)" "One capture.recorded per such request_id, none for 91 to 93, and for the burst ids 81 to 86 one or none"
   row post.text-equal "Stored text equal to the text each row sent (large capture: byte count and SHA-256)" "Equal"
-  row post.no-loss "No capture lost, none silently merged" "Every request_id sent appears once"
+  row post.no-loss "No capture lost, none silently merged" "Every request_id expected to be recorded appears once. Ids 91, 92 and 93 are refused and appear never. Ids 81 to 86 and any request an exit cut off before the server read it may leave no event, and that is not a loss. No id appears twice and no event holds another request's text"
   row post.real-folders "The owner's real Baley folders against pins.txt" "No difference"
 }
 write_sheet > "$SHEET"
@@ -618,6 +653,8 @@ TEXT
   launch missing-project "$PROJ/one" "" mcp-missing-project.json ""
   launch no-session-id "$PROJ/one" "" mcp-no-session-id.json ""
   launch fork "$PROJ/fork" "" mcp-fork.json ""
+  launch nearer-file "$PROJ/one/sub" "" mcp-nearer-file.json ""
+  launch stderr-control "$PROJ/one" "" mcp-stderr-control.json ""
   launch absent-sandbox "$PROJ/one" "PATH=$ROOT/bin-nosandbox " mcp-explicit.json ""
   launch fallback "$PROJ/one" "PATH=$ROOT/bin-nogit " mcp-explicit.json ""
   cat <<TEXT

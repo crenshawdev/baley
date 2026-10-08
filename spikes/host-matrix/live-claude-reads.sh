@@ -1,13 +1,21 @@
 #!/bin/sh
 # Post-run reads for the live Claude Code qualification. It reads what live-claude.sh prepared and the
-# sessions left behind, opens the ledger read-only and changes nothing. The output is pasted into the
-# post-run rows of the observation sheet: sh live-claude-reads.sh > <root>/results/reads.txt
+# sessions left behind, opens the ledger read-only and changes nothing but a scratch folder it removes.
+# The output is pasted into the post-run rows of the observation sheet:
+#   sh live-claude-reads.sh > <root>/results/reads.txt
 set -u
 
 case "${HOME:-}" in
   /?*) ;;
   *) echo "HOME must be an absolute path" >&2; exit 1 ;;
 esac
+
+# BALEY_HOME would make home and config one folder, so a shell that sets it (an empty value included)
+# is refused, as live-claude.sh refuses it. The disposable folders are the only ones these reads use.
+if [ -n "${BALEY_HOME+set}" ]; then
+  echo "BALEY_HOME is set. Unset it: it makes home and config one folder, and these reads use two." >&2
+  exit 1
+fi
 
 ROOT="$HOME/.local/share/baley-live"
 DATA="$ROOT/data"
@@ -29,11 +37,15 @@ for TOOL in sqlite3 jq sha256sum xxd; do
   command -v "$TOOL" >/dev/null 2>&1 || { echo "$TOOL is required and is not on PATH" >&2; exit 1; }
 done
 
-# The disposable folders only, never BALEY_HOME.
-unset BALEY_HOME
+# From here on the baley commands see the disposable folders only.
 XDG_DATA_HOME="$DATA"
 XDG_CONFIG_HOME="$CONF"
 export XDG_DATA_HOME XDG_CONFIG_HOME
+
+# Scratch files live in a folder this run creates and owns, so a file or link left at a predictable name
+# in results can never be written through.
+WORK=$(mktemp -d "$OUT/.reads.XXXXXX") || { echo "could not create a scratch folder in $OUT" >&2; exit 1; }
+trap 'rm -rf "$WORK"' EXIT
 
 pin() {
   sed -n "s/^$1: //p" "$OUT/pins.txt" 2>/dev/null
@@ -113,20 +125,31 @@ for FILE in "$OUT"/server-stderr/*; do
   grep "^baley: work still open after" "$FILE"
 done
 
-heading "hook timing: calls per tool with the highest and median elapsed milliseconds"
+heading "hook timing: calls per tool with the highest and median elapsed milliseconds (the guard alone), the highest wrapper milliseconds and the highest overhead (wrapper minus guard)"
 TIMING="$OUT/hook-timing.jsonl"
+STARTS="$OUT/hook-starts.jsonl"
 if [ -s "$TIMING" ]; then
-  jq -sr 'group_by(.tool_name)[] | (map(.elapsed_ms) | sort) as $e | "\(.[0].tool_name) calls=\(length) highest_ms=\($e[-1]) median_ms=\($e[(length / 2 | floor)])"' "$TIMING"
+  jq -sr 'group_by(.tool_name)[] | (map(.elapsed_ms) | sort) as $e | (map(.wrapper_ms // empty) | sort) as $w | (map(.overhead_ms // empty) | sort) as $o | "\(.[0].tool_name) calls=\(length) highest_ms=\($e[-1]) median_ms=\($e[(length / 2 | floor)]) highest_wrapper_ms=\(if ($w | length) > 0 then $w[-1] else "n/a" end) highest_overhead_ms=\(if ($o | length) > 0 then $o[-1] else "n/a" end)"' "$TIMING"
   heading "hook timing: guard decisions by tool"
   jq -sr 'group_by([.tool_name, (.permissionDecision // "none")])[] | "\(.[0].tool_name) \(.[0].permissionDecision // "none") \(length)"' "$TIMING"
-  heading "hook timing: calls at or above 10,000 ms"
-  jq -c 'select(.elapsed_ms >= 10000)' "$TIMING"
+  heading "hook timing: finished calls at or above 10,000 ms (the guard alone, or the whole wrapper)"
+  jq -c 'select(.elapsed_ms >= 10000 or (.wrapper_ms // 0) >= 10000)' "$TIMING"
   echo "(no lines above means none)"
   heading "hook timing: tool_use_id seen more than once"
   jq -sr 'group_by(.tool_use_id)[] | select(length > 1 and .[0].tool_use_id != "") | "\(.[0].tool_use_id) seen \(length) times"' "$TIMING"
   echo "(no lines above means none)"
 else
-  echo "no hook-timing.jsonl: no hook call went through the wrapper"
+  echo "no hook-timing.jsonl: no hook call finished through the wrapper"
+fi
+# A call the host kills at its timeout never reaches the line above, so it shows only here.
+heading "hook timing: calls that started and did not finish (killed at the timeout, or still running)"
+if [ -s "$STARTS" ]; then
+  FINISHED="$TIMING"
+  [ -s "$TIMING" ] || { : > "$WORK/none"; FINISHED="$WORK/none"; }
+  jq -c --slurpfile finished "$FINISHED" 'select(.call as $c | ($finished | map(.call) | index($c)) == null)' "$STARTS"
+  echo "(no lines above means every started call finished)"
+else
+  echo "no hook-starts.jsonl: no hook call went through the wrapper"
 fi
 
 # The owner's real Baley folders, listed again with the same command live-claude.sh used.
@@ -140,13 +163,12 @@ list_real() {
 for KIND in real-home real-config; do
   heading "$KIND against pins.txt"
   FOLDER=$(sed -n "s/^begin $KIND //p" "$OUT/pins.txt")
-  sed -n "/^begin $KIND /,/^end $KIND\$/p" "$OUT/pins.txt" | sed '1d;$d' > "$OUT/.before-$KIND"
-  list_real "$FOLDER" > "$OUT/.after-$KIND"
-  if diff "$OUT/.before-$KIND" "$OUT/.after-$KIND"; then
+  sed -n "/^begin $KIND /,/^end $KIND\$/p" "$OUT/pins.txt" | sed '1d;$d' > "$WORK/before-$KIND"
+  list_real "$FOLDER" > "$WORK/after-$KIND"
+  if diff "$WORK/before-$KIND" "$WORK/after-$KIND"; then
     echo "$FOLDER: no difference"
   else
     echo "$FOLDER: DIFFERENT (left: pins.txt, right: now)"
   fi
-  rm -f "$OUT/.before-$KIND" "$OUT/.after-$KIND"
 done
 exit 0
