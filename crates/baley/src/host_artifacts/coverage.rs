@@ -30,7 +30,10 @@
 //!   timeout below the guard's budget;
 //! - an `allowWrite` entry inside a folder is a gap, although Claude Code
 //!   keeps a `denyWrite` entry inside an otherwise writable path. A narrower
-//!   `allowRead` entry does re-open a `denyRead` folder.
+//!   `allowRead` entry does re-open a `denyRead` folder;
+//! - an `allowRead` or `allowWrite` entry that does not start with `/` is a
+//!   gap, reported as not judged, even when it points outside the folders:
+//!   its base is not an input here.
 //!
 //! Host facts the judge depends on, read on 2026-10-07 from Claude Code
 //! 2.1.293's bundle:
@@ -38,13 +41,9 @@
 //!   even when `allowUnsandboxedCommands` is false, and the host's own
 //!   settings check names any non-empty list as exempting commands. So
 //!   every entry, whatever it names, voids each verdict the sandbox carries.
-//!
-//! One gap runs the other way and is written down here: an `allowRead` or
-//! `allowWrite` entry is judged only when it is absolute. A `~/` entry needs
-//! the owner's home folder and a relative one the settings file's place, and
-//! neither is an input yet, so such an entry pointing into a folder is not
-//! caught. `baley install` knows both when it composes (Build 3 T15) and
-//! adds them at [`Inputs`].
+//! - An `allowRead` or `allowWrite` entry may be absolute, `~/`, resolved
+//!   against the owner's home folder, or relative, resolved against the
+//!   place of the settings file it came from.
 
 use std::path::{Path, PathBuf};
 
@@ -170,6 +169,16 @@ pub enum Cause {
         /// The entry as written.
         entry: String,
     },
+    /// An `allowRead` or `allowWrite` entry that does not start with `/`.
+    /// The host resolves it against the owner's home folder or the settings
+    /// file's place, neither of which the judge has, so it may re-open any
+    /// path and is reported as not judged.
+    Unjudged {
+        /// The list.
+        list: &'static str,
+        /// The entry as written.
+        entry: String,
+    },
     /// `permissions.deny` lacks this rule.
     NoRule(String),
     /// No `PreToolUse` item runs the guard for the tool.
@@ -285,6 +294,7 @@ pub fn judge(inputs: &Inputs<'_>) -> Coverage {
                             Err(report) => causes.push(Cause::Unrendered(report.clone())),
                         }
                     }
+                    causes.extend(unjudged(inputs.settings, access));
                     (SANDBOX, causes)
                 }
                 Tool::Read | Tool::Grep | Tool::Glob => {
@@ -321,6 +331,7 @@ pub fn judge(inputs: &Inputs<'_>) -> Coverage {
                 Ok(text) => {
                     let mut causes = sandbox.clone();
                     causes.extend(sandbox_path(inputs.settings, Access::Write, &text));
+                    causes.extend(unjudged(inputs.settings, Access::Write));
                     causes.extend(rules(inputs, &[Ok(text)], edit_file_rule));
                     causes
                 }
@@ -378,12 +389,17 @@ fn sandbox_settings(inputs: &Inputs<'_>) -> Vec<Cause> {
     causes
 }
 
-/// The causes that keep the sandbox from denying `access` to one path.
-fn sandbox_path(settings: &Value, access: Access, path: &str) -> Vec<Cause> {
-    let (deny, allow) = match access {
+/// The sandbox's deny list and allow list for one access.
+fn lists(access: Access) -> (&'static str, &'static str) {
+    match access {
         Access::Read => ("denyRead", "allowRead"),
         Access::Write => ("denyWrite", "allowWrite"),
-    };
+    }
+}
+
+/// The causes that keep the sandbox from denying `access` to one path.
+fn sandbox_path(settings: &Value, access: Access, path: &str) -> Vec<Cause> {
+    let (deny, allow) = lists(access);
     let mut causes = Vec::new();
     if !strings(settings, &format!("/sandbox/filesystem/{deny}")).contains(&path) {
         causes.push(Cause::NotDenied {
@@ -392,7 +408,7 @@ fn sandbox_path(settings: &Value, access: Access, path: &str) -> Vec<Cause> {
         });
     }
     for entry in strings(settings, &format!("/sandbox/filesystem/{allow}")) {
-        if lies_within(entry, path) {
+        if reach(entry, path) == Reach::Within {
             causes.push(Cause::Reopened {
                 list: allow,
                 entry: entry.to_owned(),
@@ -400,6 +416,21 @@ fn sandbox_path(settings: &Value, access: Access, path: &str) -> Vec<Cause> {
         }
     }
     causes
+}
+
+/// One cause per allow entry for `access` that cannot be placed. It holds
+/// whatever path is compared, so it goes into a verdict once, not once per
+/// folder.
+fn unjudged(settings: &Value, access: Access) -> Vec<Cause> {
+    let (_, allow) = lists(access);
+    strings(settings, &format!("/sandbox/filesystem/{allow}"))
+        .into_iter()
+        .filter(|entry| components(entry).is_none())
+        .map(|entry| Cause::Unjudged {
+            list: allow,
+            entry: entry.to_owned(),
+        })
+        .collect()
 }
 
 /// The causes that keep `permissions.deny` from holding `rule` for each path.
@@ -510,25 +541,43 @@ fn is_guard(handler: &Value, command: &str) -> bool {
         && shell
 }
 
-/// Whether a sandbox list entry names `path` or a path inside it. Only an
-/// absolute entry is judged. `.` and `..` are resolved by name, and a
+/// Where a sandbox list entry stands against a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// The entry names the path or a path inside it.
+    Within,
+    /// The entry names neither.
+    Outside,
+    /// The entry does not start with `/`, so what it names depends on a base
+    /// the caller does not have.
+    Unjudged,
+}
+
+/// Where a sandbox list entry stands against `path`, which is absolute. An
+/// entry is placed only when it starts with `/`; a `~/` or relative entry
+/// is [`Reach::Unjudged`]. `.` and `..` are resolved by name, and a
 /// component holding a pattern character is taken to match any name, so no
 /// spelling slips an entry past the check.
-pub fn lies_within(entry: &str, path: &str) -> bool {
-    let (Some(entry), Some(path)) = (components(entry), components(path)) else {
-        return false;
+pub fn reach(entry: &str, path: &str) -> Reach {
+    let Some(entry) = components(entry) else {
+        return Reach::Unjudged;
+    };
+    let Some(path) = components(path) else {
+        return Reach::Outside;
     };
     for (index, name) in path.iter().enumerate() {
         match entry.get(index) {
-            None => return false,
-            Some(&"**") => return true,
+            None => return Reach::Outside,
+            Some(&"**") => return Reach::Within,
             Some(part) if part == name || part.contains(['*', '?', '[']) => {}
-            Some(_) => return false,
+            Some(_) => return Reach::Outside,
         }
     }
-    true
+    Reach::Within
 }
 
+/// The components of an absolute path with `.` and `..` resolved, or none
+/// when it does not start with `/`.
 fn components(path: &str) -> Option<Vec<&str>> {
     if !path.starts_with('/') {
         return None;
@@ -895,6 +944,54 @@ mod tests {
                 .collect();
             assert_eq!(gap(&coverage, tool, Access::Read), entries);
             assert!(covered(&coverage, tool, Access::Write));
+        }
+    }
+
+    #[test]
+    fn a_non_absolute_allow_entry_read_as_harmless_is_caught() {
+        let allowing = |list: &str, entry: &str| {
+            let mut settings = ours();
+            settings["sandbox"]["filesystem"][list] = json!([entry]);
+            judged(&settings, &guard_hook(), &[])
+        };
+        for entry in ["~/.local/share/crenshawdev/baley/ledger", "relative/path"] {
+            let coverage = allowing("allowRead", entry);
+            let expected = [Cause::Unjudged {
+                list: "allowRead",
+                entry: entry.into(),
+            }];
+            for tool in SHELL_TOOLS {
+                assert_eq!(gap(&coverage, tool, Access::Read), expected, "{tool:?}");
+                assert!(covered(&coverage, tool, Access::Write), "{entry}");
+            }
+            for file in &coverage.files {
+                assert!(matches!(file.write, Verdict::Covered { .. }), "{file:?}");
+            }
+        }
+        for entry in ["~/notes", "relative/path"] {
+            let coverage = allowing("allowWrite", entry);
+            let expected = vec![Cause::Unjudged {
+                list: "allowWrite",
+                entry: entry.into(),
+            }];
+            for tool in SHELL_TOOLS {
+                assert_eq!(gap(&coverage, tool, Access::Write), expected, "{tool:?}");
+                assert!(covered(&coverage, tool, Access::Read), "{entry}");
+            }
+            assert_eq!(coverage.files.len(), 2);
+            for file in &coverage.files {
+                assert_eq!(file.write, Verdict::Gap(expected.clone()), "{entry}");
+            }
+        }
+        let coverage = allowing("allowRead", "/home/o/projects");
+        for judged in &coverage.tools {
+            assert!(
+                matches!(judged.verdict, Verdict::Covered { .. }),
+                "{judged:?}"
+            );
+        }
+        for file in &coverage.files {
+            assert!(matches!(file.write, Verdict::Covered { .. }), "{file:?}");
         }
     }
 

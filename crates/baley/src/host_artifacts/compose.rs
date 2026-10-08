@@ -14,7 +14,7 @@
 
 use serde_json::{Map, Value};
 
-use super::coverage::lies_within;
+use super::coverage::{Reach, reach};
 use super::executable::Executable;
 use super::{hook, registration};
 use crate::folders::Folders;
@@ -53,6 +53,16 @@ pub enum Conflict {
     /// An `allowRead` or `allowWrite` entry equals or lies inside the home or
     /// the config folder.
     Reopened {
+        /// The list.
+        list: &'static str,
+        /// The entry as written.
+        entry: String,
+    },
+    /// An `allowRead` or `allowWrite` entry that does not start with `/`.
+    /// The host resolves it against the owner's home folder or the settings
+    /// file's place, neither of which composition has, so whether it
+    /// re-opens a folder cannot be judged. It stays in the document.
+    Unjudged {
         /// The list.
         list: &'static str,
         /// The entry as written.
@@ -242,11 +252,12 @@ fn scan(
         .collect();
     for list in ["allowRead", "allowWrite"] {
         for entry in strings(document, &format!("/sandbox/filesystem/{list}")) {
-            if folders.iter().any(|folder| lies_within(entry, folder)) {
-                conflicts.push(Conflict::Reopened {
-                    list,
-                    entry: entry.to_owned(),
-                });
+            let reaches: Vec<Reach> = folders.iter().map(|folder| reach(entry, folder)).collect();
+            let entry = entry.to_owned();
+            if reaches.contains(&Reach::Within) {
+                conflicts.push(Conflict::Reopened { list, entry });
+            } else if reaches.contains(&Reach::Unjudged) {
+                conflicts.push(Conflict::Unjudged { list, entry });
             }
         }
     }
@@ -516,6 +527,28 @@ mod tests {
             assert!(!result.is_complete(), "{existing}");
             assert_eq!(result.document["sandbox"], existing["sandbox"]);
         }
+    }
+
+    #[test]
+    fn a_non_absolute_allow_entry_kept_as_success_is_caught() {
+        for (list, entry) in [
+            ("allowRead", "~/.local/share/crenshawdev/baley/ledger"),
+            ("allowWrite", "relative/path"),
+        ] {
+            let existing = json!({"sandbox": {"filesystem": {list: [entry]}}});
+            let result = composed(&existing, &settings());
+            assert_eq!(
+                result.conflicts,
+                [Conflict::Unjudged {
+                    list,
+                    entry: entry.into(),
+                }]
+            );
+            assert!(!result.is_complete(), "{entry}");
+        }
+        let existing = json!({"sandbox": {"filesystem": {"allowRead": ["/home/o/projects"]}}});
+        let result = composed(&existing, &settings());
+        assert!(result.conflicts.is_empty(), "{:?}", result.conflicts);
     }
 
     #[test]
