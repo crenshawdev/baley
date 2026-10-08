@@ -256,6 +256,9 @@ pub struct Findings {
     /// What the settings and hook documents configure, or why that was not
     /// judged. None when there is no map.
     pub coverage: Option<Result<protection::Judged, protection::NotJudged>>,
+    /// Whether the guard runs before all nine tools of the hook's matcher.
+    /// None when the hook placement is unknown or its document unusable.
+    pub nine_tools: Option<protection::NineTools>,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -280,6 +283,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 executable: None,
                 documents: Vec::new(),
                 coverage: None,
+                nine_tools: None,
             };
         }
     };
@@ -386,6 +390,7 @@ pub fn judge(observation: &Observation) -> Findings {
             observation.checkout_file.as_deref(),
             &[],
         )),
+        nine_tools: protection::nine_tools(&mapped.map, &documents),
         documents,
     }
 }

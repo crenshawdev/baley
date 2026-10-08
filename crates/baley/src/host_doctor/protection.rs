@@ -7,9 +7,14 @@
 
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 use super::{Content, Document};
 use crate::folders::Folders;
-use crate::host_artifacts::coverage::{self, Coverage, Inputs, Mechanism};
+use crate::host_artifacts::coverage::{
+    self, Coverage, Inputs, Mechanism, Tool, is_guard, matcher_names,
+};
+use crate::host_artifacts::hook;
 use crate::host_artifacts::placement::{Artifact, PlacementMap};
 
 /// Coverage judged over a settings document and a hook document.
@@ -86,9 +91,58 @@ pub fn judge(
     })
 }
 
+/// The nine-tool check over the hook document: which tools of the hook's
+/// matcher have no `PreToolUse` item that runs the guard for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NineTools {
+    /// The document the hooks were read from.
+    pub hook: PathBuf,
+    /// The tools no item runs the guard for, in matcher order. Empty when
+    /// all nine are guarded.
+    pub missing: Vec<Tool>,
+}
+
+/// Checks that the guard runs before every tool of `hook::MATCHER`. The
+/// coverage judge credits Bash, Monitor and PowerShell to the sandbox and
+/// never asks whether the guard also runs for them, so this is its own
+/// judgement. A matcher in one item never borrows another item's guard, and
+/// a handler counts only when the coverage judge accepts it whole. Nothing
+/// is judged when the hook placement is unknown or its document unusable.
+pub fn nine_tools(map: &PlacementMap, documents: &[Document]) -> Option<NineTools> {
+    let document = documents
+        .iter()
+        .find(|document| document.artifacts.contains(&Artifact::Hook))?;
+    let Content::Object(value) = &document.content else {
+        return None;
+    };
+    let command = hook::command(map.executable());
+    let items: &[Value] = value
+        .pointer(&format!("/hooks/{}", hook::EVENT))
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice);
+    let guarded = |tool: Tool| {
+        items.iter().any(|item| {
+            matcher_names(item.get("matcher"), tool)
+                && item
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|handlers| {
+                        handlers.iter().any(|handler| is_guard(handler, &command))
+                    })
+        })
+    };
+    Some(NineTools {
+        hook: document.path.clone(),
+        missing: Tool::ALL
+            .into_iter()
+            .filter(|tool| !guarded(*tool))
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::json;
 
     use super::super::fixtures::*;
     use super::*;
@@ -164,5 +218,74 @@ mod tests {
             );
         }
         assert_eq!(judged.settings, PathBuf::from(SETTINGS));
+    }
+    /// A hook document holding the given `PreToolUse` items, each as a
+    /// matcher and the command it runs.
+    fn hook_items(items: &[(&str, &str)]) -> Document {
+        let handler_for = |command: &str| {
+            let mut handler =
+                hook::render(&executable())["hooks"][hook::EVENT][0]["hooks"][0].clone();
+            handler["command"] = command.into();
+            handler
+        };
+        let items: Vec<Value> = items
+            .iter()
+            .map(|(matcher, command)| json!({"matcher": matcher, "hooks": [handler_for(command)]}))
+            .collect();
+        document(
+            HOOKS,
+            &[Artifact::Hook],
+            json!({"hooks": {hook::EVENT: items}}),
+        )
+    }
+
+    fn missing_tools(document: Document) -> Vec<&'static str> {
+        let map = map(None, None, None, Some(HOOKS), None);
+        nine_tools(&map, &[document])
+            .expect("the hook document is usable")
+            .missing
+            .into_iter()
+            .map(Tool::name)
+            .collect()
+    }
+
+    #[test]
+    fn a_guard_split_across_two_hook_items_reported_as_missing_tools_is_caught() {
+        let guard = hook::command(&executable());
+        let split = hook_items(&[
+            ("Bash|Monitor|PowerShell", &guard),
+            ("Read|Grep|Glob|Write|Edit|NotebookEdit", &guard),
+        ]);
+        assert_eq!(missing_tools(split), Vec::<&str>::new());
+
+        let borrowed = hook_items(&[
+            ("Read|Grep|Glob|Write|Edit|NotebookEdit", &guard),
+            ("Bash|Monitor|PowerShell", "/bin/echo"),
+        ]);
+        assert_eq!(missing_tools(borrowed), ["Bash", "Monitor", "PowerShell"]);
+    }
+
+    #[test]
+    fn a_tool_named_by_a_pattern_or_a_look_alike_guard_counted_as_guarded_is_caught() {
+        let guard = hook::command(&executable());
+        let all_nine = [
+            "Bash",
+            "Monitor",
+            "PowerShell",
+            "Read",
+            "Grep",
+            "Glob",
+            "Write",
+            "Edit",
+            "NotebookEdit",
+        ];
+        let echo_guard = format!("/bin/echo {guard}");
+        for item in [
+            ("Ba.*", guard.as_str()),
+            (hook::MATCHER, "/bin/echo guard"),
+            (hook::MATCHER, echo_guard.as_str()),
+        ] {
+            assert_eq!(missing_tools(hook_items(&[item])), all_nine, "{item:?}");
+        }
     }
 }

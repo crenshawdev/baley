@@ -108,6 +108,21 @@ impl Report {
             ),
             Some(Ok(judged)) => gap |= coverage_lines(judged, &mut lines),
         }
+        if let Some(nine) = &findings.nine_tools {
+            let hook = nine.hook.display();
+            if nine.missing.is_empty() {
+                lines.push(format!(
+                    "hook: a PreToolUse item in {hook} runs the guard for all nine tools in the matcher"
+                ));
+            } else {
+                gap = true;
+                let names: Vec<&str> = nine.missing.iter().map(|tool| tool.name()).collect();
+                lines.push(format!(
+                    "hook: no PreToolUse item in {hook} runs the guard for {}",
+                    names.join(", ")
+                ));
+            }
+        }
         Report {
             lines,
             code: u8::from(gap),
