@@ -512,6 +512,101 @@ fn doctor_prints_the_purge_warning_once_for_the_project_that_lists_a_restore() {
     assert_eq!(r.code, 0);
     assert_eq!(warnings(&r), 1);
 }
+fn host_report(lines: &[&str], code: u8) -> crate::host_doctor::Report {
+    crate::host_doctor::Report {
+        lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+        code,
+    }
+}
+#[test]
+fn doctor_lines_reordered_or_reworded_by_the_host_section_are_caught() {
+    let mut h = health();
+    h.scrub_pending = Some("T0".into());
+    h.integrity = vec!["damaged page".into()];
+    let q = {
+        let mut other = h.projects[0].clone();
+        other.project = ProjectId("Q".into());
+        other
+    };
+    h.projects[0].verify = Ok(with_restores(&[1]));
+    h.projects.push(q);
+    let mut faults = no_faults();
+    faults.faults = vec![
+        "config-unavailable: cannot read /c/config.toml: Permission denied (os error 13)".into(),
+    ];
+    let head = format!("chain head 50 {}", "05".repeat(32));
+    let chain_tail = [
+        "bodies checked 4, tombstones 0",
+        "local anchor row: not compared with a remote anchor",
+        "unanchored age: none",
+        "view set 2, binary 2",
+        "views checked at sequence 50",
+        "no differences",
+        "claims: 0 active, 0 interrupted, 0 awaiting owner",
+    ];
+    let mut expected: Vec<String> = [
+        "epoch 1",
+        "scrub pending since T0",
+        "integrity: damaged page",
+        "database 8192 bytes, log 0 bytes",
+        "settings finding: config-unavailable: cannot read /c/config.toml: Permission denied (os error 13)",
+        "project P (One): local only",
+    ]
+    .map(String::from)
+    .into();
+    expected.push(head.clone());
+    expected.push("matches the remote anchor".into());
+    expected.push(format!(
+        "acknowledged restore at 1: empty behind 60 {}",
+        "06".repeat(32)
+    ));
+    expected.extend(display::PURGE_WARNING.map(String::from));
+    expected.extend(chain_tail.map(String::from));
+    expected.push("project Q (Two): local only".into());
+    expected.push(head);
+    expected.push("matches the remote anchor".into());
+    expected.extend(chain_tail.map(String::from));
+
+    let host = crate::host_doctor::Report::new(&crate::host_doctor::judge(
+        &crate::host_doctor::Observation {
+            placement: crate::host_doctor::all_unknown(Ok("/usr/local/bin/baley".into())),
+        },
+    ));
+    assert!(!host.lines.is_empty());
+    let r = display::with_host(
+        display::doctor(&h, &projects(), &no_reasons(), &faults),
+        &host,
+    );
+    assert_eq!(r.lines[..expected.len()], expected[..]);
+    assert_eq!(r.lines[expected.len()..], host.lines[..]);
+    assert_eq!(warnings(&r), 1);
+    assert_eq!(r.code, 1);
+}
+#[test]
+fn a_clean_host_section_lowering_the_store_code_is_caught() {
+    let mut h = health();
+    h.integrity = vec!["damaged page".into()];
+    for host_code in [0, 1] {
+        let store = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
+        assert_eq!(store.code, 1);
+        let r = display::with_host(store, &host_report(&["host line"], host_code));
+        assert_eq!(r.code, 1, "host code {host_code}");
+        let lines = &r.lines;
+        let damaged = lines.iter().position(|l| l == "integrity: damaged page");
+        let host = lines.iter().position(|l| l == "host line");
+        assert!(damaged.unwrap() < host.unwrap(), "{lines:?}");
+    }
+}
+#[test]
+fn a_host_gap_left_out_of_a_clean_store_code_is_caught() {
+    let store = display::doctor(&health(), &projects(), &no_reasons(), &no_faults());
+    assert_eq!(store.code, 0);
+    let store_lines = store.lines.clone();
+    let r = display::with_host(store, &host_report(&["host gap"], 1));
+    assert_eq!(r.code, 1);
+    assert_eq!(r.lines[..store_lines.len()], store_lines[..]);
+    assert_eq!(r.lines[store_lines.len()..], ["host gap".to_owned()]);
+}
 #[test]
 fn a_failed_export_prints_the_purge_warning_and_exits_one() {
     let r = display::store_error(

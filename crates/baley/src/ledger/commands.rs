@@ -12,7 +12,7 @@ use super::{
 };
 use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
-use crate::{init, policy_step, settings};
+use crate::{host_doctor, init, policy_step, settings};
 use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, ProjectIdentity, Unavailable};
 use baley_core::*;
@@ -140,10 +140,20 @@ fn doctor(
         };
         checks.insert(project, check);
     }
-    store
+    let health = store
         .doctor(&SystemClock::now(), &checks)
-        .map(|h| display::doctor(&h, &projects, &reasons, &judged))
-        .map_err(|e| display::store_error(&e, None))
+        .map_err(|e| display::store_error(&e, None))?;
+    let rendered = display::doctor(&health, &projects, &reasons, &judged);
+    Ok(display::with_host(rendered, &host_report()))
+}
+
+/// The host section: the running binary against a placement map with every
+/// artifact unknown, so each one is reported as not installed.
+fn host_report() -> host_doctor::Report {
+    let observation = host_doctor::Observation {
+        placement: host_doctor::all_unknown(std::env::current_exe()),
+    };
+    host_doctor::Report::new(&host_doctor::judge(&observation))
 }
 fn export(store: &SqliteStore, project: &ProjectId, to: &Path) -> Result<Render, Render> {
     store
