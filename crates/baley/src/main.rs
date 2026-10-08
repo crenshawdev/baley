@@ -24,6 +24,8 @@ struct Cli {
 enum Command {
     /// Run one command with a provider key and redact its output.
     Exec(baley::exec::ExecArgs),
+    /// Print a Claude Code artifact Baley renders, to standard output only.
+    Artifact(baley::host_artifacts::command::ArtifactArgs),
     /// Show every setting with its layer, or change settings in either file.
     Config(baley::config_command::ConfigArgs),
     /// Tie this repository to a ledger project: write baley.toml and record project.initialized.
@@ -106,6 +108,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
     let command = match command {
         Command::Ledger(command) => return baley::ledger::run(command),
         Command::Exec(args) => return baley::exec::run(args),
+        Command::Artifact(args) => return baley::host_artifacts::command::run(args),
         Command::Init(args) => return baley::init::run(args),
         Command::Config(args) => return baley::config_command::run(args),
         Command::Models(args) => return baley::models::run(args),
@@ -114,6 +117,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
     let arguments: Vec<&str> = match &command {
         Command::Ledger(_)
         | Command::Exec(_)
+        | Command::Artifact(_)
         | Command::Init(_)
         | Command::Config(_)
         | Command::Models(_) => {
@@ -277,5 +281,59 @@ mod exec_argument_tests {
             let error = Cli::try_parse_from(input).err().expect("usage refusal");
             assert_eq!(error.exit_code(), 2);
         }
+    }
+}
+
+#[cfg(test)]
+mod artifact_argument_tests {
+    use baley::host_artifacts::command::Request;
+
+    use super::*;
+
+    fn request(input: &[&str]) -> Request {
+        let Command::Artifact(args) = Cli::try_parse_from(input).unwrap().command else {
+            panic!("artifact command lost")
+        };
+        args.request
+    }
+
+    #[test]
+    fn an_artifact_request_lost_or_misread_on_the_way_to_the_command_is_caught() {
+        assert_eq!(
+            request(&["baley", "artifact", "stub", "bal-help"]),
+            Request::Stub {
+                identity: "bal-help".to_owned()
+            }
+        );
+        assert_eq!(
+            request(&[
+                "baley",
+                "artifact",
+                "registration",
+                "--executable",
+                "/x/baley",
+                "--always-load",
+            ]),
+            Request::Registration {
+                executable: "/x/baley".into(),
+                always_load: true,
+            }
+        );
+    }
+
+    #[test]
+    fn artifact_settings_without_a_home_folder_accepted_is_caught() {
+        let error = Cli::try_parse_from([
+            "baley",
+            "artifact",
+            "settings",
+            "--executable",
+            "/x/baley",
+            "--config",
+            "/c",
+        ])
+        .err()
+        .expect("usage refusal");
+        assert_eq!(error.exit_code(), 2);
     }
 }

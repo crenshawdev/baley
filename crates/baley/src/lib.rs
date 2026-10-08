@@ -63,6 +63,8 @@ pub mod guard_budget;
 pub mod guard_hook;
 /// Classifies one hook call's input for the guard: which tool it is and what it carries.
 pub mod hook_input;
+/// The content Claude Code loads for Baley, rendered from compiled tables and supplied values, with no file read or written.
+pub mod host_artifacts;
 /// `baley init`: ties a repository to a ledger project.
 pub mod init;
 /// The compiled instruction registry: every instruction served to a model, by identity, with no disk loader and no override.
