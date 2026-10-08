@@ -1,6 +1,8 @@
 //! Composition: Baley's entries put into one existing settings document,
-//! keeping everything the owner had and reporting every setting that would
-//! leave Baley's protection off (D-18).
+//! keeping everything the owner had and reporting each setting in it that
+//! [`Conflict`] names as leaving Baley's protection off (D-18). A setting
+//! outside that list, or one held in another settings file, is not seen
+//! here.
 //!
 //! The settings layer's merge in `config` is not reused: it replaces arrays
 //! and overwrites values without a word, and here a changed owner value must

@@ -19,7 +19,9 @@
 //! - `coverage`: the judge of what each guarded tool can read and write in
 //!   the folders and the placed files, from a settings document;
 //! - `compose`: Baley's entries put into an owner's existing settings
-//!   document, keeping every unrelated key and reporting every bypass;
+//!   document, keeping every unrelated key and reporting each setting in it
+//!   that turns the sandbox or the hooks off, excludes a command from the
+//!   sandbox or may re-open the folders;
 //! - `command`: `baley artifact`, which prints the stubs, the manifest, the
 //!   registration, the hook and the settings to standard output and writes
 //!   no file.

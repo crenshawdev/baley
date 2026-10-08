@@ -17,8 +17,16 @@
 //! - the `Edit` deny rules and the guard hook, for Write, Edit and
 //!   NotebookEdit.
 //!
-//! The judge is stricter than the host, so it can report a gap Claude Code
-//! would close but never reads as covered what the host leaves open:
+//! It reads the sandbox switches, `filesystem.disabled`, the sandbox's deny
+//! and allow lists, `excludedCommands`, `permissions.deny`,
+//! `disableAllHooks` and the hooks, and no other setting. The host names
+//! further settings that loosen the sandbox, `sandbox.enabledPlatforms`
+//! leaving out this platform among them, and a setting in another settings
+//! file can change what applies; neither is seen here.
+//!
+//! On what it reads, the judge is stricter than the host, so it can report a
+//! gap Claude Code would close but never reads as covered what those
+//! settings leave open:
 //! - a list entry or rule counts only in the spelling `security` renders,
 //!   although Claude Code also accepts `~/` paths and a trailing `/` or `/**`
 //!   on a list entry, and copies `Read` and `Edit` deny rules into the
