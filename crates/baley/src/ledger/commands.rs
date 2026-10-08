@@ -153,19 +153,27 @@ fn doctor(
         .project_file
         .as_ref()
         .map(|file| file.path.clone());
-    let host = host_report(folders.clone(), checkout_file);
+    let ids: Vec<ProjectId> = projects.iter().map(|(id, _)| id.clone()).collect();
+    let host = host_report(folders.clone(), checkout_file, store, &ids);
     Ok(display::with_host(rendered, &host))
 }
 
 /// The host section: the running binary against a placement map with every
-/// artifact unknown, so each one is reported as not installed.
-fn host_report(folders: Folders, checkout_file: Option<PathBuf>) -> host_doctor::Report {
+/// artifact unknown, so each one is reported as not installed, and the
+/// server's context from the last server call the ledger holds.
+fn host_report(
+    folders: Folders,
+    checkout_file: Option<PathBuf>,
+    store: &SqliteStore,
+    projects: &[ProjectId],
+) -> host_doctor::Report {
     let observation = host_doctor::gather(
         host_doctor::all_unknown(std::env::current_exe()),
         folders,
         checkout_file,
         std::env::var_os("PATH").as_deref(),
         std::env::consts::OS,
+        host_doctor::Stored { store, projects },
     );
     host_doctor::Report::new(&host_doctor::judge(&observation))
 }

@@ -27,9 +27,12 @@ pub mod placed;
 pub mod prerequisites;
 pub mod protection;
 pub mod report;
+pub mod server_context;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+use baley_store::{Ledger, ProjectId};
 
 pub use report::Report;
 
@@ -115,17 +118,32 @@ pub struct Observation {
     pub checkout_file: Option<PathBuf>,
     /// The platform and where the sandbox's programs were found.
     pub prerequisites: prerequisites::Observed,
+    /// The last server call the ledger records.
+    pub server: server_context::Observed,
+}
+
+/// The ledger side of the gather: the store to read history from and the
+/// projects the doctor already listed.
+pub struct Stored<'a, S> {
+    /// The store, read through the storage port's history only.
+    pub store: &'a S,
+    /// Every project in the ledger, in id order.
+    pub projects: &'a [ProjectId],
 }
 
 /// Gathers the observation for a placement map: reads each expected file
-/// once and asks the filesystem about the executable. Nothing is written,
-/// opened for writing or run. It owns no rule and has no unit test.
-pub fn gather(
+/// once, asks the filesystem about the executable and pages through the
+/// ledger's history for the last server call. Nothing is written, opened for
+/// writing or run. It owns no rule and has no unit test of its own; one
+/// integration check runs it whole and asserts only that nothing was
+/// written.
+pub fn gather<S: Ledger>(
     placement: Result<PlacementMap, MapFault>,
     folders: Folders,
     checkout_file: Option<PathBuf>,
     path: Option<&OsStr>,
     os: &str,
+    stored: Stored<'_, S>,
 ) -> Observation {
     let host = placement.map(|map| {
         let executable = placed::observe_executable(Path::new(map.executable().as_str()));
@@ -149,6 +167,7 @@ pub fn gather(
         folders,
         checkout_file,
         prerequisites: prerequisites::gather(path, os),
+        server: server_context::gather(stored.store, stored.projects),
     }
 }
 
@@ -272,6 +291,8 @@ pub struct Findings {
     pub nine_tools: Option<protection::NineTools>,
     /// The platform and the sandbox programs it needs, found on `PATH`.
     pub prerequisites: prerequisites::Judged,
+    /// What the last recorded server call shows of the server's context.
+    pub server: server_context::Judged,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -298,6 +319,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 coverage: None,
                 nine_tools: None,
                 prerequisites: prerequisites::judge(&observation.prerequisites),
+                server: server_context::judge(&observation.server),
             };
         }
     };
@@ -408,6 +430,7 @@ pub fn judge(observation: &Observation) -> Findings {
         )),
         nine_tools: protection::nine_tools(&mapped.map, &documents),
         prerequisites,
+        server: server_context::judge(&observation.server),
         documents,
     }
 }
@@ -500,6 +523,7 @@ pub(crate) mod fixtures {
             folders: folders(),
             checkout_file: None,
             prerequisites: linux_with_both(),
+            server: server_context::Observed::NoCall,
         }
     }
 
@@ -521,6 +545,7 @@ pub(crate) mod fixtures {
             folders: folders(),
             checkout_file: None,
             prerequisites: linux_with_both(),
+            server: server_context::Observed::NoCall,
         }
     }
 }
@@ -574,5 +599,148 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod integration {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+
+    use baley_core::capture::CaptureKind;
+    use baley_store::{Admin, Hash, Ledger, ProjectId, RequestId, ServerCaller};
+    use serde_json::json;
+
+    use super::fixtures::{executable, folders, map};
+    use super::*;
+    use crate::host_artifacts::compose::compose;
+    use crate::host_artifacts::{hook, security};
+    use crate::mcp::capture::{CAPTURE_COMMAND, record};
+    use crate::mcp::prepare::{WriteRequest, prepared_command};
+
+    const T0: &str = "2026-10-08T09:00:00Z";
+    const A: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+    const B: &str = "7a2d3b5f-9c0e-4f1a-8b2c-3d4e5f6a7b8c";
+    const SESSION: &str = "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f";
+    const REQUEST: &str = "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f";
+
+    /// Every file under `folder` with its bytes, sorted by path.
+    fn listing(folder: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut found = BTreeMap::new();
+        let mut pending = vec![folder.to_path_buf()];
+        while let Some(next) = pending.pop() {
+            for entry in std::fs::read_dir(&next).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    found.insert(path, bytes);
+                }
+            }
+        }
+        found
+    }
+
+    /// Each listed project with the sequence of its last event.
+    fn heads<S: Ledger + Admin>(store: &S) -> Vec<(ProjectId, Option<u64>)> {
+        let ids: Vec<ProjectId> = Admin::projects(store)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        ids.into_iter()
+            .map(|id| {
+                let head = store.head(&id).unwrap().map(|head| head.seq);
+                (id, head)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_host_check_that_writes_the_ledger_or_a_placed_file_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (project, sub) = (root.join("project"), root.join("project/sub"));
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let store =
+            crate::ledger::open::store(&root.join("home"), T0, crate::ledger::open::options())
+                .unwrap();
+        for (id, name) in [(A, "a"), (B, "b")] {
+            store
+                .create_project(&ProjectId(id.into()), name, T0)
+                .unwrap();
+        }
+        let request = WriteRequest {
+            kind: baley_store::CommandKind(CAPTURE_COMMAND.into()),
+            request_id: RequestId(REQUEST.into()),
+            digest: Hash([1; 32]),
+        };
+        let caller = ServerCaller::new(
+            project.to_str().unwrap(),
+            sub.to_str().unwrap(),
+            "claude-code",
+            SESSION,
+            &json!(7),
+        )
+        .unwrap();
+        let command = prepared_command(&ProjectId(A.into()), &request, 0, T0, &caller);
+        record(&store, &command, CaptureKind::Note, "a note", None).unwrap();
+
+        let place = root.join("place");
+        let help = place.join("skills/bal-help/SKILL.md");
+        let settings = place.join("settings.json");
+        let registration = place.join("claude.json");
+        std::fs::create_dir_all(help.parent().unwrap()).unwrap();
+        let exe = executable();
+        let proposal = security::propose(&folders(), &exe, &[]).settings;
+        let document = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
+        std::fs::write(&settings, serde_json::to_vec(&document).unwrap()).unwrap();
+        std::fs::write(&registration, b"{}").unwrap();
+        let stub = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.identity == "bal-help")
+            .unwrap();
+        std::fs::write(&help, &stub.bytes).unwrap();
+        let empty_path = root.join("bin");
+        std::fs::create_dir_all(&empty_path).unwrap();
+
+        let (settings_text, help_text, registration_text) = (
+            settings.to_str().unwrap(),
+            help.to_str().unwrap(),
+            registration.to_str().unwrap(),
+        );
+        let placement = map(
+            None,
+            Some(help_text),
+            Some(registration_text),
+            Some(settings_text),
+            Some(settings_text),
+        );
+
+        let files_before = listing(&place);
+        let projects_before = Admin::projects(&store).unwrap();
+        let heads_before = heads(&store);
+        let ids: Vec<ProjectId> = projects_before.iter().map(|(id, _)| id.clone()).collect();
+        let search: OsString = empty_path.into();
+        let observation = gather(
+            Ok(placement),
+            folders(),
+            None,
+            Some(search.as_os_str()),
+            "linux",
+            Stored {
+                store: &store,
+                projects: &ids,
+            },
+        );
+        let _ = Report::new(&judge(&observation));
+
+        assert_eq!(listing(&place), files_before);
+        assert_eq!(Admin::projects(&store).unwrap(), projects_before);
+        assert_eq!(heads(&store), heads_before);
+        assert_eq!(heads_before.len(), 2);
     }
 }

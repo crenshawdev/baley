@@ -4,8 +4,9 @@ use std::path::Path;
 
 use super::prerequisites::{Judged as Prerequisites, Kind};
 use super::protection::{Judged, NotJudged};
-use super::{ArtifactState, Findings, MapFault};
+use super::{ArtifactState, Findings, MapFault, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
+use crate::mcp::context::ProjectContext;
 
 /// The heading that opens the host section.
 const HEADING: &str = "Claude Code host checks";
@@ -134,9 +135,43 @@ impl Report {
                 ));
             }
         }
+        server_lines(&findings.server, &mut lines);
         Report {
             lines,
             code: u8::from(gap),
+        }
+    }
+}
+
+/// The server's context as the last recorded server call shows it. None of
+/// these lines is a finding that raises the code: a working directory that
+/// differs from the project is valid, and the lines only tell the owner what
+/// to set when the project variable is not usable.
+fn server_lines(judged: &server_context::Judged, lines: &mut Vec<String>) {
+    match judged {
+        server_context::Judged::NoCall => {
+            lines.push("server context: no server call is recorded in the ledger yet".to_owned());
+        }
+        server_context::Judged::ReadError(text) => lines.push(format!(
+            "server context: the last server call could not be read: {text}"
+        )),
+        server_context::Judged::Call {
+            project,
+            recorded,
+            working_directory,
+            recorded_at,
+        } => {
+            lines.push(match project {
+                ProjectContext::Valid(text) => format!("server CLAUDE_PROJECT_DIR: {text}"),
+                ProjectContext::Missing => "server CLAUDE_PROJECT_DIR is not set (project-context-missing): set it to the project's absolute folder".to_owned(),
+                ProjectContext::Invalid(fault) => format!(
+                    "server CLAUDE_PROJECT_DIR {} cannot be the project (project-context-invalid): {fault}; restore the folder or start the session in an existing project so Claude Code sets it",
+                    recorded.as_deref().unwrap_or_default()
+                ),
+            });
+            lines.push(format!(
+                "server working directory: {working_directory} (from the last server call, recorded at {recorded_at})"
+            ));
         }
     }
 }
@@ -836,5 +871,118 @@ mod tests {
             report.lines
         );
         assert_eq!(report.code, 1, "{:?}", report.lines);
+    }
+
+    use super::super::server_context::{Observed as Server, ServerCall};
+
+    fn server_call(project: Option<&str>, is_directory: bool, working: &str) -> Server {
+        Server::Call(ServerCall {
+            project: project.map(str::to_owned),
+            project_is_directory: is_directory,
+            working_directory: working.to_owned(),
+            recorded_at: "2026-10-08T10:00:05Z".to_owned(),
+        })
+    }
+
+    fn with_server(server: Server) -> Report {
+        let mut observation = unknown_observation();
+        observation.server = server;
+        report_of(&observation)
+    }
+
+    #[test]
+    fn a_missing_or_invalid_project_variable_without_its_fix_is_caught() {
+        let missing = with_server(server_call(None, false, "/w/other"));
+        assert!(
+            names(
+                &missing,
+                &[
+                    "CLAUDE_PROJECT_DIR",
+                    "project-context-missing",
+                    "not set",
+                    "set it to the project's absolute folder"
+                ]
+            ),
+            "{:?}",
+            missing.lines
+        );
+
+        let invalid = with_server(server_call(Some("/w/gone"), false, "/w/other"));
+        assert!(
+            names(
+                &invalid,
+                &[
+                    "CLAUDE_PROJECT_DIR",
+                    "project-context-invalid",
+                    "/w/gone",
+                    "it is not an existing directory",
+                    "restore the folder or start the session in an existing project so Claude Code sets it"
+                ]
+            ),
+            "{:?}",
+            invalid.lines
+        );
+        for report in [&missing, &invalid] {
+            let working = line_for(report, "server working directory");
+            assert!(working.contains("/w/other"), "{working}");
+            assert!(!working.contains("project-context-"), "{working}");
+            assert!(
+                !report
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("CLAUDE_PROJECT_DIR") && line.contains("/w/other")),
+                "{:?}",
+                report.lines
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_and_working_directory_difference_called_a_finding_is_caught() {
+        for working in ["/w/p/sub", "/tmp"] {
+            let report = with_server(server_call(Some("/w/p"), true, working));
+            let project = line_for(&report, "server CLAUDE_PROJECT_DIR");
+            assert!(project.contains("/w/p"), "{project}");
+            assert!(!project.contains(working), "{project}");
+            let directory = line_for(&report, "server working directory");
+            assert!(directory.contains(working), "{directory}");
+            assert!(
+                !report
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("project-context-")),
+                "{:?}",
+                report.lines
+            );
+            assert_eq!(report.code, 0, "{:?}", report.lines);
+        }
+    }
+
+    #[test]
+    fn no_recorded_server_call_reported_as_a_missing_project_is_caught() {
+        let report = with_server(Server::NoCall);
+        assert_eq!(
+            report
+                .lines
+                .iter()
+                .filter(|line| line.contains("no server call is recorded"))
+                .count(),
+            1,
+            "{:?}",
+            report.lines
+        );
+        for word in [
+            "project-context-missing",
+            "project-context-invalid",
+            "CLAUDE_PROJECT_DIR",
+            "working directory",
+        ] {
+            assert!(
+                !report.lines.iter().any(|line| line.contains(word)),
+                "{word}: {:?}",
+                report.lines
+            );
+        }
+        assert_eq!(report.code, 0);
     }
 }
