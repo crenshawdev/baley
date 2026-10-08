@@ -748,7 +748,9 @@ mod integration {
 
     /// Every file under `folder` with its bytes, sorted by path. Over the ledger
     /// home it covers the database and its write-ahead log, which hold every
-    /// durable row, so a changed row, new or old, shows as changed bytes.
+    /// durable row, so a changed row, new or old, shows as changed bytes. The
+    /// `-shm` file is left out: it is SQLite's WAL index, which a plain read may
+    /// update and which holds no durable row.
     fn listing(folder: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         let mut found = BTreeMap::new();
         let mut pending = vec![folder.to_path_buf()];
@@ -757,7 +759,7 @@ mod integration {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     pending.push(path);
-                } else {
+                } else if !path.to_string_lossy().ends_with("-shm") {
                     let bytes = std::fs::read(&path).unwrap();
                     found.insert(path, bytes);
                 }
