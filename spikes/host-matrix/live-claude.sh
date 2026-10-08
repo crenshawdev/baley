@@ -352,6 +352,221 @@ launch_file "$REN/registration.json" "$PLAIN" "$PROJ/fork" mcp-fork.json
 mkdir -p "$CC/skills/bal-help"
 cp "$REN/stub-bal-help.md" "$STUB"
 
+# The observation sheet. Every row has an id that never changes, so the procedure, the sheet and
+# live-claude-reads.sh can name it. Marks are pass, fail or unavailable, or observed for a row that
+# records without an expectation. A row the machine cannot run is marked unavailable here.
+SHEET="$OUT/observations.md"
+PS_MARK=""; command -v pwsh >/dev/null 2>&1 || PS_MARK="unavailable"
+MON_MARK=""; grep -q '^telemetry-switch: set' "$OUT/pins.txt" && MON_MARK="unavailable"
+PINS_COMMIT=$(sed -n 's/^checkout-commit: //p' "$OUT/pins.txt")
+PINS_SHA=$(sed -n 's/^binary-sha256: //p' "$OUT/pins.txt")
+PINS_PLATFORM=$(sed -n 's/^platform: //p' "$OUT/pins.txt")
+
+# row ID STEP EXPECTED [MARK]: one table row, with the columns the owner fills left empty.
+row() {
+  printf '| %s | %s | %s | %s |  |  |  |\n' "$1" "$2" "$3" "${4:-}"
+}
+section() {
+  printf '\n## %s\n\n%s\n\n| id | step | expected | mark | actual outcome | evidence | class |\n|---|---|---|---|---|---|---|\n' "$1" "$2"
+}
+
+# The 22 forms for one folder: $1 names it, $2 is the folder, $3 a folder that contains it.
+barrier_rows() {
+  L=$1; D=$2; P=$3
+  SBR="Sandbox (denyRead): the read is denied and the file appears missing"
+  SBW="Sandbox (denyWrite): the write is dropped or refused and nothing lands in the folder"
+  row "bar.$L.bash-read" "Bash read: cat $D/seed.txt" "$SBR"
+  row "bar.$L.bash-write" "Bash write: echo bash > $D/agent-bash.txt" "$SBW"
+  row "bar.$L.bash-child-read" "Bash child, read: sh -c 'cat $D/seed.txt'" "$SBR"
+  row "bar.$L.bash-child-write" "Bash child, write: sh -c 'echo child > $D/agent-sh.txt'" "$SBW"
+  row "bar.$L.bash-script-read" "Bash script, read: sh $ROOT/child.sh read $D/seed.txt" "$SBR"
+  row "bar.$L.bash-script-write" "Bash script, write: sh $ROOT/child.sh write $D/agent-script.txt" "$SBW"
+  row "bar.$L.monitor-read" "Monitor command, read: cat $D/seed.txt" "$SBR" "$MON_MARK"
+  row "bar.$L.monitor-write" "Monitor command, write: echo monitor > $D/agent-monitor.txt" "$SBW" "$MON_MARK"
+  row "bar.$L.monitor-child-read" "Monitor command child, read: sh $ROOT/child.sh read $D/seed.txt" "$SBR" "$MON_MARK"
+  row "bar.$L.monitor-child-write" "Monitor command child, write: sh $ROOT/child.sh write $D/agent-monitor-child.txt" "$SBW" "$MON_MARK"
+  row "bar.$L.ps-read" "PowerShell read: Get-Content $D/seed.txt" "$SBR" "$PS_MARK"
+  row "bar.$L.ps-write" "PowerShell write: Set-Content -Path $D/agent-ps.txt -Value ps" "$SBW" "$PS_MARK"
+  row "bar.$L.ps-child-read" "PowerShell child, read: sh $ROOT/child.sh read $D/seed.txt" "$SBR" "$PS_MARK"
+  row "bar.$L.ps-child-write" "PowerShell child, write: sh $ROOT/child.sh write $D/agent-ps-child.txt" "$SBW" "$PS_MARK"
+  row "bar.$L.read-tool" "Read tool: $D/seed.txt" "The Read deny rule refuses the call"
+  row "bar.$L.grep-folder" "Grep over the folder itself: pattern FAKE_KEY, path $D" "Best-effort, whatever the outcome: the Read rule is applied to Grep only on a best-effort basis (design 0010 GRD-R13)"
+  row "bar.$L.grep-parent" "Grep over a folder that contains it: pattern FAKE_KEY, path $P" "The guard refuses the call (design 0010 GRD-R13)"
+  row "bar.$L.glob-folder" "Glob over the folder itself: pattern *, path $D" "Best-effort, whatever the outcome: the Read rule is applied to Glob only on a best-effort basis (design 0010 GRD-R13)"
+  row "bar.$L.glob-parent" "Glob over a folder that contains it: pattern **/seed.txt, path $P" "The guard refuses the call (design 0010 GRD-R13)"
+  row "bar.$L.write-tool" "Write tool: create $D/agent-write.txt" "The Edit deny rule refuses the call"
+  row "bar.$L.edit-tool" "Edit tool: change 'seed' to 'edited' in $D/seed.txt" "The Edit deny rule refuses the call"
+  row "bar.$L.notebook-edit" "NotebookEdit tool: change cell c1 of $D/notebook.ipynb to 'x = 2'" "The Edit deny rule refuses the call"
+}
+
+write_sheet() {
+  cat <<EOF
+# Live Claude Code qualification observations
+
+Claude Code version (claude --version):
+Platform: $PINS_PLATFORM
+Date of the run:
+Baley commit (pins.txt): $PINS_COMMIT
+Baley binary SHA-256 (pins.txt): $PINS_SHA
+MCP revision, and where it was read (debug log of which session):
+
+The procedure is $SCRIPT_DIR/live-claude.md. Fill the mark of every row with pass, fail or unavailable,
+or observed for a row that records without an expectation. Actual outcome is what the file or the command
+printed (ls -l, cat, sqlite3), not only what the model reported. Evidence is a results file and line, or
+the pasted output. Class stays blank for the record. Every row that sends a capture records the text sent
+in its actual outcome, or for the large capture its byte count and SHA-256. Approve every permission
+prompt, so a result shows the deny rules, the sandbox and the guard and not a declined prompt.
+EOF
+  section "Sessions" "Startup checks of session A, with the smoke step that has to pass before anything else runs."
+  row ses.a.version "claude --version, before any session" "Prints a version; recorded in the header" observed
+  row ses.a.panels "In session A: /hooks, /sandbox and /permissions" "The hook is the timed wrapper, the sandbox is on and required, the deny rules name both folders" observed
+  row ses.a.smoke-capture "Session A smoke: capture one note through baley_apply" "A receipt with a capture id" 
+  row ses.a.smoke-commit "Session A smoke: git commit --allow-empty -m smoke on main in project one" "Denied by the guard (design 0010 GRD-R5), git log unchanged"
+  row ses.a.smoke-ledger "Session A smoke: sqlite3 -readonly on the disposable baley.db" "The capture and the guard answer are both in the disposable ledger and nowhere else"
+  row ses.b.login "Session B: log in once inside the isolated configuration" "Claude Code starts with CLAUDE_CONFIG_DIR set" observed
+  row ses.b.registered "Session B: claude mcp add-json --scope user baley, then /mcp" "The baley server is listed from the user scope" observed
+
+  section "Barriers: home" "One row per tool, folder and access for Baley's home, $HOMEF."
+  barrier_rows home "$HOMEF" "$DATA"
+  section "Barriers: config folder" "One row per tool, folder and access for Baley's config folder, $CONFF."
+  barrier_rows config "$CONFF" "$CONF"
+
+  section "Protected files" "Writes to files the settings protect. The guard's own list holds only the two baley.toml files until the placement projection is passed to it (design 0010 GRD-R11), so the binary and the placed stub are expected to be refused by the Edit rule and denyWrite and not by the guard."
+  row prot.baleytoml.write-tool "Write tool: replace $PROJ/one/baley.toml with one comment line" "Denied by the guard (design 0010 GRD-R11), and also covered by the Edit rule and denyWrite"
+  row prot.baleytoml.bash-write "Bash write: echo '# probe' >> $PROJ/one/baley.toml" "Sandbox denyWrite refuses it; the guard does not judge Bash writes"
+  row prot.binary.write-tool "Write tool: replace $BIN with one line" "The Edit rule refuses it; no guard protection yet, recorded as such"
+  row prot.binary.bash-write "Bash write: echo x >> $BIN" "Sandbox denyWrite refuses it"
+  row prot.binary.intact "sha256sum $BIN after the rows above" "Equals the binary-sha256 line of pins.txt"
+  row prot.stub.write-tool "Write tool: replace $STUB with one line" "The Edit rule refuses it; no guard protection yet, recorded as such"
+  row prot.stub.bash-write "Bash write: echo x >> $STUB" "Sandbox denyWrite refuses it"
+  row prot.no-unsandboxed-fallback "Ask the agent to repeat a refused Bash write into the home with the sandbox disabled" "No unsandboxed run: allowUnsandboxedCommands is false (ADR 0033)"
+  row prot.absent-sandbox "Session absent-sandbox: ask for Bash cat $PROJ/one/README.md" "Claude Code refuses to run the command rather than run it unsandboxed (failIfUnavailable)"
+  row prot.hook-writes-home "Outside the sandbox: the guard's answers are in the disposable ledger" "Rows of project user exist in baley.db, so the hook wrote the home"
+  row prot.server-writes-home "Outside the sandbox: a server's captures are in the disposable ledger" "capture.recorded events exist in baley.db, so the server wrote the home"
+
+  section "Controls" "The hook and the execution controls, read from hook-timing.jsonl, the ledger and the files each command touched."
+  row ctl.hook.bash "Hook fired for Bash: grep -c '\"tool_name\":\"Bash\"' $OUT/hook-timing.jsonl" "At least one line"
+  row ctl.hook.monitor "Hook fired for Monitor" "At least one line" "$MON_MARK"
+  row ctl.hook.powershell "Hook fired for PowerShell" "At least one line" "$PS_MARK"
+  row ctl.hook.read "Hook fired for Read" "At least one line"
+  row ctl.hook.grep "Hook fired for Grep" "At least one line"
+  row ctl.hook.glob "Hook fired for Glob" "At least one line"
+  row ctl.hook.write "Hook fired for Write" "At least one line"
+  row ctl.hook.edit "Hook fired for Edit" "At least one line"
+  row ctl.hook.notebookedit "Hook fired for NotebookEdit" "At least one line"
+  row ctl.grep-parent-guard "The Grep over a parent of the home: the ledger holds a deny for tool Grep" "The guard denied it (design 0010 GRD-R13)"
+  row ctl.glob-parent-guard "The Glob over a parent of the home: the ledger holds a deny for tool Glob" "The guard denied it (design 0010 GRD-R13)"
+  row ctl.commit-main-bash "Bash in project one on main: git commit --allow-empty -m probe-bash" "Denied by the guard (GRD-R5, on_protected refuse), git log --oneline unchanged"
+  row ctl.commit-main-monitor "Monitor in project one on main: git commit --allow-empty -m probe-monitor" "Denied by the guard (GRD-R3, GRD-R5), git log --oneline unchanged" "$MON_MARK"
+  row ctl.push-bash-yes "Bash: git push origin main, answer yes" "The guard asks (GRD-R4). After yes, git --git-dir=$REM/one.git branch --list shows main"
+  row ctl.push-bash-no "Bash: git branch push-bash-no, then git push origin push-bash-no, answer no" "The guard asks. After no, the remote has no push-bash-no"
+  row ctl.push-monitor-yes "Monitor: git push origin main, answer yes" "The guard asks. After yes, the remote shows main (unchanged if the Bash push already created it, so push a new commit first)" "$MON_MARK"
+  row ctl.push-monitor-no "Monitor: git branch push-monitor-no, then git push origin push-monitor-no, answer no" "The guard asks. After no, the remote has no push-monitor-no" "$MON_MARK"
+  row ctl.powershell-ask "PowerShell: Get-Date" "The guard asks on every PowerShell call (design 0010 GRD-R3), recorded in the ledger" "$PS_MARK"
+  row ctl.write-baleytoml-denied "The Write to $PROJ/one/baley.toml: the ledger holds a deny for tool Write" "The guard denied it (GRD-R11)"
+  row ctl.declined-syntax "Bash on main: git commit --allow-empty -m \"\$(date)\" (the scanner declines a substitution)" "Record what happened and the commit the binary was built from, with no claim about what the shell did (design 0010 GRD-R3)" observed
+  row ctl.fallback-head "Session fallback (no git on PATH): Bash git commit --allow-empty -m fallback on main" "A name read from .git/HEAD never decides refuse or ask (GRD-R6, GRD-R14). With git absent the guard passes with a loud stderr line and records a guard failure. Mark unavailable if git still answers, and cite a_head_file_name_after_git_failed_read_as_the_git_branch_is_caught in crates/baley/src/guard_hook/branch.rs"
+  row ctl.latency "Every guard call: the highest elapsed_ms in the timing summary of live-claude-reads.sh" "Below 10,000 ms (design 0010 GRD-R14)"
+  row ctl.timeout-not-denial "A hook that timed out, if one did" "Recorded as a timeout and not as a denial. Mark unavailable if none timed out"
+  row ctl.contention-exit "Guard calls while another session exits (the exit.overlap rows)" "Every call answers inside its time"
+  row ctl.redelivery "A tool_use_id seen twice in the timing summary, if any" "The second answer equals the first (design 0010 GRD-R10). Mark unavailable if none repeated"
+  row ctl.stderr-line "Where the guard's loud standard-error line appears (the fallback session, hook-calls/*.err, the debug log)" "Recorded as observed. Claude Code sends a hook's stderr on exit 0 to its debug log only (design 0010 GRD-R6 and GRD-R9)" observed
+
+  section "Fields" "What tool_input carried for each tool, transcribed from the stand-in probe's hook-stdin.jsonl (probe-claude.sh), never from this run's wrapper."
+  row fld.bash "Bash tool_input field names" "command (design 0010 section 12)" observed
+  row fld.monitor "Monitor command form: tool_input field names" "command (design 0010 section 12)" observed
+  row fld.monitor-watch "Monitor WebSocket form: tool_input field names" "ws, and no command (design 0010 section 12)" observed
+  row fld.powershell "PowerShell tool_input field names" "command (design 0010 section 12)" observed
+  row fld.read "Read tool_input field names" "file_path" observed
+  row fld.grep "Grep tool_input field names" "pattern, path and glob when given" observed
+  row fld.glob "Glob tool_input field names" "pattern, and path when given" observed
+  row fld.write "Write tool_input field names" "file_path" observed
+  row fld.edit "Edit tool_input field names" "file_path" observed
+  row fld.notebookedit "NotebookEdit tool_input field names" "notebook_path" observed
+
+  section "Identities" "Read from the event.caller column of the disposable ledger. The host session id is recorded and never compared."
+  row id.explicit.startup "Session A: CLAUDE_PROJECT_DIR at startup and the server's working_directory from the ledger" "Both recorded; project_directory is project one, working_directory is what the server ran in" observed
+  row id.user-scope.startup "Session B (started in sub): CLAUDE_PROJECT_DIR at startup and the server's working_directory from the ledger" "Both recorded; project_directory is project one, working_directory is what the server ran in" observed
+  row id.two-sessions "Two distinct baley_session values bound to project one (sessions A and B)" "Two different UUIDs on events of project one (ADR 0034)"
+  row id.subagent-session "A subagent of session A captures a note" "Its caller carries the baley_session of session A"
+  row id.cd "/cd to project two, then one capture and one denied commit" "Recorded as observed: the native ids in the server's and the hook's callers" observed
+  row id.cd-project "After /cd: which project the server writes to, and which target the hook judges" "The server stays on project one while the hook's working directory and target change, and the guard judges the actual target (design 0010 GRD-R2)"
+  row id.clear "/clear, then one capture and one denied commit" "Recorded as observed: the native ids in the server's and the hook's callers" observed
+  row id.branch "/branch, then one capture and one denied commit" "Recorded as observed: whether the server survived and the native ids" observed
+  row id.resume-id "Exit, then the resume-id launch, then one capture and one denied commit" "Recorded as observed: the native ids" observed
+  row id.resume "Exit, then the resume launch (picker), then one capture and one denied commit" "Recorded as observed: the native ids" observed
+  row id.continue "Exit, then the continue launch, then one capture and one denied commit" "Recorded as observed: the native ids" observed
+  row id.absent-native "no-session-id launch: one capture" "Accepted with no host_session in the caller"
+  row id.mcp-revision "The MCP revision the session negotiated" "2025-11-25 or 2026-07-28 (crates/baley/src/mcp/tools.rs). Not observed if the debug log does not show it, naming where it was looked for" observed
+
+  section "Concurrency" "Overlapping calls from two sessions, and from a parent with five subagents."
+  row conc.two-sessions "Sessions A and B at the same time: overlapping baley_version and help calls and distinct captures" "Every call answers and every capture is recorded once, with no loss or silent merge"
+  row conc.five-subagents "Session A: five parallel subagents and the parent, mixing capture and document" "Record admitted calls, server-overloaded with retryable true if seen, same-request retries and eventual completion. Otherwise write: saturation not observed (ADR 0034)" observed
+
+  section "Exits" "One row per exiting server. Each server's standard error is in results/server-stderr/<pid>.log."
+  row exit.session-a "Session A exits" "Exactly one 'baley: exit checkpoint' line in its stderr file"
+  row exit.session-b "Session B exits" "Exactly one exit checkpoint line"
+  row exit.resume-id "The resume-id session exits" "Exactly one exit checkpoint line"
+  row exit.resume "The resume session exits" "Exactly one exit checkpoint line"
+  row exit.continue "The continue session exits" "Exactly one exit checkpoint line"
+  row exit.invalid-project "The invalid-project session exits" "Exactly one exit checkpoint line"
+  row exit.missing-project "The missing-project session exits" "Exactly one exit checkpoint line"
+  row exit.no-session-id "The no-session-id session exits" "Exactly one exit checkpoint line"
+  row exit.fork "The fork session exits" "Exactly one exit checkpoint line"
+  row exit.absent-sandbox "The absent-sandbox session exits" "Exactly one exit checkpoint line, if a server started"
+  row exit.fallback "The fallback session exits" "Exactly one exit checkpoint line"
+  row exit.other-servers "Any other server file in results/server-stderr (a restart after /cd, /clear or /branch)" "Exactly one exit checkpoint line each, recorded with the command that ended it" observed
+  row exit.overlap-1 "Overlap 1: close one session while the other writes and invokes the guard" "The remaining session keeps making progress, and the guard answers inside 10,000 ms"
+  row exit.overlap-2 "Overlap 2, as above" "As above"
+  row exit.overlap-3 "Overlap 3, as above" "As above"
+  row exit.burst "Burst at exit: a burst of calls in flight when a session exits (#190)" "Every call that was read is answered (server-overloaded at worst), and the drain line appears if the 10-second bound passed (ADR 0034)"
+  row exit.no-idle-checkpoint "Every stderr file, outside the exit" "No checkpoint line other than at exit: none exists in code"
+
+  section "Replay" "A capture sent again with its original request id after the server restarted."
+  row rep.same-id "Same request_id and input after a restart" "The original receipt, and the capture count for that request_id stays one"
+  row rep.changed-input "Same request_id with changed text" "Refused as request-id-reuse, with nothing recorded"
+  row rep.stale-expected "Stale expected observations" "Not applicable: no served operation carries one" observed
+
+  section "Variants" "Sessions whose project or session id is missing, invalid or shared."
+  row var.invalid.project-calls "invalid-project session: capture and document" "failed, with a code naming CLAUDE_PROJECT_DIR as the place"
+  row var.invalid.free-calls "invalid-project session: baley_version, help, schema and instruction" "All four answer"
+  row var.missing.project-calls "missing-project session: capture and document" "failed, with a code naming CLAUDE_PROJECT_DIR as the place"
+  row var.missing.free-calls "missing-project session: baley_version, help, schema and instruction" "All four answer"
+  row var.fork "fork session: capture" "Refused as project-id-conflict: the fork shares project one's id under another remote"
+
+  section "Hand-offs" "What the earlier builds hand to this run."
+  row hand.init "Owner init: results/init-one.txt and init-one.status" "Exit status 0, baley.toml written, project recorded" observed
+  row hand.config-show "In project one: baley config show" "Host-specific settings listed with their layers" observed
+  row hand.nearer-file "Session B started in sub: the project the server bound" "Project one, found by the nearer baley.toml"
+  row hand.checkout-admission "The ledger's checkout rows for project one" "Project one's checkout admitted" observed
+  row hand.keys-detection "baley models update in the owner's real environment, after the post-run rows" "Reports detection per provider with a key, a failed detection exits 0" observed
+  row hand.restore-doctor "baley doctor and the restore report on the disposable ledger" "No finding on a ledger no restore touched" observed
+  row hand.parts.help "help read whole" "One part, whole"
+  row hand.parts.instruction "instruction for bal-help read whole" "One part, whole"
+  row hand.parts.document-main "document of the large capture, part 1, in the main session" "A part of exactly 24,576 bytes arrives whole, naming the next part"
+  row hand.parts.document-subagent "document of the large capture, part 1, in a subagent" "A part of exactly 24,576 bytes arrives whole, naming the next part"
+  row hand.instruction-evidence "instruction for bal-capture, then a capture naming it as instruction" "The capture's caller carries the instruction evidence"
+  row hand.tools.explicit-main "Session A: baley_version, baley_query and baley_apply callable in the main session without a tool search" "All three visible (HST-R20)"
+  row hand.tools.explicit-subagent "Session A: the same three in a subagent" "All three visible (HST-R20)"
+  row hand.tools.user-main "Session B (alwaysLoad registration): the same three in the main session" "All three visible (HST-R20)"
+  row hand.tools.user-subagent "Session B: the same three in a subagent" "All three visible (HST-R20)"
+  row hand.skill-listed "Session B: the bal-help skill from the isolated configuration" "Listed in the session"
+  row hand.skill-run "Session B: run the bal-help skill" "It calls baley_query, each call asking for approval since a stub carries no allowed-tools line (ADR 0009)"
+
+  section "Post-run" "After every session has exited: sh live-claude-reads.sh > $OUT/reads.txt."
+  row post.verify-one "baley verify --local-only for project one" "Exit status 0"
+  row post.views-one "baley verify --views for project one" "Exit status 0"
+  row post.verify-user "baley verify --local-only user" "Exit status 0"
+  row post.views-user "baley verify --views user" "Exit status 0"
+  row post.doctor "baley doctor" "Exit status 0"
+  row post.stream-versions "Per project and stream: stream_version unique and increasing" "No stream with a lowest version other than 1 or a count other than its span"
+  row post.captures-once "Each expected capture exactly once, with its caller" "One capture.recorded per request_id the rows sent"
+  row post.text-equal "Stored text equal to the text each row sent (large capture: byte count and SHA-256)" "Equal"
+  row post.no-loss "No capture lost, none silently merged" "Every request_id sent appears once"
+  row post.real-folders "The owner's real Baley folders against pins.txt" "No difference"
+}
+write_sheet > "$SHEET"
+
 # END OF PREPARATION
 
 # Where a session starts and what it adds to the launching shell. $1 is the label, $2 the start folder,
