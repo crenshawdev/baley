@@ -150,9 +150,7 @@ fn doctor(
 /// The host section: the running binary against a placement map with every
 /// artifact unknown, so each one is reported as not installed.
 fn host_report() -> host_doctor::Report {
-    let observation = host_doctor::Observation {
-        placement: host_doctor::all_unknown(std::env::current_exe()),
-    };
+    let observation = host_doctor::gather(host_doctor::all_unknown(std::env::current_exe()));
     host_doctor::Report::new(&host_doctor::judge(&observation))
 }
 fn export(store: &SqliteStore, project: &ProjectId, to: &Path) -> Result<Render, Render> {

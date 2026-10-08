@@ -30,17 +30,34 @@ impl Report {
                     "running binary {}: {refusal}, so no hook or registration can be rendered for it",
                     path.display()
                 ),
-                MapFault::Refused(reason) => format!(
-                    "running binary: the placement map was refused: {reason}"
-                ),
+                MapFault::Refused(reason) => {
+                    format!("running binary: the placement map was refused: {reason}")
+                }
             });
         }
         for (artifact, state) in &findings.artifacts {
-            match state {
+            gap |= state.is_gap();
+            lines.push(match state {
                 ArtifactState::NotInstalled => {
-                    lines.push(format!("{artifact}: not installed, no placement is known"));
+                    format!("{artifact}: not installed, no placement is known")
                 }
-            }
+                ArtifactState::NotRead { path } => {
+                    format!("{artifact}: {} was not read", path.display())
+                }
+                ArtifactState::Missing { path } => {
+                    format!("{artifact}: missing, nothing is at {}", path.display())
+                }
+                ArtifactState::Fault { path, fault } => {
+                    format!("{artifact}: {} {fault}", path.display())
+                }
+                ArtifactState::Read { path } => format!("{artifact}: read {}", path.display()),
+            });
+        }
+        if let Some((path, gap_found)) = &findings.executable {
+            gap = true;
+            lines.push(format!(
+                "executable {path} {gap_found}, and the hook and the registration run it"
+            ));
         }
         Report {
             lines,
@@ -53,14 +70,15 @@ impl Report {
 mod tests {
     use std::path::PathBuf;
 
+    use super::super::fixtures::*;
+    use super::super::placed::{Fault, FileState};
     use super::super::{MapFault, Observation, all_unknown, judge};
     use super::*;
     use crate::host_artifacts::executable::{MissingPrerequisite, PathFault};
 
     fn unknown_observation() -> Observation {
-        Observation {
-            placement: all_unknown(Ok(PathBuf::from("/usr/local/bin/baley"))),
-        }
+        let map = all_unknown(Ok(PathBuf::from(EXECUTABLE))).unwrap();
+        observed(map, vec![])
     }
 
     fn report_of(observation: &Observation) -> Report {
@@ -76,6 +94,17 @@ mod tests {
             .any(|word| rest.contains(word))
     }
 
+    /// The one line that starts with `name`.
+    fn line_for<'r>(report: &'r Report, name: &str) -> &'r String {
+        let lines: Vec<&String> = report
+            .lines
+            .iter()
+            .filter(|line| line.starts_with(name))
+            .collect();
+        assert_eq!(lines.len(), 1, "{name}: {:?}", report.lines);
+        lines[0]
+    }
+
     #[test]
     fn an_unknown_placement_shown_as_installed_or_left_unlisted_is_caught() {
         let report = report_of(&unknown_observation());
@@ -87,14 +116,9 @@ mod tests {
             "settings",
         ];
         for name in names {
-            let lines: Vec<&String> = report
-                .lines
-                .iter()
-                .filter(|line| line.starts_with(name))
-                .collect();
-            assert_eq!(lines.len(), 1, "{name}: {:?}", report.lines);
-            assert!(lines[0].contains("not installed"), "{}", lines[0]);
-            assert!(!says_installed(lines[0]), "{}", lines[0]);
+            let line = line_for(&report, name);
+            assert!(line.contains("not installed"), "{line}");
+            assert!(!says_installed(line), "{line}");
         }
         assert_eq!(report.code, 0);
     }
@@ -102,7 +126,7 @@ mod tests {
     #[test]
     fn an_unusable_binary_path_dropped_from_the_report_is_caught() {
         let relative = Observation {
-            placement: Err(MapFault::Executable {
+            host: Err(MapFault::Executable {
                 path: PathBuf::from("baley"),
                 refusal: MissingPrerequisite {
                     fault: PathFault::Relative,
@@ -121,7 +145,7 @@ mod tests {
 
         let cause = "No such file or directory (os error 2)";
         let unreadable = Observation {
-            placement: Err(MapFault::PathUnreadable(cause.into())),
+            host: Err(MapFault::PathUnreadable(cause.into())),
         };
         let report = report_of(&unreadable);
         let named: Vec<&String> = report
@@ -132,5 +156,41 @@ mod tests {
         assert_eq!(named.len(), 1, "{:?}", report.lines);
         assert_eq!(report.code, 1);
         assert!(!report.lines.iter().any(|line| says_installed(line)));
+    }
+
+    #[test]
+    fn a_placed_artifact_found_missing_reported_as_not_installed_is_caught() {
+        let map = map(None, Some(HELP), Some(REGISTRATION), None, None);
+        let report = report_of(&observed(
+            map,
+            vec![(HELP, FileState::Absent), (REGISTRATION, FileState::Absent)],
+        ));
+        for (name, path) in [("stub `bal-help`", HELP), ("registration", REGISTRATION)] {
+            let line = line_for(&report, name);
+            assert!(line.contains(path) && line.contains("missing"), "{line}");
+            assert!(!line.contains("not installed"), "{line}");
+        }
+        for name in ["stub `bal-capture`", "hook", "settings"] {
+            assert!(line_for(&report, name).contains("not installed"));
+        }
+        assert_eq!(report.code, 1);
+    }
+
+    #[test]
+    fn a_placed_document_that_cannot_be_read_left_out_of_the_code_is_caught() {
+        let cases = [
+            (FileState::Bytes(b"{".to_vec()), "is not JSON"),
+            (
+                FileState::Fault(Fault::Unreadable("Permission denied (os error 13)".into())),
+                "Permission denied (os error 13)",
+            ),
+        ];
+        for (state, words) in cases {
+            let map = map(None, None, None, None, Some(SETTINGS));
+            let report = report_of(&observed(map, vec![(SETTINGS, state)]));
+            let line = line_for(&report, "settings");
+            assert!(line.contains(SETTINGS) && line.contains(words), "{line}");
+            assert_eq!(report.code, 1, "{line}");
+        }
     }
 }

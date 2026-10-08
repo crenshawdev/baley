@@ -7,17 +7,24 @@
 //! - [`judge`], which turns an observation into [`Findings`];
 //! - [`Report::new`], which turns findings into lines and a code.
 //!
+//! [`gather`] is the one place that touches the filesystem: it reads each
+//! placed file once and asks about the executable, and owns no rule. The
+//! readers and their judgements are in [`placed`].
+//!
 //! The held delivery doctor (Build 3 T17) takes the same three steps over a
 //! placement map `baley install` supplies. Nothing here writes a file, the
 //! ledger or Claude Code's settings, and nothing guesses where an artifact
 //! belongs: an artifact whose placement is unknown is reported as not
 //! installed, and that alone never raises the exit status.
 
+pub mod placed;
 pub mod report;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use report::Report;
+
+use placed::{ExecutableGap, FileState};
 
 use crate::host_artifacts::executable::{Executable, MissingPrerequisite};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
@@ -66,11 +73,56 @@ pub fn all_unknown(running: std::io::Result<PathBuf>) -> Result<PlacementMap, Ma
     .map_err(|refusal| MapFault::Refused(refusal.to_string()))
 }
 
+/// One path read once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedRead {
+    /// The path, as the placement map supplied it.
+    pub path: PathBuf,
+    /// What the read found.
+    pub state: FileState,
+}
+
+/// What was gathered when a placement map exists.
+#[derive(Debug, Clone)]
+pub struct Mapped {
+    /// The placement map the host is judged against.
+    pub map: PlacementMap,
+    /// What is wrong with the map's executable, or none when it is a
+    /// regular file.
+    pub executable: Option<ExecutableGap>,
+    /// Every distinct path of the map's expected files, read once.
+    pub reads: Vec<PlacedRead>,
+}
+
 /// What was gathered about the host.
 #[derive(Debug, Clone)]
 pub struct Observation {
-    /// The placement map, or why none could be built.
-    pub placement: Result<PlacementMap, MapFault>,
+    /// What was found for the placement map, or why none could be built.
+    pub host: Result<Mapped, MapFault>,
+}
+
+/// Gathers the observation for a placement map: reads each expected file
+/// once and asks the filesystem about the executable. Nothing is written,
+/// opened for writing or run. It owns no rule and has no unit test.
+pub fn gather(placement: Result<PlacementMap, MapFault>) -> Observation {
+    let host = placement.map(|map| {
+        let executable = placed::observe_executable(Path::new(map.executable().as_str()));
+        let mut reads: Vec<PlacedRead> = Vec::new();
+        for file in map.expected_files() {
+            if !reads.iter().any(|read| read.path == file.path) {
+                reads.push(PlacedRead {
+                    path: file.path.to_path_buf(),
+                    state: placed::read(file.path),
+                });
+            }
+        }
+        Mapped {
+            map,
+            executable,
+            reads,
+        }
+    });
+    Observation { host }
 }
 
 /// What the judgement found out about one artifact.
@@ -78,31 +130,238 @@ pub struct Observation {
 pub enum ArtifactState {
     /// No place is known for it, so nothing was looked for.
     NotInstalled,
+    /// A place is known but the observation holds no read of it.
+    NotRead {
+        /// The place.
+        path: PathBuf,
+    },
+    /// A place is known and nothing is there.
+    Missing {
+        /// The place.
+        path: PathBuf,
+    },
+    /// A place is known and what is there cannot be used.
+    Fault {
+        /// The place.
+        path: PathBuf,
+        /// What is wrong with it.
+        fault: placed::Fault,
+    },
+    /// A place is known and what is there was read.
+    Read {
+        /// The place.
+        path: PathBuf,
+    },
+}
+
+impl ArtifactState {
+    /// Whether the state is a host gap, which raises the exit status. An
+    /// artifact that is not installed is not one.
+    pub fn is_gap(&self) -> bool {
+        !matches!(
+            self,
+            ArtifactState::NotInstalled | ArtifactState::Read { .. }
+        )
+    }
+}
+
+/// What a settings, hook or registration file held.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Content {
+    /// The observation holds no read of it.
+    NotRead,
+    /// Nothing is there.
+    Missing,
+    /// It could not be used.
+    Fault(placed::Fault),
+    /// A JSON object.
+    Object(serde_json::Value),
+}
+
+/// One registration, hook or settings file and what it held, carried for the
+/// judgements that read documents.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Document {
+    /// The place.
+    pub path: PathBuf,
+    /// The artifacts placed in it, in artifact order.
+    pub artifacts: Vec<Artifact>,
+    /// What it held.
+    pub content: Content,
 }
 
 /// The judged observation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Findings {
     /// Why no map exists, when none could be built.
     pub no_map: Option<MapFault>,
     /// Each artifact of the map and what was found, in artifact order.
     pub artifacts: Vec<(Artifact, ArtifactState)>,
+    /// What is wrong with the executable, with its path.
+    pub executable: Option<(String, ExecutableGap)>,
+    /// Each document the map places artifacts in.
+    pub documents: Vec<Document>,
+}
+
+/// Where an artifact sits in the order the report lists them: the stubs,
+/// then the registration, the hook and the settings.
+fn rank(artifact: &Artifact) -> u8 {
+    match artifact {
+        Artifact::Stub(_) => 0,
+        Artifact::Registration => 1,
+        Artifact::Hook => 2,
+        Artifact::Settings => 3,
+    }
 }
 
 /// Judges an observation into findings.
 pub fn judge(observation: &Observation) -> Findings {
-    match &observation.placement {
-        Err(fault) => Findings {
-            no_map: Some(fault.clone()),
-            artifacts: Vec::new(),
-        },
-        Ok(map) => Findings {
-            no_map: None,
-            artifacts: map
-                .not_installed()
-                .into_iter()
-                .map(|artifact| (artifact, ArtifactState::NotInstalled))
-                .collect(),
-        },
+    let mapped = match &observation.host {
+        Ok(mapped) => mapped,
+        Err(fault) => {
+            return Findings {
+                no_map: Some(fault.clone()),
+                artifacts: Vec::new(),
+                executable: None,
+                documents: Vec::new(),
+            };
+        }
+    };
+    let read = |path: &Path| {
+        mapped
+            .reads
+            .iter()
+            .find(|read| read.path == path)
+            .map(|read| &read.state)
+    };
+
+    let mut documents = Vec::new();
+    for document in mapped.map.documents() {
+        let content = match read(document.path) {
+            None => Content::NotRead,
+            Some(FileState::Absent) => Content::Missing,
+            Some(FileState::Fault(fault)) => Content::Fault(fault.clone()),
+            Some(FileState::Bytes(bytes)) => match placed::document(bytes) {
+                Ok(value) => Content::Object(value),
+                Err(fault) => Content::Fault(fault),
+            },
+        };
+        documents.push(Document {
+            path: document.path.to_path_buf(),
+            artifacts: document.artifacts,
+            content,
+        });
+    }
+
+    let mut artifacts: Vec<(Artifact, ArtifactState)> = Vec::new();
+    for file in mapped.map.expected_files() {
+        let path = file.path.to_path_buf();
+        let state = match documents
+            .iter()
+            .find(|document| document.artifacts.contains(&file.artifact))
+        {
+            Some(document) => match &document.content {
+                Content::NotRead => ArtifactState::NotRead { path },
+                Content::Missing => ArtifactState::Missing { path },
+                Content::Fault(fault) => ArtifactState::Fault {
+                    path,
+                    fault: fault.clone(),
+                },
+                Content::Object(_) => ArtifactState::Read { path },
+            },
+            None => match read(file.path) {
+                None => ArtifactState::NotRead { path },
+                Some(FileState::Absent) => ArtifactState::Missing { path },
+                Some(FileState::Fault(fault)) => ArtifactState::Fault {
+                    path,
+                    fault: fault.clone(),
+                },
+                Some(FileState::Bytes(_)) => ArtifactState::Read { path },
+            },
+        };
+        artifacts.push((file.artifact, state));
+    }
+    artifacts.extend(
+        mapped
+            .map
+            .not_installed()
+            .into_iter()
+            .map(|artifact| (artifact, ArtifactState::NotInstalled)),
+    );
+    artifacts.sort_by_key(|(artifact, _)| rank(artifact));
+
+    Findings {
+        no_map: None,
+        artifacts,
+        executable: mapped
+            .executable
+            .clone()
+            .map(|gap| (mapped.map.executable().as_str().to_owned(), gap)),
+        documents,
+    }
+}
+
+/// Plain-value builders the tests of this module's files share.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+
+    pub(crate) const EXECUTABLE: &str = "/usr/local/bin/baley";
+    pub(crate) const HELP: &str = "/home/o/.claude/skills/bal-help/SKILL.md";
+    pub(crate) const REGISTRATION: &str = "/home/o/.claude.json";
+    pub(crate) const SETTINGS: &str = "/home/o/.claude/settings.json";
+
+    pub(crate) fn executable() -> Executable {
+        Executable::new(EXECUTABLE).unwrap()
+    }
+
+    /// A map with the given places and every other placement unknown.
+    pub(crate) fn map(
+        capture: Option<&str>,
+        help: Option<&str>,
+        registration: Option<&str>,
+        hook: Option<&str>,
+        settings: Option<&str>,
+    ) -> PlacementMap {
+        let place =
+            |path: Option<&str>| path.map_or(Placement::Unknown, |p| Placement::At(p.into()));
+        let stubs = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                let placement = match entry.identity.as_str() {
+                    "bal-capture" => place(capture),
+                    "bal-help" => place(help),
+                    other => panic!("an unexpected front door {other}"),
+                };
+                (entry, placement)
+            })
+            .collect();
+        PlacementMap::new(
+            executable(),
+            stubs,
+            place(registration),
+            place(hook),
+            place(settings),
+        )
+        .unwrap()
+    }
+
+    /// The observation of a map whose executable is a regular file and
+    /// whose files were read as given.
+    pub(crate) fn observed(map: PlacementMap, reads: Vec<(&str, FileState)>) -> Observation {
+        Observation {
+            host: Ok(Mapped {
+                map,
+                executable: None,
+                reads: reads
+                    .into_iter()
+                    .map(|(path, state)| PlacedRead {
+                        path: path.into(),
+                        state,
+                    })
+                    .collect(),
+            }),
+        }
     }
 }
