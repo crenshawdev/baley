@@ -81,12 +81,23 @@ q "select project_id, seq, json_extract(caller, '\$.host_session') as host_sessi
 heading "captures: capture.recorded events per request_id with the caller's session and instruction evidence"
 q "select project_id, seq, request_id, count(*) over (partition by project_id, request_id) as events_for_request, json_extract(caller, '\$.baley_session') as baley_session, json_extract(caller, '\$.instructions') as instructions, json_extract(payload_json, '\$.kind') as kind, json_extract(payload_json, '\$.bytes') as bytes, json_extract(payload_json, '\$.text') as text from event where type = 'capture.recorded' order by project_id, seq"
 
-heading "stored capture bodies (text above 4,096 bytes): byte count and SHA-256 of the stored body"
-echo "large.txt on disk: $(wc -c < "$LARGE" 2>/dev/null) bytes, sha256 $(sha256sum "$LARGE" 2>/dev/null | cut -d' ' -f1)"
+heading "stored capture bodies (text above 4,096 bytes): byte count and SHA-256 after zstd -d"
+LARGE_SUM=$(sha256sum "$LARGE" 2>/dev/null | cut -d' ' -f1)
+echo "large.txt on disk: $(wc -c < "$LARGE" 2>/dev/null) bytes, sha256 $LARGE_SUM"
+# The store keeps a body zstd-compressed, so hashing the stored bytes would never match the text sent.
 sqlite3 -readonly "$DB" "select project_id, seq, json_extract(payload_json, '\$.body.payload') from event where type = 'capture.recorded' and json_extract(payload_json, '\$.body.payload') is not null order by project_id, seq" | while IFS='|' read -r PROJECT SEQ HASH; do
   BYTES=$(sqlite3 -readonly "$DB" "select bytes from payload where hash = x'$HASH'")
-  SUM=$(sqlite3 -readonly "$DB" "select hex(body) from payload where hash = x'$HASH'" | xxd -r -p | sha256sum | cut -d' ' -f1)
-  echo "$PROJECT seq $SEQ payload $HASH: $BYTES bytes, body sha256 $SUM"
+  ENCODING=$(sqlite3 -readonly "$DB" "select encoding from payload where hash = x'$HASH'")
+  STORED=$(sqlite3 -readonly "$DB" "select length(body) from payload where hash = x'$HASH'")
+  if [ "$ENCODING" = zstd ] && command -v zstd >/dev/null 2>&1; then
+    SUM=$(sqlite3 -readonly "$DB" "select hex(body) from payload where hash = x'$HASH'" | xxd -r -p | zstd -dc | sha256sum | cut -d' ' -f1)
+    LEN=$(sqlite3 -readonly "$DB" "select hex(body) from payload where hash = x'$HASH'" | xxd -r -p | zstd -dc | wc -c)
+    SAME="different from large.txt"
+    [ "$SUM" = "$LARGE_SUM" ] && SAME="same as large.txt"
+    echo "$PROJECT seq $SEQ payload $HASH: $BYTES bytes recorded, stored $STORED bytes ($ENCODING), $LEN bytes after zstd -d, sha256 $SUM ($SAME)"
+  else
+    echo "$PROJECT seq $SEQ payload $HASH: $BYTES bytes recorded, stored $STORED bytes ($ENCODING), sha256 not checked (the stored body is compressed and zstd is not on PATH)"
+  fi
 done
 
 heading "guard answers by decision, with call ids"
