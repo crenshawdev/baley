@@ -312,3 +312,101 @@ jq -n --slurpfile settings "$REN/settings.json" --slurpfile hook "$REN/hook.json
    | .hooks.PreToolUse[0].hooks[0].command = $wrapper
    | .sandbox.filesystem.allowWrite = [$root]
    | .env = {"CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"}' > "$OUT/settings.json" || exit 1
+
+# The server side, rendered unchanged.
+render "$REN/registration.json" registration --executable "$BIN"
+render "$REN/registration-always-load.json" registration --executable "$BIN" --always-load
+render "$REN/stub-bal-help.md" stub bal-help
+
+# Each launch file is one mcpServers object holding the single key baley, so tool names match
+# production. The entry runs /bin/sh -c with a script that appends a start line (UTC time, process id)
+# to results/server-stderr/<pid>.log and then executes the rendered command and arguments with
+# standard error appended to that file, because a stdio server's standard error is not otherwise kept.
+# The rendered command and arguments ride as positional parameters, so they are never retyped. Every
+# other key of the rendered entry, alwaysLoad included, is kept.
+server_script() {
+  cat <<SCRIPT
+F="$OUT/server-stderr/\$\$.log"; printf 'start %s pid %s\n' "\$($DATE_BIN -u +%Y-%m-%dT%H:%M:%SZ)" "\$\$" >> "\$F"; $1exec "\$@" 2>> "\$F"
+SCRIPT
+}
+# entry SOURCE SCRIPT PROJECT: the wrapped entry. A non-empty PROJECT becomes the entry's env, the only
+# way a registration can set CLAUDE_PROJECT_DIR. Removing a variable needs the script, not env.
+entry() {
+  jq --arg script "$2" --arg project "$3" '
+    .mcpServers.baley as $e
+    | ({command: "/bin/sh", args: (["-c", $script, "sh", $e.command] + $e.args)} + ($e | del(.command, .args)))
+    | if $project != "" then .env = {CLAUDE_PROJECT_DIR: $project} else . end' "$1"
+}
+launch_file() {
+  entry "$1" "$2" "$3" | jq '{mcpServers: {baley: .}}' > "$OUT/$4" || exit 1
+}
+PLAIN=$(server_script "")
+launch_file "$REN/registration.json" "$PLAIN" "" mcp-explicit.json
+entry "$REN/registration-always-load.json" "$PLAIN" "" > "$OUT/user-scope-entry.json" || exit 1
+launch_file "$REN/registration.json" "$PLAIN" "$ROOT/projects/does-not-exist" mcp-invalid-project.json
+launch_file "$REN/registration.json" "$(server_script 'unset CLAUDE_PROJECT_DIR; ')" "" mcp-missing-project.json
+launch_file "$REN/registration.json" "$(server_script 'unset CLAUDE_CODE_SESSION_ID; ')" "" mcp-no-session-id.json
+launch_file "$REN/registration.json" "$PLAIN" "$PROJ/fork" mcp-fork.json
+
+# The stub goes in the isolated user configuration, an uncommitted skills folder.
+mkdir -p "$CC/skills/bal-help"
+cp "$REN/stub-bal-help.md" "$STUB"
+
+# END OF PREPARATION
+
+# Where a session starts and what it adds to the launching shell. $1 is the label, $2 the start folder,
+# $3 the session's own environment, $4 the launch file ("" for user scope), $5 any extra claude flags.
+launch() {
+  MCP=""
+  [ -n "$4" ] && MCP=" --mcp-config $OUT/$4 --strict-mcp-config"
+  printf '  %s\n    cd %s && env -u BALEY_HOME XDG_DATA_HOME=%s XDG_CONFIG_HOME=%s %sclaude --settings %s%s%s --debug-file %s/debug-%s.log\n\n' \
+    "$1" "$2" "$DATA" "$CONF" "$3" "$OUT/settings.json" "$MCP" "$5" "$OUT" "$1"
+}
+print_launches() {
+  cat <<TEXT
+
+Sessions to launch (by hand, from a terminal; nothing below has been run for you)
+
+TEXT
+  launch session-a "$PROJ/one" "" mcp-explicit.json ""
+  launch session-b "$PROJ/one/sub" "CLAUDE_CONFIG_DIR=$CC " "" ""
+  launch resume-id "$PROJ/one" "" mcp-explicit.json " --resume SESSION_ID"
+  launch resume "$PROJ/one" "" mcp-explicit.json " --resume"
+  launch continue "$PROJ/one" "" mcp-explicit.json " --continue"
+  launch invalid-project "$PROJ/one" "" mcp-invalid-project.json ""
+  launch missing-project "$PROJ/one" "" mcp-missing-project.json ""
+  launch no-session-id "$PROJ/one" "" mcp-no-session-id.json ""
+  launch fork "$PROJ/fork" "" mcp-fork.json ""
+  launch absent-sandbox "$PROJ/one" "PATH=$ROOT/bin-nosandbox " mcp-explicit.json ""
+  launch fallback "$PROJ/one" "PATH=$ROOT/bin-nogit " mcp-explicit.json ""
+  cat <<TEXT
+In resume-id, replace SESSION_ID with the native id session A recorded (live-claude.md says where to read it).
+
+One-time registration for session B, run before it starts (the isolated configuration needs its own
+login on the first start):
+    cd $PROJ/one/sub && env -u BALEY_HOME XDG_DATA_HOME=$DATA XDG_CONFIG_HOME=$CONF CLAUDE_CONFIG_DIR=$CC claude mcp add-json --scope user baley "\$(cat $OUT/user-scope-entry.json)"
+
+Only if session B does not list the bal-help skill from the isolated configuration, place the stub
+uncommitted in project one instead:
+    mkdir -p $PROJ/one/.claude/skills/bal-help && cp $STUB $PROJ/one/.claude/skills/bal-help/SKILL.md
+
+TEXT
+}
+
+cat <<TEXT
+Live Claude Code qualification. This script prepared the disposable tree and ran no claude command.
+
+Root:       $ROOT
+Home:       $HOMEF
+Config:     $CONFF
+Results:    $OUT
+Procedure:  $SCRIPT_DIR/live-claude.md
+
+Record the output of claude --version as the first step.
+TEXT
+for TOOL in bwrap socat; do
+  command -v "$TOOL" >/dev/null 2>&1 || echo "WARNING: $TOOL is not on PATH, so the sandbox cannot start on Linux."
+done
+command -v pwsh >/dev/null 2>&1 || echo "pwsh is not on PATH: the PowerShell rows read unavailable."
+grep -q '^telemetry-switch: set' "$OUT/pins.txt" && echo "WARNING: DISABLE_TELEMETRY or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set, so Monitor is unavailable."
+print_launches
