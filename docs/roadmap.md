@@ -238,7 +238,7 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dot
 | T9 | Bounded guard process and storage access | [#204](https://github.com/crenshawdev/baley/pull/204) | Merged |
 | T10 | Per-user guard records and Claude hook answers | [#207](https://github.com/crenshawdev/baley/pull/207) | Merged |
 | T11 | Claude artifact content, logical stubs and supplied executable-path protection | [#228](https://github.com/crenshawdev/baley/pull/228) | Merged |
-| T12 | Live Claude qualification and concurrent sessions | | Planned |
+| T12 | Live Claude qualification and concurrent sessions. Run on 2026-10-08 against Claude Code 2.1.294 in two runs kept in `spikes/host-matrix`: the first sheet is `claude-live-2026-10-08-run1.md`, and the rerun after the fixes for issues #231 and #232 is `claude-live-2026-10-08-run2.md`. No barrier failed. Acceptance left open and unverified: the Grep and Glob rows (not tools in that Claude Code version), the PowerShell rows (`pwsh` absent), the user-scope registration (its isolated session needs a login that was not made), a live redelivery, and the burst of calls in flight at exit | | Planned |
 | T13 | Runtime doctor host observations | | Planned |
 | T14 | Binary delivery, ledger update claims and events, version-folder protection and update compatibility using unsigned development artifacts only; leave `verify_download` between download and staging for #14's verifiers | | Planned; released delivery depends on #14 |
 | T15 | Claude artifact ownership and application | | Planned |
@@ -365,7 +365,7 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
-| [#190](https://github.com/crenshawdev/baley/issues/190) | `baley serve` drops calls it already read when input closes in the same burst | Evidence | Its text says T12 runs the live shutdown checks and fixes a confirmed defect in its own bug pull request |
+| [#190](https://github.com/crenshawdev/baley/issues/190) | `baley serve` drops calls it already read when input closes in the same burst | Evidence | Its text says T12 runs the live shutdown checks and fixes a confirmed defect in its own bug pull request. The 2026-10-08 runs confirmed no dropped call: every call the server read was answered and no drain line appeared, but no call was in flight inside the server at exit, so the check is unverified (`claude-live-2026-10-08-run2.md#exit.burst`). They found a different shutdown defect, #231, fixed in bug pull request #233 |
 | [#203](https://github.com/crenshawdev/baley/issues/203) | An export through a store opened for the guard waits without limit for the new copy's writer queue | Evidence | Its text names no build |
 | [#214](https://github.com/crenshawdev/baley/issues/214) | A half-written transport error line can be interleaved by another reply | Evidence | Its text names no build |
 | [#219](https://github.com/crenshawdev/baley/issues/219) | Bug: the guard never judges a commit that has anything in front of `git` | Evidence | Its text names no build |
