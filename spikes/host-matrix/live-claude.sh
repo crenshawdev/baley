@@ -658,6 +658,8 @@ EOF
   row hand.tools.user-subagent "Session B: the same three in a subagent" "All three visible (HST-R20)"
   row hand.skill-listed "Session B: the bal-help skill from the isolated configuration" "Listed in the session"
   row hand.skill-run "Session B: run the bal-help skill" "It calls baley_query, each call asking for approval since a stub carries no allowed-tools line (ADR 0009)"
+  row hand.skill-project-listed "A fresh session A launch, with the rendered stub placed uncommitted at projects/one/.claude/skills/bal-help/SKILL.md: which skills it has and where each comes from" "bal-help listed in the session, with the source the listing names recorded"
+  row hand.skill-project-run "The same session: run the bal-help skill" "It calls baley_query for bal-help's instruction, each call asking for approval since a stub carries no allowed-tools line (ADR 0009)"
 
   section "Post-run" "After every session has exited: sh live-claude-reads.sh > $OUT/reads.txt."
   row post.verify-one "baley verify --local-only for project one" "Exit status 0"
@@ -712,9 +714,11 @@ login first, which is your step (live-claude.md Part 0 step 10). A coding agent 
 and asks you for it. After the login, run:
     cd $PROJ/one/sub && env -u BALEY_HOME DISABLE_AUTOUPDATER=1 XDG_DATA_HOME=$DATA XDG_CONFIG_HOME=$CONF CLAUDE_CONFIG_DIR=$CC claude mcp add-json --scope user baley "\$(cat $OUT/user-scope-entry.json)"
 
-Only if session B does not list the bal-help skill from the isolated configuration, place the stub
-uncommitted in project one instead:
+Project placement of the skill, run after session B's skill check (live-claude.md Part 6): place the stub
+uncommitted in project one, show that it is uncommitted, and remove it when the check is done:
     mkdir -p $PROJ/one/.claude/skills/bal-help && cp $STUB $PROJ/one/.claude/skills/bal-help/SKILL.md
+    git -C $PROJ/one status --porcelain
+    rm -f $PROJ/one/.claude/skills/bal-help/SKILL.md; rmdir $PROJ/one/.claude/skills/bal-help $PROJ/one/.claude/skills $PROJ/one/.claude 2>/dev/null
 
 TEXT
 }
