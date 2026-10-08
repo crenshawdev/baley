@@ -899,6 +899,25 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_reopening_a_folder_only_once_dot_dot_is_resolved_read_as_harmless_is_caught() {
+        let entry = "/home/o/.config/x/../crenshawdev/baley";
+        let mut reopened = ours();
+        reopened["sandbox"]["filesystem"]["allowRead"] = json!([entry]);
+        let coverage = judged(&reopened, &guard_hook(), &[]);
+        for tool in SHELL_TOOLS {
+            assert_eq!(
+                gap(&coverage, tool, Access::Read),
+                [Cause::Reopened {
+                    list: "allowRead",
+                    entry: entry.into(),
+                }],
+                "{tool:?}"
+            );
+            assert!(covered(&coverage, tool, Access::Write), "{tool:?}");
+        }
+    }
+
+    #[test]
     fn a_write_rule_accepted_in_place_of_an_edit_rule_is_caught() {
         let mut misspelled = ours();
         for rule in misspelled["permissions"]["deny"].as_array_mut().unwrap() {
