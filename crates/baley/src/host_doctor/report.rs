@@ -112,10 +112,19 @@ impl Report {
         }
         if let Some(nine) = &findings.nine_tools {
             let hook = nine.hook.display();
-            if nine.missing.is_empty() {
+            if let Some(disabled) = &nine.disabled_in {
+                gap = true;
                 lines.push(format!(
-                    "guard hook: a PreToolUse item in {hook} runs the guard for all nine tools in the matcher"
+                    "guard hook: disableAllHooks is true in {}, so no hook runs the guard for any tool",
+                    disabled.display()
                 ));
+            }
+            if nine.missing.is_empty() {
+                if nine.disabled_in.is_none() {
+                    lines.push(format!(
+                        "guard hook: a PreToolUse item in {hook} runs the guard for all nine tools in the matcher"
+                    ));
+                }
             } else {
                 gap = true;
                 let names: Vec<&str> = nine.missing.iter().map(|tool| tool.name()).collect();
@@ -774,5 +783,29 @@ mod tests {
             freebsd.lines
         );
         assert_eq!(freebsd.code, 1);
+    }
+
+    #[test]
+    fn a_guard_credited_for_all_nine_tools_while_disable_all_hooks_is_true_is_caught() {
+        let mut document = hook::render(&executable());
+        document["disableAllHooks"] = serde_json::json!(true);
+        let report = report_of(&observed(
+            map(None, None, None, Some(HOOKS), None),
+            vec![(
+                HOOKS,
+                FileState::Bytes(serde_json::to_vec(&document).unwrap()),
+            )],
+        ));
+        assert!(
+            names(&report, &["guard hook", "disableAllHooks", HOOKS]),
+            "{:?}",
+            report.lines
+        );
+        assert!(
+            !names(&report, &["runs the guard for all nine tools"]),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 1, "{:?}", report.lines);
     }
 }

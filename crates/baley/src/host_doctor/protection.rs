@@ -100,14 +100,22 @@ pub struct NineTools {
     /// The tools no item runs the guard for, in matcher order. Empty when
     /// all nine are guarded.
     pub missing: Vec<Tool>,
+    /// The document that sets `disableAllHooks` true, the hook document
+    /// first, then the settings document when its placement is known. Claude
+    /// Code then runs no hook, so no item guards any tool whatever the
+    /// matchers say.
+    pub disabled_in: Option<PathBuf>,
 }
 
 /// Checks that the guard runs before every tool of `hook::MATCHER`. The
 /// coverage judge credits Bash, Monitor and PowerShell to the sandbox and
 /// never asks whether the guard also runs for them, so this is its own
 /// judgement. A matcher in one item never borrows another item's guard, and
-/// a handler counts only when the coverage judge accepts it whole. Nothing
-/// is judged when the hook placement is unknown or its document unusable.
+/// a handler counts only when the coverage judge accepts it whole. A
+/// `disableAllHooks` of true in the hook document, or in the settings
+/// document when one is placed, is reported with the document and does not
+/// change which tools the items name. Nothing is judged when the hook
+/// placement is unknown or its document unusable.
 pub fn nine_tools(map: &PlacementMap, documents: &[Document]) -> Option<NineTools> {
     let document = documents
         .iter()
@@ -131,8 +139,20 @@ pub fn nine_tools(map: &PlacementMap, documents: &[Document]) -> Option<NineTool
                     })
         })
     };
+    let settings = documents
+        .iter()
+        .find(|document| document.artifacts.contains(&Artifact::Settings));
+    let disabled_in = [Some(document), settings]
+        .into_iter()
+        .flatten()
+        .find(|document| {
+            matches!(&document.content, Content::Object(value)
+                if value.get("disableAllHooks") == Some(&Value::Bool(true)))
+        })
+        .map(|document| document.path.clone());
     Some(NineTools {
         hook: document.path.clone(),
+        disabled_in,
         missing: Tool::ALL
             .into_iter()
             .filter(|tool| !guarded(*tool))
@@ -263,6 +283,39 @@ mod tests {
             ("Bash|Monitor|PowerShell", "/bin/echo"),
         ]);
         assert_eq!(missing_tools(borrowed), ["Bash", "Monitor", "PowerShell"]);
+    }
+
+    #[test]
+    fn a_guard_counted_as_running_while_disable_all_hooks_is_true_is_caught() {
+        let disabled_in = |documents: &[Document]| {
+            let map = map(None, None, None, Some(HOOKS), Some(SETTINGS));
+            nine_tools(&map, documents).unwrap().disabled_in
+        };
+        let hooks = |disabled: Value| {
+            let mut document = hook::render(&executable());
+            document["disableAllHooks"] = disabled;
+            document
+        };
+        let settings = |content: Value| document(SETTINGS, &[Artifact::Settings], content);
+        let hook_doc = |content: Value| document(HOOKS, &[Artifact::Hook], content);
+
+        assert_eq!(disabled_in(&[hook_doc(hook::render(&executable()))]), None);
+        assert_eq!(
+            disabled_in(&[hook_doc(hooks(json!(false)))]),
+            None,
+            "only true disables"
+        );
+        assert_eq!(
+            disabled_in(&[hook_doc(hooks(json!(true)))]),
+            Some(PathBuf::from(HOOKS))
+        );
+        assert_eq!(
+            disabled_in(&[
+                hook_doc(hook::render(&executable())),
+                settings(json!({"disableAllHooks": true})),
+            ]),
+            Some(PathBuf::from(SETTINGS))
+        );
     }
 
     #[test]
