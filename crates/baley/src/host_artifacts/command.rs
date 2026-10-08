@@ -167,6 +167,19 @@ fn judged(executable: &Path) -> Result<Executable, Refusal> {
     Executable::new(executable).map_err(Refusal::Executable)
 }
 
+fn escape_controls(text: &str) -> String {
+    // Control characters must not add lines or drive the terminal.
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 /// Writes what a request selects to `out` and each refusal or unrendered
 /// path to `err`, one line each. It fails when anything was refused or left
 /// out, so partial settings are never taken as complete.
@@ -174,7 +187,7 @@ pub fn print(request: &Request, out: &mut dyn Write, err: &mut dyn Write) -> Exi
     let selection = match select(request) {
         Ok(selection) => selection,
         Err(refusal) => {
-            let _ = writeln!(err, "baley: {refusal}");
+            let _ = writeln!(err, "baley: {}", escape_controls(&refusal.to_string()));
             return ExitCode::FAILURE;
         }
     };
@@ -186,7 +199,7 @@ pub fn print(request: &Request, out: &mut dyn Write, err: &mut dyn Write) -> Exi
         return ExitCode::FAILURE;
     }
     for unrendered in &selection.unrendered {
-        let _ = writeln!(err, "baley: {unrendered}");
+        let _ = writeln!(err, "baley: {}", escape_controls(&unrendered.to_string()));
     }
     if selection.unrendered.is_empty() {
         ExitCode::SUCCESS
@@ -301,5 +314,45 @@ mod tests {
         let err = String::from_utf8(err).unwrap();
         assert_eq!(err.lines().count(), 1, "{err}");
         assert!(err.contains("/srv/[x]/baley.toml"), "{err}");
+    }
+
+    #[test]
+    fn an_identity_holding_a_newline_printed_across_two_lines_is_caught() {
+        let request = Request::Stub {
+            identity: "missing\n\u{1b}[2Jsecond line".to_owned(),
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = print(&request, &mut out, &mut err);
+        assert_eq!(code, ExitCode::FAILURE);
+        assert!(out.is_empty());
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(err.matches('\n').count(), 1, "{err:?}");
+        let line = err.strip_suffix('\n').unwrap();
+        assert!(!line.chars().any(char::is_control), "{err:?}");
+        assert_eq!(
+            err,
+            "baley: `missing\\n\\u{1b}[2Jsecond line` is not a served front door\n"
+        );
+    }
+
+    #[test]
+    fn an_unrendered_path_holding_a_newline_printed_across_two_lines_is_caught() {
+        let request = Request::Settings {
+            executable: "/home/o/.local/bin/baley".into(),
+            home: "/home/o/.local/share/crenshawdev/baley".into(),
+            config: "/home/o/.config/crenshawdev/baley".into(),
+            protect: vec!["srv\n\u{1b}[2J/baley.toml".into()],
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = print(&request, &mut out, &mut err);
+        assert_eq!(code, ExitCode::FAILURE);
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(err.matches('\n').count(), 1, "{err:?}");
+        let line = err.strip_suffix('\n').unwrap();
+        assert!(!line.chars().any(char::is_control), "{err:?}");
+        assert_eq!(
+            err,
+            "baley: the path srv\\n\\u{1b}[2J/baley.toml is not absolute\n"
+        );
     }
 }
