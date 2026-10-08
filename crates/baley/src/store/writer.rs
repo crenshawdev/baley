@@ -22,9 +22,9 @@ pub struct View {
 }
 
 /// The session server's shutdown drain bound: accepted work gets this long after
-/// input ends or SIGTERM arrives, then the exit checkpoint runs. Build 9 removes
-/// this inherited store module, and the constant moves with the session server
-/// rather than going with it.
+/// input ends or SIGINT or SIGTERM arrives, then the exit checkpoint runs.
+/// Build 9 removes this inherited store module, and the constant moves with
+/// the session server rather than going with it.
 pub const SERVER_DRAIN_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Owner-serialized precondition; this does not compare-and-swap Markdown files.
