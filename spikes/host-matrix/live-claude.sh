@@ -651,3 +651,4 @@ done
 command -v pwsh >/dev/null 2>&1 || echo "pwsh is not on PATH: the PowerShell rows read unavailable."
 grep -q '^telemetry-switch: set' "$OUT/pins.txt" && echo "WARNING: DISABLE_TELEMETRY or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set, so Monitor is unavailable."
 print_launches
+echo "Setup finished. Next: follow live-claude.md Part 1."
