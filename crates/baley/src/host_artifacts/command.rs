@@ -180,32 +180,57 @@ fn escape_controls(text: &str) -> String {
     escaped
 }
 
-/// Writes what a request selects to `out` and each refusal or unrendered
-/// path to `err`, one line each. It fails when anything was refused or left
-/// out, so partial settings are never taken as complete.
-pub fn print(request: &Request, out: &mut dyn Write, err: &mut dyn Write) -> ExitCode {
-    let selection = match select(request) {
-        Ok(selection) => selection,
-        Err(refusal) => {
-            let _ = writeln!(err, "baley: {}", escape_controls(&refusal.to_string()));
-            return ExitCode::FAILURE;
-        }
+/// The bytes for standard output: what was selected, even when a path was
+/// left out, since partial settings are printed beside their report.
+/// Nothing on a refusal.
+fn stdout_bytes(outcome: &Result<Selection, Refusal>) -> &[u8] {
+    match outcome {
+        Ok(selection) => &selection.bytes,
+        Err(_) => &[],
+    }
+}
+
+/// The text for standard error: one `baley: ` line per refusal or
+/// unrendered path, its control characters escaped.
+fn stderr_text(outcome: &Result<Selection, Refusal>) -> String {
+    let messages: Vec<String> = match outcome {
+        Ok(selection) => selection
+            .unrendered
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        Err(refusal) => vec![refusal.to_string()],
     };
-    if out
-        .write_all(&selection.bytes)
-        .and_then(|()| out.flush())
-        .is_err()
-    {
-        return ExitCode::FAILURE;
-    }
-    for unrendered in &selection.unrendered {
-        let _ = writeln!(err, "baley: {}", escape_controls(&unrendered.to_string()));
-    }
-    if selection.unrendered.is_empty() {
-        ExitCode::SUCCESS
-    } else {
+    messages
+        .iter()
+        .map(|message| format!("baley: {}\n", escape_controls(message)))
+        .collect()
+}
+
+/// Failure when the request was refused, a path was left out or standard
+/// output did not take the bytes, so partial settings are never taken as
+/// complete.
+fn exit_code(refused: bool, unrendered: bool, written: bool) -> ExitCode {
+    if refused || unrendered || !written {
         ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
+}
+
+/// Writes what a request selects to `out` and its report to `err`. The
+/// bytes, the report and the exit code are decided by the functions above.
+pub fn print(request: &Request, out: &mut dyn Write, err: &mut dyn Write) -> ExitCode {
+    let outcome = select(request);
+    let written = out
+        .write_all(stdout_bytes(&outcome))
+        .and_then(|()| out.flush())
+        .is_ok();
+    let _ = err.write_all(stderr_text(&outcome).as_bytes());
+    let unrendered = outcome
+        .as_ref()
+        .is_ok_and(|selection| !selection.unrendered.is_empty());
+    exit_code(outcome.is_err(), unrendered, written)
 }
 
 /// Runs `baley artifact`, printing to standard output and standard error.
@@ -224,26 +249,118 @@ mod tests {
     use super::*;
     use crate::host_artifacts::executable::PathFault;
 
+    const SETTINGS_PATH: &str = "/srv/[x]/baley.toml";
+
     #[test]
-    fn the_print_only_command_printing_bytes_other_than_the_selected_content_is_caught() {
-        let request = Request::Stub {
-            identity: "bal-help".to_owned(),
-        };
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = print(&request, &mut out, &mut err);
-        let entries = manifest(&front_doors()).unwrap();
-        let help = entries
-            .iter()
-            .find(|entry| entry.identity == "bal-help")
+    fn stdout_bytes_other_than_the_selected_content_is_caught() {
+        let bytes = b"{\n  \"sandbox\": {}\n}\n".to_vec();
+        let clean: Result<Selection, Refusal> = Ok(Selection {
+            bytes: bytes.clone(),
+            unrendered: Vec::new(),
+        });
+        assert_eq!(stdout_bytes(&clean), bytes.as_slice());
+        let partial: Result<Selection, Refusal> = Ok(Selection {
+            bytes: bytes.clone(),
+            unrendered: vec![Unrendered::UnsupportedCharacter {
+                path: SETTINGS_PATH.to_owned(),
+                character: '[',
+            }],
+        });
+        assert_eq!(stdout_bytes(&partial), bytes.as_slice());
+        let refused: Result<Selection, Refusal> = Err(Refusal::UnknownStub("bal-plan".to_owned()));
+        assert!(stdout_bytes(&refused).is_empty());
+    }
+
+    #[test]
+    fn a_stub_selected_from_other_than_its_manifest_bytes_is_caught() {
+        let mut judged = Vec::new();
+        for entry in manifest(&front_doors()).unwrap() {
+            let selected = select(&Request::Stub {
+                identity: entry.identity.clone(),
+            })
             .unwrap();
-        let digest: String = Sha256::digest(&out)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        assert_eq!(digest, help.digest);
-        assert_eq!(out, help.bytes);
-        assert!(err.is_empty(), "{}", String::from_utf8_lossy(&err));
-        assert_eq!(code, ExitCode::SUCCESS);
+            let digest: String = Sha256::digest(&selected.bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(selected.bytes, entry.bytes, "{}", entry.identity);
+            assert_eq!(digest, entry.digest, "{}", entry.identity);
+            assert!(selected.unrendered.is_empty(), "{}", entry.identity);
+            judged.push(entry.identity);
+        }
+        judged.sort();
+        assert_eq!(judged, ["bal-capture", "bal-help"]);
+    }
+
+    #[test]
+    fn partial_settings_selected_without_their_report_is_caught() {
+        // A `[` in a rule path is pattern syntax with no escape, so the
+        // proposal leaves the file out and says so.
+        let home = "/home/o/.local/share/crenshawdev/baley";
+        let config = "/home/o/.config/crenshawdev/baley";
+        let selected = select(&Request::Settings {
+            executable: "/home/o/.local/bin/baley".into(),
+            home: home.into(),
+            config: config.into(),
+            protect: vec![SETTINGS_PATH.into()],
+        })
+        .unwrap();
+        let settings: Value = serde_json::from_slice(&selected.bytes).unwrap();
+        for list in ["denyRead", "denyWrite"] {
+            let entries = settings["sandbox"]["filesystem"][list].as_array().unwrap();
+            assert!(entries.contains(&json!(home)), "{list}");
+            assert!(entries.contains(&json!(config)), "{list}");
+        }
+        let text = String::from_utf8(selected.bytes).unwrap();
+        assert!(!text.contains(SETTINGS_PATH), "{text}");
+        assert_eq!(
+            selected.unrendered,
+            [Unrendered::UnsupportedCharacter {
+                path: SETTINGS_PATH.to_owned(),
+                character: '[',
+            }]
+        );
+    }
+
+    #[test]
+    fn a_refusal_an_unrendered_path_or_a_failed_write_exiting_as_success_is_caught() {
+        assert_eq!(exit_code(true, false, true), ExitCode::FAILURE);
+        assert_eq!(exit_code(false, true, true), ExitCode::FAILURE);
+        assert_eq!(exit_code(false, false, true), ExitCode::SUCCESS);
+        assert_eq!(exit_code(false, false, false), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn a_refusal_holding_a_newline_written_across_two_stderr_lines_is_caught() {
+        let refused: Result<Selection, Refusal> = Err(Refusal::UnknownStub(
+            "missing\n\u{1b}[2Jsecond line".to_owned(),
+        ));
+        assert_eq!(
+            stderr_text(&refused),
+            "baley: `missing\\n\\u{1b}[2Jsecond line` is not a served front door\n"
+        );
+    }
+
+    #[test]
+    fn an_unrendered_path_holding_a_newline_or_its_report_dropped_from_stderr_is_caught() {
+        let selected: Result<Selection, Refusal> = Ok(Selection {
+            bytes: b"{}\n".to_vec(),
+            unrendered: vec![
+                Unrendered::MissingPrerequisite {
+                    path: "srv\n\u{1b}[2J/baley.toml".into(),
+                    fault: PathFault::Relative,
+                },
+                Unrendered::UnsupportedCharacter {
+                    path: SETTINGS_PATH.to_owned(),
+                    character: '[',
+                },
+            ],
+        });
+        assert_eq!(
+            stderr_text(&selected),
+            "baley: the path srv\\n\\u{1b}[2J/baley.toml is not absolute\n\
+             baley: the path /srv/[x]/baley.toml holds `[`, which a deny rule would read as a pattern\n"
+        );
     }
 
     #[test]
@@ -286,73 +403,5 @@ mod tests {
             .collect();
         assert_eq!(listed, Value::Array(expected));
         assert!(printed.bytes.ends_with(b"]\n"));
-    }
-
-    #[test]
-    fn partial_settings_exiting_as_success_or_dropping_the_report_is_caught() {
-        // A `[` in a rule path is pattern syntax with no escape, so the
-        // proposal leaves the file out and says so.
-        let protect = PathBuf::from("/srv/[x]/baley.toml");
-        let request = Request::Settings {
-            executable: "/home/o/.local/bin/baley".into(),
-            home: "/home/o/.local/share/crenshawdev/baley".into(),
-            config: "/home/o/.config/crenshawdev/baley".into(),
-            protect: vec![protect],
-        };
-        let selected = select(&request).unwrap();
-        assert_eq!(
-            selected.unrendered,
-            [Unrendered::UnsupportedCharacter {
-                path: "/srv/[x]/baley.toml".to_owned(),
-                character: '[',
-            }]
-        );
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = print(&request, &mut out, &mut err);
-        assert_eq!(code, ExitCode::FAILURE);
-        assert_eq!(out, selected.bytes);
-        let err = String::from_utf8(err).unwrap();
-        assert_eq!(err.lines().count(), 1, "{err}");
-        assert!(err.contains("/srv/[x]/baley.toml"), "{err}");
-    }
-
-    #[test]
-    fn an_identity_holding_a_newline_printed_across_two_lines_is_caught() {
-        let request = Request::Stub {
-            identity: "missing\n\u{1b}[2Jsecond line".to_owned(),
-        };
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = print(&request, &mut out, &mut err);
-        assert_eq!(code, ExitCode::FAILURE);
-        assert!(out.is_empty());
-        let err = String::from_utf8(err).unwrap();
-        assert_eq!(err.matches('\n').count(), 1, "{err:?}");
-        let line = err.strip_suffix('\n').unwrap();
-        assert!(!line.chars().any(char::is_control), "{err:?}");
-        assert_eq!(
-            err,
-            "baley: `missing\\n\\u{1b}[2Jsecond line` is not a served front door\n"
-        );
-    }
-
-    #[test]
-    fn an_unrendered_path_holding_a_newline_printed_across_two_lines_is_caught() {
-        let request = Request::Settings {
-            executable: "/home/o/.local/bin/baley".into(),
-            home: "/home/o/.local/share/crenshawdev/baley".into(),
-            config: "/home/o/.config/crenshawdev/baley".into(),
-            protect: vec!["srv\n\u{1b}[2J/baley.toml".into()],
-        };
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = print(&request, &mut out, &mut err);
-        assert_eq!(code, ExitCode::FAILURE);
-        let err = String::from_utf8(err).unwrap();
-        assert_eq!(err.matches('\n').count(), 1, "{err:?}");
-        let line = err.strip_suffix('\n').unwrap();
-        assert!(!line.chars().any(char::is_control), "{err:?}");
-        assert_eq!(
-            err,
-            "baley: the path srv\\n\\u{1b}[2J/baley.toml is not absolute\n"
-        );
     }
 }
