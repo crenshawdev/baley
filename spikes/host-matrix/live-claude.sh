@@ -229,3 +229,86 @@ ID_TWO=$(project_id "$PROJ/two")
   echo "project-two-id: $ID_TWO"
   echo "project-fork-id: $(project_id "$PROJ/fork")"
 } >> "$OUT/pins.txt"
+
+# The launch files and the placed stub the settings protect. T15's placement map would yield the same
+# list, so the Edit rule and denyWrite cover them while the guard itself protects only the two
+# baley.toml files until the placement projection is passed to it.
+STUB="$CC/skills/bal-help/SKILL.md"
+LAUNCH_FILES="mcp-explicit.json user-scope-entry.json mcp-invalid-project.json mcp-missing-project.json mcp-no-session-id.json mcp-fork.json"
+
+# Prints one artifact exactly as the binary renders it into $1. A refusal or a partial settings render
+# exits non-zero, and then the script stops with the standard error shown, so partial settings are
+# never composed.
+render() {
+  TARGET=$1; shift
+  if ! "$BIN" artifact "$@" > "$TARGET" 2> "$OUT/artifact-stderr.txt"; then
+    echo "baley artifact $* failed:" >&2
+    cat "$OUT/artifact-stderr.txt" >&2
+    exit 1
+  fi
+  rm -f "$OUT/artifact-stderr.txt"
+}
+
+# The homes given are the resolved folders, not the XDG roots, because they are what the server, the
+# hook and an installed configuration name.
+render "$REN/hook.json" hook --executable "$BIN"
+set -- settings --executable "$BIN" --home "$HOMEF" --config "$CONFF" \
+  --protect "$PROJ/one/baley.toml" --protect "$PROJ/two/baley.toml" \
+  --protect "$STUB" --protect "$OUT/settings.json"
+for FILE in $LAUNCH_FILES; do set -- "$@" --protect "$OUT/$FILE"; done
+render "$REN/settings.json" "$@"
+render "$REN/manifest.json" manifest
+
+# Times each guard call. It keeps the call as it arrived, runs the rendered hook command with that
+# call as standard input, passes the guard's output and exit status through unchanged, and appends
+# one line to hook-timing.jsonl. The line holds no tool_input: the stand-in probe is the per-tool
+# field capture. Tool paths are fixed now, so a session with a narrowed PATH still times its calls.
+JQ_BIN=$(command -v jq)
+DATE_BIN=$(command -v date)
+CAT_BIN=$(command -v cat)
+MV_BIN=$(command -v mv)
+cat > "$ROOT/bin/guard-timed.sh" <<WRAP
+#!/bin/sh
+OUT=$OUT
+JQ=$JQ_BIN
+DATE=$DATE_BIN
+CAT=$CAT_BIN
+MV=$MV_BIN
+WRAP
+cat >> "$ROOT/bin/guard-timed.sh" <<'WRAP'
+PENDING="$OUT/hook-calls/pending.$$"
+$CAT > "$PENDING"
+TOOL=$($JQ -r '.tool_name // empty' "$PENDING" 2>/dev/null)
+ID=$($JQ -r '.tool_use_id // empty' "$PENDING" 2>/dev/null)
+SESSION=$($JQ -r '.session_id // empty' "$PENDING" 2>/dev/null)
+CWD=$($JQ -r '.cwd // empty' "$PENDING" 2>/dev/null)
+CALL="$OUT/hook-calls/${ID:-none}-$$.json"
+$MV "$PENDING" "$CALL"
+COMMAND=$($JQ -r '.hooks.PreToolUse[0].hooks[0].command' "$OUT/rendered/hook.json")
+T0=$($DATE +%s%N)
+/bin/sh -c "$COMMAND" < "$CALL" > "$CALL.out" 2> "$CALL.err"
+STATUS=$?
+T1=$($DATE +%s%N)
+DECISION=$($JQ -r '.hookSpecificOutput.permissionDecision // empty' "$CALL.out" 2>/dev/null)
+$JQ -nc --arg tool "$TOOL" --arg id "$ID" --arg session "$SESSION" --arg cwd "$CWD" \
+  --argjson start "$((T0 / 1000000))" --argjson end "$((T1 / 1000000))" \
+  --argjson elapsed "$(((T1 - T0) / 1000000))" --argjson status "$STATUS" --arg decision "$DECISION" \
+  '{tool_name: $tool, tool_use_id: $id, session_id: $session, cwd: $cwd, start_ms: $start, end_ms: $end, elapsed_ms: $elapsed, exit: $status}
+   + (if $decision == "" then {} else {permissionDecision: $decision} end)' >> "$OUT/hook-timing.jsonl"
+$CAT "$CALL.out"
+$CAT "$CALL.err" >&2
+exit "$STATUS"
+WRAP
+chmod 700 "$ROOT/bin/guard-timed.sh"
+
+# The settings the sessions load: the rendered settings and the rendered hook with two kinds of change.
+# The hook command is the timed wrapper, with its matcher and timeout as rendered. The fixture keys are
+# allowWrite over the disposable tree, so a refused write to the home or config comes from denyWrite and
+# not Claude Code's default boundary (an allow entry above a protected folder is not a gap to the
+# coverage judge, crates/baley/src/host_artifacts/coverage.rs), and the PowerShell switch.
+jq -n --slurpfile settings "$REN/settings.json" --slurpfile hook "$REN/hook.json" \
+  --arg wrapper "'$ROOT/bin/guard-timed.sh'" --arg root "$ROOT" \
+  '$settings[0] + $hook[0]
+   | .hooks.PreToolUse[0].hooks[0].command = $wrapper
+   | .sandbox.filesystem.allowWrite = [$root]
+   | .env = {"CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"}' > "$OUT/settings.json" || exit 1
