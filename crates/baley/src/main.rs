@@ -187,8 +187,8 @@ fn serve_runtime() -> std::io::Result<tokio::runtime::Runtime> {
         .build()
 }
 
-/// Serve one session on stdio until EOF or SIGTERM, then drain and make the
-/// one exit checkpoint attempt.
+/// Serve one session on stdio until EOF, SIGINT or SIGTERM, then drain and
+/// make the one exit checkpoint attempt.
 fn run_serve() -> std::process::ExitCode {
     let runtime = serve_runtime().expect("failed to start tokio runtime");
     let clean = runtime.block_on(baley::mcp::serve::run());

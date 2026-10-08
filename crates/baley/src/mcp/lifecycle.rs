@@ -1,10 +1,10 @@
 //! Shutdown as transitions over supplied events and elapsed time.
 //!
 //! The server never asks for a checkpoint while its connection is open: there
-//! is no idle checkpoint and no timer on a live session. Input ending or a
-//! terminate signal is the one thing that starts shutdown. Admission stops,
-//! accepted work gets up to [`SERVER_DRAIN_BOUND`], and exactly one checkpoint
-//! attempt follows. Waiting work is abandoned at the bound, before the
+//! is no idle checkpoint and no timer on a live session. Input ending, SIGINT or
+//! SIGTERM is the one thing that starts shutdown. Admission stops, accepted
+//! work gets up to [`SERVER_DRAIN_BOUND`], and exactly one checkpoint attempt
+//! follows. Waiting work is abandoned at the bound, before the
 //! checkpoint, so nothing starts during it. The decision still running at the
 //! bound is left to SQLite's rollback. A second end signal changes nothing.
 //!
@@ -31,7 +31,7 @@ pub enum State {
 pub enum Event {
     /// The client closed its end of the input.
     InputEnded,
-    /// The process was told to terminate.
+    /// The process got SIGINT or SIGTERM.
     Terminate,
     /// No decision is running or waiting, and no answer remains unsent. The
     /// caller sends it as soon as the worker reports that state.
