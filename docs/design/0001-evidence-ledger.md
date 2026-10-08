@@ -799,9 +799,11 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 | `output` | test and command output | Kept until the milestone that produced it closes, then reduced |
 | `material` | review input and prompts belonging to a review in 0008 | Kept for 90 days after its review closes |
 
-These are the defaults. A project can change any of them in `baley.toml`, and `baley purge` removes a body at once regardless of class.
+These are the defaults. A project can change any of them in `baley.toml`, and `baley purge` releases the project's references at once regardless of class.
 
 A reference stops requiring its body when its project records `payload.reduced` for it or `payload.purged` releasing it. A body is tombstoned when no unreleased reference remains in any project. A purge releases only the purging project's references and is recorded in that project's chain. Bodies are stored and read by hash, so a body another project still requires stays readable. A project may attach identical bytes again later as a new reference while another project still keeps the body.
+
+A capture's `document` read answers a tombstone with the reason recorded in its own project's view when that project purged the body, even if another project keeps the same bytes readable. If only another project purged the shared body, the project that still holds it reads the text. When a body lookup observes a purge after the view read, `document` re-reads the project's view for its own reason. The hash-global body's reason never stands in for a project's tombstone ([0012](0012-host-interface.md#5-commands-and-operations)).
 
 **Reduction** applies only to an `output` reference. It stores the first and last 64 KiB as a new `record` payload attached to `payload.reduced`, which names the original hash, excerpt hash and byte ranges kept. An output of 128 KiB or less is kept whole and records no event. The store checks the original body's hash and length before releasing the reference. The original body is tombstoned only when no other reference still requires it whole. Reduction after purge is refused. Verification checks the excerpt in full and the original as a commitment.
 

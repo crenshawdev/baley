@@ -4,7 +4,7 @@ This file is the order of work from now to Baley's first public release: nine bu
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 findings [#184](https://github.com/crenshawdev/baley/issues/184), [#190](https://github.com/crenshawdev/baley/issues/190), [#200](https://github.com/crenshawdev/baley/issues/200), [#201](https://github.com/crenshawdev/baley/issues/201), [#203](https://github.com/crenshawdev/baley/issues/203), [#214](https://github.com/crenshawdev/baley/issues/214), [#219](https://github.com/crenshawdev/baley/issues/219), [#220](https://github.com/crenshawdev/baley/issues/220) and [#221](https://github.com/crenshawdev/baley/issues/221), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 issues [#190](https://github.com/crenshawdev/baley/issues/190), [#203](https://github.com/crenshawdev/baley/issues/203), [#214](https://github.com/crenshawdev/baley/issues/214), [#219](https://github.com/crenshawdev/baley/issues/219), [#220](https://github.com/crenshawdev/baley/issues/220) and [#221](https://github.com/crenshawdev/baley/issues/221), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -37,7 +37,7 @@ flowchart TB
     class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the nine open Build 3 findings are listed below but have no GitHub dependency link to it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the six open Build 3 issues are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -327,7 +327,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. This work owns the signed checksum manifest's signature format and trust root, both verifier implementations (the installer's available before Baley exists and the updater's), and their qualification. It fills T14's named `verify_download` seam between download and staging in both delivery paths. T14 and T17 will have built and qualified delivery with unsigned development artifacts only; no release exists before #14 completes verification. Installation follows [ADR 0038](adr/0038-installer-and-opt-in-updates.md): one installer command, binary-written wiring at the stable path, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. Provider access follows [ADR 0039](adr/0039-session-owned-provider-credentials.md), with no Baley key file or provider call. #14 must name any new signature-verification dependency; none is selected yet. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 findings #184, #190, #200, #201, #203, #214, #219, #220 and #221.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220 and #221.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -339,7 +339,7 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 ## Other open issues
 
-Every issue here except the Build 3 findings blocks the release design #14. GitHub links none of the nine Build 3 findings to #14. "Carried by" means that build does the fix.
+Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the six Build 3 issues to #14. "Carried by" means that build does the fix.
 
 ### Upkeep and docs
 
@@ -359,14 +359,11 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 | [#93](https://github.com/crenshawdev/baley/issues/93) | The audit admits any bold span as a requirement id and skips unreadable rows | None | Carried by Build 9 |
 | [#70](https://github.com/crenshawdev/baley/issues/70) | Forgejo tracker calls pass the host as tea's `--login` name | None | No build carries it |
 
-### Build 3 findings
+### Build 3 issues
 
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
-| [#184](https://github.com/crenshawdev/baley/issues/184) | Closing or abandoning the session worker can announce a finished drain before the last answer is sent | Evidence | Its text names no build |
 | [#190](https://github.com/crenshawdev/baley/issues/190) | `baley serve` drops calls it already read when input closes in the same burst | Evidence | Its text says T12 runs the live shutdown checks and fixes a confirmed defect in its own bug pull request |
-| [#200](https://github.com/crenshawdev/baley/issues/200) | No unit test sees a capture's instruction evidence on the caller handed to preparation | Evidence | Its text names no build |
-| [#201](https://github.com/crenshawdev/baley/issues/201) | Two projects purging the same bytes during a `document` read can each get the other's tombstone reason | Evidence | Its text names no build |
 | [#203](https://github.com/crenshawdev/baley/issues/203) | An export through a store opened for the guard waits without limit for the new copy's writer queue | Evidence | Its text names no build |
 | [#214](https://github.com/crenshawdev/baley/issues/214) | A half-written transport error line can be interleaved by another reply | Evidence | Its text names no build |
 | [#219](https://github.com/crenshawdev/baley/issues/219) | Bug: the guard never judges a commit that has anything in front of `git` | Evidence | Its text names no build |
@@ -375,11 +372,11 @@ Every issue here except the Build 3 findings blocks the release design #14. GitH
 
 ## Milestones
 
-Counts from GitHub on 2026-10-06, after #212, #213, #215, #216 and #217 closed. Evidence shows 39 closed and 18 open issues, and Encyclopedists six closed and one open.
+Counts from GitHub on 2026-10-06, after #212, #213, #215, #216 and #217 closed, assuming #184, #200 and #201 are closed. Evidence shows 42 closed and 15 open issues, and Encyclopedists six closed and one open.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
-| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 39 | 18 | Builds 3 to 9, bug #40, #44 and findings #184, #190, #200, #201, #203, #214, #219, #220 and #221 | Open |
+| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 42 | 15 | Builds 3 to 9, bug #40, #44 and Build 3 issues #190, #203, #214, #219, #220 and #221 | Open |
 | [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 6 | 1 | #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
 | [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |

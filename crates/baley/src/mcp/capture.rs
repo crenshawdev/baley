@@ -12,6 +12,7 @@ use baley_core::capture::{
     UNKNOWN_KIND, UnknownKind, capture_id, inline_payload, is_blank, judge_kind, judge_phase,
     stored_payload, text_form,
 };
+use baley_core::policy::Host;
 use baley_store::{
     Command, CommandKind, Decision, InstructionEvidence, Ledger, NewEvent, Observed, OutcomeKind,
     Payloads, Recorded, Refusal as StoreRefusal, RequestId, RetentionClass, ServerCaller,
@@ -25,6 +26,7 @@ use crate::envelope::{Envelope, LEDGER_BUSY, Refusal};
 use crate::ledger::answer::{AnswerUnread, answer_value};
 use crate::mcp::handler::Preparation;
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, WriteRequest, prepare};
+use crate::process::Process;
 
 /// The command kind every capture is recorded under.
 pub const CAPTURE_COMMAND: &str = "capture.record";
@@ -179,6 +181,34 @@ fn evidenced(caller: &ServerCaller, instruction: Option<&InstructionEvidence>) -
     }
 }
 
+/// A function pointer keeps preparation from capturing a different caller.
+type Prepare<S, T> =
+    fn(Option<&S>, &ServerCaller, Option<&WriteRequest>, &Path, Host, &str, &mut dyn Process) -> T;
+
+/// Selects the caller handed to preparation before it can append any events.
+#[allow(clippy::too_many_arguments)]
+fn prepare_capture<S, T>(
+    judged: &JudgedCapture,
+    caller: &ServerCaller,
+    store: Option<&S>,
+    config: &Path,
+    host: Host,
+    at: &str,
+    process: &mut dyn Process,
+    prepare: Prepare<S, T>,
+) -> T {
+    let caller = evidenced(caller, judged.instruction.as_ref());
+    prepare(
+        store,
+        &caller,
+        Some(&judged.request),
+        config,
+        host,
+        at,
+        process,
+    )
+}
+
 /// Records one capture of `kind`, `text` and `phase` under `command`, the
 /// command preparation returned, in one domain transaction.
 ///
@@ -255,19 +285,19 @@ pub fn serve(arguments: &Value, preparation: &Preparation) -> Value {
         Ok(judged) => judged,
         Err(refusal) => return refusal,
     };
-    let caller = evidenced(&preparation.caller, judged.instruction.as_ref());
     let ledger = preparation.ledger.as_deref();
     // With no ledger, preparation fails at the project check, before any
     // settings are read from the config folder.
     let config = ledger.map_or(Path::new(""), |ledger| ledger.config.as_path());
-    let prepared = match prepare(
+    let prepared = match prepare_capture(
+        &judged,
+        &preparation.caller,
         ledger.map(|ledger| &ledger.store),
-        &caller,
-        Some(&judged.request),
         config,
         preparation.host,
         &preparation.at,
         &mut crate::process::System,
+        prepare,
     ) {
         Ok(prepared) => prepared,
         Err(failed) => return serde_json::to_value(*failed).expect("a failed answer serializes"),
@@ -968,7 +998,22 @@ mod tests {
     /// The caller a capture with `arguments` is prepared under.
     fn prepared_caller(arguments: &Value) -> ServerCaller {
         let judged = judge_arguments(arguments).unwrap();
-        evidenced(&caller(), judged.instruction.as_ref())
+        observe_preparation(&judged).0
+    }
+
+    /// Observes the caller and the write request handed to preparation
+    /// without running its external operations.
+    fn observe_preparation(judged: &JudgedCapture) -> (ServerCaller, Option<WriteRequest>) {
+        prepare_capture(
+            judged,
+            &caller(),
+            None::<&SqliteStore>,
+            Path::new("/config"),
+            Host::ClaudeCode,
+            T1,
+            &mut crate::process::Recorded::new(),
+            |_, selected, request, _, _, _, _| (selected.clone(), request.cloned()),
+        )
     }
 
     #[test]
@@ -995,6 +1040,41 @@ mod tests {
     }
 
     #[test]
+    fn preparation_receives_a_caller_without_the_captures_instruction_evidence() {
+        let evidence = InstructionEvidence::new("bal-capture", "1", &"ab".repeat(32)).unwrap();
+        let judged = JudgedCapture {
+            request: WriteRequest {
+                kind: CommandKind(CAPTURE_COMMAND.into()),
+                request_id: RequestId(REQUEST.into()),
+                digest: Hash([1; 32]),
+            },
+            kind: CaptureKind::Note,
+            text: "keep this".into(),
+            phase: None,
+            instruction: Some(evidence.clone()),
+        };
+        // Observe the input at preparation, before it returns a domain command.
+        let (observed, _) = observe_preparation(&judged);
+        assert_eq!(observed.instructions(), &[evidence]);
+        assert_eq!(
+            observed,
+            caller()
+                .with_instructions(judged.instruction.into_iter().collect())
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn preparation_handed_no_write_request_or_another_captures_request_is_caught() {
+        let judged = judge_arguments(&arguments(json!({}))).unwrap();
+        let (_, request) = observe_preparation(&judged);
+        let request = request.expect("a capture is prepared as a write");
+        assert_eq!(request.kind, CommandKind(CAPTURE_COMMAND.into()));
+        assert_eq!(request.request_id, RequestId(REQUEST.into()));
+        assert_eq!(request, judged.request);
+    }
+
+    #[test]
     fn evidence_invented_for_a_capture_that_named_no_instruction_is_caught() {
         let formed = prepared_caller(&arguments(json!({})));
         assert!(formed.instructions().is_empty());
@@ -1004,8 +1084,9 @@ mod tests {
     #[test]
     fn a_capture_and_its_completion_recorded_without_the_evidence_is_caught() {
         let (_dir, store) = store();
-        let judged = judge_arguments(&arguments(json!({"instruction": "bal-help"}))).unwrap();
-        let formed = evidenced(&caller(), judged.instruction.as_ref());
+        let arguments = arguments(json!({"instruction": "bal-help"}));
+        let judged = judge_arguments(&arguments).unwrap();
+        let formed = prepared_caller(&arguments);
         let command = prepared_command(&project(), &judged.request, 0, T1, &formed);
         record(&store, &command, judged.kind, &judged.text, judged.phase).unwrap();
         let expected = crate::instruction::evidence("bal-help").unwrap();
