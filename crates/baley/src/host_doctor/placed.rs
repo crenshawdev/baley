@@ -9,6 +9,7 @@
 //! the coverage judge would turn an empty document into invented gaps.
 
 use std::fmt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use serde_json::Value;
@@ -103,6 +104,9 @@ pub enum ExecutableGap {
     DanglingLink,
     /// Something other than a regular file is there, a directory for one.
     NotRegular,
+    /// A regular file is there but no execute bit is set for anyone, so the
+    /// hook and the registration fail to start it.
+    NotExecutable,
     /// It could not be examined; the system's cause.
     Unreadable(String),
 }
@@ -113,6 +117,7 @@ impl fmt::Display for ExecutableGap {
             ExecutableGap::Missing => f.write_str("does not exist"),
             ExecutableGap::DanglingLink => f.write_str("is a link to a missing file"),
             ExecutableGap::NotRegular => f.write_str("is not a regular file"),
+            ExecutableGap::NotExecutable => f.write_str("has no execute permission"),
             ExecutableGap::Unreadable(cause) => write!(f, "cannot be examined: {cause}"),
         }
     }
@@ -122,24 +127,37 @@ impl fmt::Display for ExecutableGap {
 pub(crate) struct ExecutableSeen {
     /// Whether the path itself is a link, from `symlink_metadata`.
     pub(crate) link: std::io::Result<bool>,
-    /// Whether the path, with links followed, is a regular file.
-    pub(crate) target: std::io::Result<bool>,
+    /// The file at the path, with links followed.
+    pub(crate) target: std::io::Result<Target>,
+}
+
+/// The file an executable's path leads to.
+pub(crate) struct Target {
+    /// Whether it is a regular file.
+    pub(crate) regular_file: bool,
+    /// Its mode bits.
+    pub(crate) mode: u32,
 }
 
 /// Asks the filesystem about the executable. Nothing is opened or run.
 pub(crate) fn observe_executable(path: &Path) -> Option<ExecutableGap> {
     executable_gap(ExecutableSeen {
         link: std::fs::symlink_metadata(path).map(|meta| meta.file_type().is_symlink()),
-        target: std::fs::metadata(path).map(|meta| meta.is_file()),
+        target: std::fs::metadata(path).map(|meta| Target {
+            regular_file: meta.is_file(),
+            mode: meta.permissions().mode(),
+        }),
     })
 }
 
-/// The executable's gap, or none when it is a regular file, reached through
-/// a link or not.
+/// The executable's gap, or none when it is a regular file with any execute
+/// bit set, reached through a link or not. Any bit counts, as it does for
+/// the sandbox programs in `prerequisites.rs`.
 pub(crate) fn executable_gap(seen: ExecutableSeen) -> Option<ExecutableGap> {
     match seen.target {
-        Ok(true) => None,
-        Ok(false) => Some(ExecutableGap::NotRegular),
+        Ok(target) if !target.regular_file => Some(ExecutableGap::NotRegular),
+        Ok(target) if target.mode & 0o111 == 0 => Some(ExecutableGap::NotExecutable),
+        Ok(_) => None,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => match seen.link {
             Ok(true) => Some(ExecutableGap::DanglingLink),
             _ => Some(ExecutableGap::Missing),
@@ -258,8 +276,14 @@ mod tests {
     #[test]
     fn a_directory_or_dangling_link_counted_as_the_executable_is_caught() {
         let not_found = || std::io::Error::from(ErrorKind::NotFound);
-        let seen = |link: std::io::Result<bool>, target: std::io::Result<bool>| {
+        let seen = |link: std::io::Result<bool>, target: std::io::Result<Target>| {
             executable_gap(ExecutableSeen { link, target })
+        };
+        let file = |regular_file: bool| {
+            Ok(Target {
+                regular_file,
+                mode: 0o755,
+            })
         };
         assert_eq!(
             seen(Err(not_found()), Err(not_found())),
@@ -269,9 +293,40 @@ mod tests {
             seen(Ok(true), Err(not_found())),
             Some(ExecutableGap::DanglingLink)
         );
-        assert_eq!(seen(Ok(false), Ok(false)), Some(ExecutableGap::NotRegular));
-        assert_eq!(seen(Ok(true), Ok(true)), None);
-        assert_eq!(seen(Ok(false), Ok(true)), None);
+        assert_eq!(
+            seen(Ok(false), file(false)),
+            Some(ExecutableGap::NotRegular)
+        );
+        assert_eq!(seen(Ok(true), file(true)), None);
+        assert_eq!(seen(Ok(false), file(true)), None);
+    }
+
+    #[test]
+    fn a_regular_file_with_no_execute_bit_counted_as_the_executable_is_caught() {
+        let seen = |mode: u32| {
+            executable_gap(ExecutableSeen {
+                link: Ok(false),
+                target: Ok(Target {
+                    regular_file: true,
+                    mode,
+                }),
+            })
+        };
+        for mode in [0o644, 0o600, 0o000] {
+            assert_eq!(seen(mode), Some(ExecutableGap::NotExecutable), "{mode:o}");
+        }
+        // Any one bit lets someone start it, the rule the sandbox programs use.
+        for mode in [0o755, 0o100, 0o010, 0o001] {
+            assert_eq!(seen(mode), None, "{mode:o}");
+        }
+        let directory = executable_gap(ExecutableSeen {
+            link: Ok(false),
+            target: Ok(Target {
+                regular_file: false,
+                mode: 0o000,
+            }),
+        });
+        assert_eq!(directory, Some(ExecutableGap::NotRegular));
     }
     fn entry(identity: &str) -> Entry {
         let manifest =

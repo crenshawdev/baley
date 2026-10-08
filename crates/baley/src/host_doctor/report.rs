@@ -786,6 +786,35 @@ mod tests {
     }
 
     #[test]
+    fn an_executable_with_no_execute_bit_left_out_of_the_report_and_its_code_is_caught() {
+        use super::super::placed::{ExecutableSeen, Target, executable_gap};
+
+        let mut observation = unknown_observation();
+        let healthy = report_of(&observation);
+        assert_eq!(healthy.code, 0, "{:?}", healthy.lines);
+        assert!(!healthy.lines.iter().any(|line| line.contains("executable")));
+
+        let gap = executable_gap(ExecutableSeen {
+            link: Ok(false),
+            target: Ok(Target {
+                regular_file: true,
+                mode: 0o644,
+            }),
+        });
+        observation.host.as_mut().unwrap().executable = gap;
+        let report = report_of(&observation);
+        assert!(
+            names(
+                &report,
+                &["executable", EXECUTABLE, "no execute permission"]
+            ),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+    }
+
+    #[test]
     fn a_guard_credited_for_all_nine_tools_while_disable_all_hooks_is_true_is_caught() {
         let mut document = hook::render(&executable());
         document["disableAllHooks"] = serde_json::json!(true);

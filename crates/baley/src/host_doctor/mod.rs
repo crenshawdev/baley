@@ -98,7 +98,7 @@ pub struct Mapped {
     /// The placement map the host is judged against.
     pub map: PlacementMap,
     /// What is wrong with the map's executable, or none when it is a
-    /// regular file.
+    /// regular file with an execute bit.
     pub executable: Option<ExecutableGap>,
     /// Every distinct path of the map's expected files, read once.
     pub reads: Vec<PlacedRead>,
@@ -503,7 +503,7 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// The observation of a map whose executable is a regular file and
+    /// The observation of a map whose executable is a runnable file and
     /// whose files were read as given.
     pub(crate) fn observed(map: PlacementMap, reads: Vec<(&str, FileState)>) -> Observation {
         Observation {
