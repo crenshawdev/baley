@@ -726,7 +726,10 @@ mod integration {
     use std::ffi::OsString;
 
     use baley_core::capture::CaptureKind;
-    use baley_store::{Admin, Hash, Ledger, ProjectId, RequestId, ServerCaller};
+    use baley_store::{
+        Admin, ClaimDecision, ClaimOwner, Claimed, Hash, Ledger, Observed, ProjectId, RequestId,
+        ServerCaller,
+    };
     use serde_json::json;
 
     use super::fixtures::{executable, folders, map};
@@ -741,8 +744,11 @@ mod integration {
     const B: &str = "7a2d3b5f-9c0e-4f1a-8b2c-3d4e5f6a7b8c";
     const SESSION: &str = "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f";
     const REQUEST: &str = "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f";
+    const CLAIM_REQUEST: &str = "1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b";
 
-    /// Every file under `folder` with its bytes, sorted by path.
+    /// Every file under `folder` with its bytes, sorted by path. Over the ledger
+    /// home it covers the database and its write-ahead log, which hold every
+    /// durable row, so a changed row, new or old, shows as changed bytes.
     fn listing(folder: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         let mut found = BTreeMap::new();
         let mut pending = vec![folder.to_path_buf()];
@@ -782,9 +788,8 @@ mod integration {
         let (project, sub) = (root.join("project"), root.join("project/sub"));
         std::fs::create_dir_all(&sub).unwrap();
 
-        let store =
-            crate::ledger::open::store(&root.join("home"), T0, crate::ledger::open::options())
-                .unwrap();
+        let home = root.join("home");
+        let store = crate::ledger::open::store(&home, T0, crate::ledger::open::options()).unwrap();
         for (id, name) in [(A, "a"), (B, "b")] {
             store
                 .create_project(&ProjectId(id.into()), name, T0)
@@ -805,6 +810,29 @@ mod integration {
         .unwrap();
         let command = prepared_command(&ProjectId(A.into()), &request, 0, T0, &caller);
         record(&store, &command, CaptureKind::Note, "a note", None).unwrap();
+        // An open claim gives the ledger a row a host check could change in place,
+        // with no event and no new project.
+        let claim_request = WriteRequest {
+            kind: baley_store::CommandKind("anchor.push".into()),
+            request_id: RequestId(CLAIM_REQUEST.into()),
+            digest: Hash([2; 32]),
+        };
+        let claim_command = prepared_command(&ProjectId(B.into()), &claim_request, 0, T0, &caller);
+        let claimed = store
+            .claim(&claim_command, &mut |_| {
+                Ok(ClaimDecision::Claim {
+                    intent: json!({"action": "push"}),
+                    owner: ClaimOwner {
+                        process: "test".into(),
+                        host_session: SESSION.into(),
+                        started_at: T0.into(),
+                    },
+                    git: None,
+                    observed: Observed::default(),
+                })
+            })
+            .unwrap();
+        assert!(matches!(claimed, Claimed::New { .. }));
 
         let place = root.join("place");
         let help = place.join("skills/bal-help/SKILL.md");
@@ -846,6 +874,7 @@ mod integration {
             .collect();
         let health = Admin::doctor(&store, T0, &checks).unwrap();
         let heads_before = heads(&store);
+        let ledger_before = listing(&home);
         let ids: Vec<ProjectId> = projects_before.iter().map(|(id, _)| id.clone()).collect();
         let search: OsString = empty_path.into();
         let observation = gather(
@@ -865,6 +894,7 @@ mod integration {
         assert_eq!(listing(&place), files_before);
         assert_eq!(Admin::projects(&store).unwrap(), projects_before);
         assert_eq!(heads(&store), heads_before);
+        assert_eq!(listing(&home), ledger_before);
         assert_eq!(heads_before.len(), 2);
     }
 }
