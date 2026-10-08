@@ -37,6 +37,10 @@ for TOOL in sqlite3 jq sha256sum xxd; do
   command -v "$TOOL" >/dev/null 2>&1 || { echo "$TOOL is required and is not on PATH" >&2; exit 1; }
 done
 
+# Where Claude Code keeps its installed versions, resolved from the environment this script was started in,
+# the same way live-claude.sh resolved it.
+case "${XDG_DATA_HOME:-}" in /*) REAL_VERSIONS="$XDG_DATA_HOME/claude/versions" ;; *) REAL_VERSIONS="$HOME/.local/share/claude/versions" ;; esac
+
 # From here on the baley commands see the disposable folders only.
 XDG_DATA_HOME="$DATA"
 XDG_CONFIG_HOME="$CONF"
@@ -160,7 +164,7 @@ list_real() {
     echo absent
   fi
 }
-for KIND in real-home real-config; do
+for KIND in real-home real-config real-claude-versions; do
   heading "$KIND against pins.txt"
   FOLDER=$(sed -n "s/^begin $KIND //p" "$OUT/pins.txt")
   sed -n "/^begin $KIND /,/^end $KIND\$/p" "$OUT/pins.txt" | sed '1d;$d' > "$WORK/before-$KIND"
@@ -170,5 +174,62 @@ for KIND in real-home real-config; do
   else
     echo "$FOLDER: DIFFERENT (left: pins.txt, right: now)"
   fi
+done
+# The owner's claude command and launcher, compared with what pins.txt recorded before the run. The last
+# lines say where each resolves now. These sections print evidence for the post-run row and judge nothing.
+compare() {
+  if diff "$1" "$2"; then
+    echo "no difference"
+  else
+    echo "DIFFERENT (left: pins.txt, right: now)"
+  fi
+}
+under_root() {
+  case "$1" in
+    "$ROOT"|"$ROOT"/*|"$ROOT_RESOLVED"|"$ROOT_RESOLVED"/*) return 0 ;;
+  esac
+  return 1
+}
+ROOT_RESOLVED="$(readlink -f "$HOME" 2>/dev/null || echo "$HOME")/.local/share/baley-live"
+NOW_FOUND=$(command -v claude 2>/dev/null || true)
+NOW_RESOLVED=""
+case "$NOW_FOUND" in /*) NOW_RESOLVED=$(readlink -f "$NOW_FOUND" 2>/dev/null || true) ;; esac
+LAUNCHER="$HOME/.local/bin/claude"
+NOW_LAUNCHER_RESOLVED=""
+if [ -L "$LAUNCHER" ]; then
+  NOW_LAUNCHER_TEXT="link to $(readlink "$LAUNCHER")"
+elif [ -e "$LAUNCHER" ]; then
+  NOW_LAUNCHER_TEXT="not a link"
+else
+  NOW_LAUNCHER_TEXT="absent"
+fi
+[ -e "$LAUNCHER" ] && NOW_LAUNCHER_RESOLVED=$(readlink -f "$LAUNCHER" 2>/dev/null || true)
+
+heading "claude command against pins.txt"
+{ echo "command: $(pin claude-command)"; echo "resolved: $(pin claude-command-resolved)"; } > "$WORK/before-command"
+{ echo "command: ${NOW_FOUND:-none}"; echo "resolved: ${NOW_RESOLVED:-none}"; } > "$WORK/after-command"
+compare "$WORK/before-command" "$WORK/after-command"
+
+heading "~/.local/bin/claude link against pins.txt"
+{ echo "launcher: $(pin claude-launcher)"; echo "resolved: $(pin claude-launcher-resolved)"; } > "$WORK/before-launcher"
+{ echo "launcher: $NOW_LAUNCHER_TEXT"; echo "resolved: ${NOW_LAUNCHER_RESOLVED:-none}"; } > "$WORK/after-launcher"
+compare "$WORK/before-launcher" "$WORK/after-launcher"
+
+heading "where the claude command and the launcher resolve now"
+where() {
+  if under_root "$2"; then
+    echo "$1 resolves INSIDE the disposable root ($2)"
+  else
+    echo "$1 resolves outside the disposable root ($2)"
+  fi
+}
+where "the claude command" "$NOW_RESOLVED"
+where "the launcher" "$NOW_LAUNCHER_RESOLVED"
+
+heading "entries other programs wrote under the exported variables (top level of the disposable data and config roots, other than crenshawdev; evidence only)"
+for TREE in "$DATA" "$CONF"; do
+  echo "-- $TREE"
+  OTHERS=$(find "$TREE" -mindepth 1 -maxdepth 1 ! -name crenshawdev -printf '%f %y\n' 2>/dev/null | sort)
+  if [ -n "$OTHERS" ]; then echo "$OTHERS"; else echo "(none)"; fi
 done
 exit 0

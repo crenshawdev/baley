@@ -131,6 +131,17 @@ done
 # by live-claude-reads.sh, so a hook or server that missed the exported variables shows up as a change.
 case "${XDG_DATA_HOME:-}" in /*) REAL_HOME="$XDG_DATA_HOME/crenshawdev/baley" ;; *) REAL_HOME="$HOME/.local/share/crenshawdev/baley" ;; esac
 case "${XDG_CONFIG_HOME:-}" in /*) REAL_CONF="$XDG_CONFIG_HOME/crenshawdev/baley" ;; *) REAL_CONF="$HOME/.config/crenshawdev/baley" ;; esac
+# Claude Code keeps its installed versions beside its data, and its launcher is a link in ~/.local/bin. Both are
+# recorded from the starting environment, so a run that moved the launcher or added a version shows up afterwards.
+case "${XDG_DATA_HOME:-}" in /*) REAL_VERSIONS="$XDG_DATA_HOME/claude/versions" ;; *) REAL_VERSIONS="$HOME/.local/share/claude/versions" ;; esac
+LAUNCHER="$HOME/.local/bin/claude"
+if [ -L "$LAUNCHER" ]; then
+  LAUNCHER_TEXT="link to $(readlink "$LAUNCHER")"
+elif [ -e "$LAUNCHER" ]; then
+  LAUNCHER_TEXT="not a link"
+else
+  LAUNCHER_TEXT="absent"
+fi
 list_real() {
   if [ -d "$1" ]; then
     find "$1" -printf '%p %y %s %TY-%Tm-%Td %TH:%TM:%TS\n' | sort
@@ -212,6 +223,13 @@ fi
   echo "begin real-config $REAL_CONF"
   list_real "$REAL_CONF"
   echo "end real-config"
+  echo "claude-command: ${CLAUDE_FOUND:-none}"
+  echo "claude-command-resolved: ${CLAUDE_RESOLVED:-none}"
+  echo "claude-launcher: $LAUNCHER_TEXT"
+  echo "claude-launcher-resolved: ${LAUNCHER_RESOLVED:-none}"
+  echo "begin real-claude-versions $REAL_VERSIONS"
+  list_real "$REAL_VERSIONS"
+  echo "end real-claude-versions"
 } >> "$OUT/pins.txt"
 grep -q '^checkout-status: DIRTY' "$OUT/pins.txt" \
   && echo "WARNING: the checkout is dirty, so the binary may not match the commit pins.txt names."
@@ -651,6 +669,7 @@ EOF
   row post.text-equal "Stored text equal to the text each row sent (large capture: byte count and SHA-256)" "Equal"
   row post.no-loss "No capture lost, none silently merged" "Every request_id expected to be recorded appears once. Ids 91, 92 and 93 are refused and appear never. Ids 81 to 86 and any request an exit cut off before the server read it may leave no event, and that is not a loss. No id appears twice and no event holds another request's text"
   row post.real-folders "The owner's real Baley folders against pins.txt" "No difference"
+  row post.real-claude "The owner's claude command, its ~/.local/bin/claude link and Claude Code's real versions folder against pins.txt" "No difference, and neither the command nor the link resolves inside the disposable root"
 }
 write_sheet > "$SHEET"
 
