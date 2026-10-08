@@ -1094,7 +1094,7 @@ reads.txt lines 374 to 378
 
 ## Post-run reads
 
-The output of `sh live-claude-reads.sh`, as the owner saved it in results/reads.txt. The block below is that file unchanged except that the home folder is written `~`.
+The output of `sh live-claude-reads.sh`, as the coding agent that drove the run saved it in results/reads.txt. The block below is that file unchanged except that the home folder is written `~`.
 
 ```text
 
