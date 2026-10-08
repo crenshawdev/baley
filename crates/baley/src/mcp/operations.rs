@@ -436,8 +436,8 @@ pub fn schema_answer(arguments: &Value) -> Value {
     }
 }
 
-/// The schema of one served operation, from the library's request shapes.
-fn served_schema(operation: &str) -> Option<Value> {
+/// One served operation's schema from the request shapes; the tool input schemas use it too.
+pub(crate) fn served_schema(operation: &str) -> Option<Value> {
     // The selected variant must not refer to definitions left on the root.
     let settings = schemars::generate::SchemaSettings::default()
         .with(|settings| settings.inline_subschemas = true);
