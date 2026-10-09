@@ -1491,3 +1491,26 @@ fn an_update_source_that_is_not_https_read_from_the_global_file_is_caught() {
         );
     }
 }
+
+#[test]
+fn an_update_source_with_a_query_or_fragment_that_swallows_the_platform_path_is_caught() {
+    for source in [
+        "https://dl.example/dev?x=1",
+        "https://dl.example/dev#stable",
+    ] {
+        let text = format!("[updates]\nsource = \"{source}\"\n");
+        let refusal = global_fault(&text);
+        assert_eq!(refusal.code(), "config-unavailable", "{source}");
+        let message = refusal.to_string();
+        assert!(message.contains("updates.source"), "{message}");
+        assert!(message.contains("query or fragment"), "{message}");
+    }
+    for source in ["https://dl.example/dev/", "https://dl.example/dev"] {
+        let text = format!("[updates]\nsource = \"{source}\"\n");
+        let policy = standard(None, Some(&text), None).unwrap();
+        assert_eq!(
+            value_of(&policy, "updates.source").value,
+            Some(Value::HttpsAddress(source.into()))
+        );
+    }
+}

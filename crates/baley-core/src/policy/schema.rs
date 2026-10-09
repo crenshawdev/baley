@@ -180,18 +180,19 @@ pub enum Kind {
     /// A list of branch names, possibly empty. Each is a non-blank string.
     BranchList,
     /// An `https://` address: the scheme, then at least one character, with no
-    /// whitespace or control character. Whether anything answers there is the
-    /// fetcher's question, not the schema's.
+    /// whitespace, control character, query or fragment (`?` or `#`). Whether
+    /// anything answers there is the fetcher's question, not the schema's.
     HttpsAddress,
 }
 
 /// Whether `text` is an `https://` address the schema accepts (design 0012
-/// section 9): the scheme, at least one more character, and no whitespace or
-/// control character anywhere.
+/// section 9): the scheme, at least one more character, and no whitespace,
+/// control character, query or fragment (`?` or `#`) anywhere.
 pub(super) fn is_https_address(text: &str) -> bool {
     text.strip_prefix("https://")
         .is_some_and(|rest| !rest.is_empty())
         && !text.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !text.contains(['?', '#'])
 }
 
 /// A setting's built-in value.

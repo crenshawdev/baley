@@ -328,7 +328,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 }
                 Kind::HttpsAddress => write!(
                     f,
-                    "is \"{written}\", which is not an https:// address; write an https:// address or remove the line"
+                    "is \"{written}\"; write an https:// address without a query or fragment (? or #) or remove the line"
                 ),
             }
         }

@@ -126,8 +126,7 @@ impl fmt::Display for SetRefusal {
                     }
                     Kind::BranchList => "a list of branch names".to_owned(),
                     Kind::HttpsAddress => {
-                        "an https:// address (https:// followed by the host, with no spaces)"
-                            .to_owned()
+                        "an https:// address with no spaces, query or fragment".to_owned()
                     }
                 };
                 write!(
