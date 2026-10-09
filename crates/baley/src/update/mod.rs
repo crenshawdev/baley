@@ -9,6 +9,7 @@
 pub mod claim;
 pub mod command;
 pub mod deliver;
+pub mod detached;
 pub mod events;
 pub mod fetch;
 pub mod installation;

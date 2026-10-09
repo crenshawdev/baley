@@ -46,12 +46,14 @@ pub struct Launch {
     pub own_group: bool,
     /// Kill the child when the process that started it dies.
     pub die_with_parent: bool,
-    /// Let the child use this process's own stdin, stdout and stderr. Nothing
-    /// is captured, so the output carries no bytes.
+    /// Let the child use this process's own streams, except outputs sent to
+    /// null. Nothing is captured, so the output carries no bytes.
     pub inherit: bool,
-    /// The child reads this process's stdin while stdout and stderr stay piped.
+    /// The child reads this process's stdin without changing its output streams.
     /// Independent of `inherit`; when set, `stdin` bytes are not written.
     pub inherit_stdin: bool,
+    /// Send stdout and stderr to the null device, even when `inherit` is set.
+    pub null_output: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +93,7 @@ impl std::fmt::Debug for Launch {
             .field("die_with_parent", &self.die_with_parent)
             .field("inherit", &self.inherit)
             .field("inherit_stdin", &self.inherit_stdin)
+            .field("null_output", &self.null_output)
             .finish()
     }
 }
@@ -111,6 +114,7 @@ impl Launch {
             die_with_parent: false,
             inherit: false,
             inherit_stdin: false,
+            null_output: false,
         }
     }
 
@@ -210,6 +214,12 @@ impl Launch {
         self
     }
 
+    /// Discard both output streams so a detached child has no unread pipes.
+    pub fn null_output(mut self) -> Self {
+        self.null_output = true;
+        self
+    }
+
     /// The arguments as they read in a message, for a caller's error text.
     pub fn argument_text(&self) -> String {
         self.args
@@ -306,23 +316,23 @@ pub struct StdioPlan {
 
 /// Selects streams without constructing an operating-system command.
 pub fn stdio_plan(launch: &Launch) -> StdioPlan {
-    if launch.inherit {
-        return StdioPlan {
-            stdin: Stream::Inherit,
-            stdout: Stream::Inherit,
-            stderr: Stream::Inherit,
-        };
-    }
+    let output = if launch.null_output {
+        Stream::Null
+    } else if launch.inherit {
+        Stream::Inherit
+    } else {
+        Stream::Piped
+    };
     StdioPlan {
-        stdin: if launch.inherit_stdin {
+        stdin: if launch.inherit || launch.inherit_stdin {
             Stream::Inherit
         } else if launch.stdin.is_some() {
             Stream::Piped
         } else {
             Stream::Null
         },
-        stdout: Stream::Piped,
-        stderr: Stream::Piped,
+        stdout: output,
+        stderr: output,
     }
 }
 
