@@ -73,12 +73,13 @@ verify_download() {
 check_stable_path() {
     if [ -L "$stable" ]; then
         target=$(readlink "$stable") || fail "$stable: cannot read symbolic link"
-        case $target in
-            "$versions/"*)
-                [ ! -d "$stable" ] || fail "$stable: symbolic link to a folder ($target)"
-                ;;
-            *) fail "$stable: symbolic link outside $versions/ ($target)" ;;
-        esac
+        rest=${target#"$versions/"}
+        folder=${rest%%/*}
+        file=${rest#*/}
+        if [ "$rest" = "$target" ] || [ "$file" != baley ] || ! valid_version "$folder"; then
+            fail "$stable: symbolic link outside $versions/ ($target)"
+        fi
+        [ ! -d "$stable" ] || fail "$stable: symbolic link to a folder ($target)"
     elif [ -d "$stable" ]; then
         fail "$stable: a folder is there"
     elif [ -f "$stable" ]; then
@@ -176,13 +177,14 @@ if [ -L "$staged" ]; then
 elif [ -f "$staged" ]; then
     actual=$(digest < "$staged")
     [ "$actual" = "$sha256" ] || fail "$staged: staging conflict, SHA-256 is $actual, expected $sha256"
+    [ -x "$staged" ] || fail "$staged: staging conflict, the file is not executable"
 elif [ -e "$staged" ]; then
     fail "$staged: staging conflict, an entry other than a regular file is there"
 else
     mkdir -p "$versions/$version"
     staging_temporary=$(mktemp "$versions/$version/.baley.XXXXXXXXXX")
+    chmod 755 "$scratch/baley"
     mv "$scratch/baley" "$staging_temporary"
-    chmod 755 "$staging_temporary"
     mv -f "$staging_temporary" "$staged"
     staging_temporary=
 fi
@@ -190,6 +192,8 @@ fi
 mkdir -p "$stable_folder"
 temporary=$stable_folder/.${scratch##*/}
 ln -s "$staged" "$temporary"
+[ -L "$temporary" ] && [ "$(readlink "$temporary")" = "$staged" ] ||
+    fail "$temporary: temporary symbolic link does not point to $staged"
 link_temporary=$temporary
 check_stable_path
 mv -f "$link_temporary" "$stable"
