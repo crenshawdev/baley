@@ -2,9 +2,10 @@
 //! beside the stable path, gathering kept apart from judging, unsigned
 //! development artifacts only.
 //!
-//! Every download passes through `verify_download`, the seam that
+//! Every download passes through [`manifest::verify_download`], the seam that
 //! checks the SHA-256 of a development artifact. It does not check a
 //! signature; that replaces its body before any release.
 
 pub mod installation;
+pub mod manifest;
 pub mod version;
