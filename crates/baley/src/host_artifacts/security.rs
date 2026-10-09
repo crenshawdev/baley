@@ -1,6 +1,7 @@
 //! The sandbox and permission proposal that keeps agents out of Baley's home
-//! and config folder and off the files Baley places (design 0012 section 5,
-//! ADR 0033; D-13, D-14, D-15, D-19, D-20).
+//! and config folder, off the files Baley places and out of the folder of
+//! staged versions (design 0012 section 5, ADR 0033; D-13, D-14, D-15, D-19,
+//! D-20).
 //!
 //! The proposal is content, not a write. `baley install` merges it into
 //! Claude Code's settings in Build 3 T15, and T12 applies it by hand. It reads
@@ -139,22 +140,40 @@ fn push_unique<T: PartialEq>(list: &mut Vec<T>, item: T) {
     }
 }
 
-/// The proposal over the resolved folders, the executable and the supplied
-/// write-only files: the `baley.toml` paths the caller names and the
-/// placement map's protected list.
+/// The proposal over the resolved folders, the executable, the supplied
+/// write-only files (the `baley.toml` paths the caller names and the
+/// placement map's protected list) and the write-only folders (the
+/// placement map's [`super::placement::PlacementMap::write_only_folders`]).
 ///
-/// Both folders are denied to sandboxed reads and writes and get a `Read`
-/// and an `Edit` rule. Each write-only file, and the executable whether or
-/// not the list already holds it (D-25), is denied to sandboxed writes and
-/// gets an `Edit` rule, and nothing denies its reads (D-15). One folder for
-/// home and config gives one set of entries (D-13), and no list holds an
-/// entry twice. Nothing excludes a command or re-opens a path (D-19).
-pub fn propose(folders: &Folders, executable: &Executable, write_only: &[PathBuf]) -> Proposal {
+/// Both Baley folders are denied to sandboxed reads and writes and get a
+/// `Read` and an `Edit` rule. Each write-only folder, such as the folder of
+/// staged versions, is denied to sandboxed writes and gets an `Edit` folder
+/// rule, listed after the Baley folders and before the files, and nothing
+/// denies its reads, because sandboxed Bash must run the binaries inside it.
+/// A folder entry protects what is inside it, which a file entry would not.
+/// Each write-only file, and the executable whether or not the list already
+/// holds it (D-25), is denied to sandboxed writes and gets an `Edit` rule,
+/// and nothing denies its reads (D-15). One folder for home and config gives
+/// one set of entries (D-13), and no list holds an entry twice. Nothing
+/// excludes a command or re-opens a path (D-19).
+pub fn propose(
+    folders: &Folders,
+    executable: &Executable,
+    write_only: &[PathBuf],
+    write_only_folders: &[PathBuf],
+) -> Proposal {
     let mut unrendered = Vec::new();
     let mut folder_paths: Vec<String> = Vec::new();
     for folder in [&folders.home, &folders.config] {
         match rule_path(folder) {
             Ok(path) => push_unique(&mut folder_paths, path),
+            Err(report) => push_unique(&mut unrendered, report),
+        }
+    }
+    let mut write_only_folder_paths: Vec<String> = Vec::new();
+    for folder in write_only_folders {
+        match rule_path(folder) {
+            Ok(path) => push_unique(&mut write_only_folder_paths, path),
             Err(report) => push_unique(&mut unrendered, report),
         }
     }
@@ -172,6 +191,10 @@ pub fn propose(folders: &Folders, executable: &Executable, write_only: &[PathBuf
     for folder in &folder_paths {
         rules.push(read_folder_rule(folder));
         rules.push(edit_folder_rule(folder));
+    }
+    for folder in write_only_folder_paths {
+        push_unique(&mut rules, edit_folder_rule(&folder));
+        push_unique(&mut deny_write, folder);
     }
     for file in files {
         push_unique(&mut rules, edit_file_rule(&file));
@@ -219,7 +242,12 @@ mod tests {
 
     fn proposal(folders: &Folders, write_only: &[&str]) -> Proposal {
         let write_only: Vec<PathBuf> = write_only.iter().map(PathBuf::from).collect();
-        propose(folders, &Executable::new(EXECUTABLE).unwrap(), &write_only)
+        propose(
+            folders,
+            &Executable::new(EXECUTABLE).unwrap(),
+            &write_only,
+            &[],
+        )
     }
 
     fn strings(value: &Value) -> Vec<&str> {
@@ -395,6 +423,7 @@ mod tests {
             &folders(HOME, CONFIG),
             &Executable::new(EXECUTABLE).unwrap(),
             std::slice::from_ref(&bytes),
+            &[],
         );
         assert_eq!(
             ours.unrendered,
@@ -406,5 +435,53 @@ mod tests {
         let deny_write = strings(&ours.settings["sandbox"]["filesystem"]["denyWrite"]);
         assert_eq!(deny_write, [HOME, CONFIG, EXECUTABLE]);
         assert!(!ours.settings.to_string().contains("baley.toml"));
+    }
+
+    const VERSIONS_FOLDER: &str = "/home/o/.local/lib/crenshawdev/baley/versions";
+
+    fn with_write_only_folders(listed: &[&str]) -> Proposal {
+        let listed: Vec<PathBuf> = listed.iter().map(PathBuf::from).collect();
+        propose(
+            &folders(HOME, CONFIG),
+            &Executable::new(EXECUTABLE).unwrap(),
+            &[],
+            &listed,
+        )
+    }
+
+    #[test]
+    fn a_versions_folder_rendered_as_a_file_rule_or_given_read_protection_is_caught() {
+        let ours = with_write_only_folders(&[VERSIONS_FOLDER]);
+        assert!(ours.unrendered.is_empty(), "{:?}", ours.unrendered);
+        let filesystem = &ours.settings["sandbox"]["filesystem"];
+        assert_eq!(strings(&filesystem["denyRead"]), [HOME, CONFIG]);
+        assert_eq!(
+            strings(&filesystem["denyWrite"]),
+            [HOME, CONFIG, VERSIONS_FOLDER, EXECUTABLE]
+        );
+        assert_eq!(
+            strings(&ours.settings["permissions"]["deny"]),
+            [
+                "Read(//home/o/.local/share/crenshawdev/baley/**)",
+                "Edit(//home/o/.local/share/crenshawdev/baley/**)",
+                "Read(//home/o/.config/crenshawdev/baley/**)",
+                "Edit(//home/o/.config/crenshawdev/baley/**)",
+                "Edit(//home/o/.local/lib/crenshawdev/baley/versions/**)",
+                "Edit(//home/o/.local/bin/baley)",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_versions_folder_with_a_pattern_character_rendered_is_caught() {
+        let ours = with_write_only_folders(&["/home/o/v[1]/versions"]);
+        assert_eq!(
+            ours.unrendered,
+            [Unrendered::UnsupportedCharacter {
+                path: "/home/o/v[1]/versions".to_owned(),
+                character: '[',
+            }]
+        );
+        assert!(!ours.settings.to_string().contains("/home/o/v[1]"));
     }
 }

@@ -154,7 +154,7 @@ pub fn select(request: &Request) -> Result<Selection, Refusal> {
             };
             // The proposal adds the executable to the write-only files itself
             // (D-25), as the placement projection does.
-            let proposal = propose(&folders, &judged(executable)?, protect);
+            let proposal = propose(&folders, &judged(executable)?, protect, &[]);
             (proposal.settings, proposal.unrendered)
         }
     };
