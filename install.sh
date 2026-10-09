@@ -139,9 +139,9 @@ cleanup() {
 trap cleanup 0
 trap 'exit 1' HUP INT TERM
 
-curl --proto '=https' --tlsv1.2 -fsSL "$source/$os-$arch/manifest" -o "$scratch/manifest" ||
+curl -q --proto '=https' --tlsv1.2 -fsSL "$source/$os-$arch/manifest" -o "$scratch/manifest" ||
     fail "manifest download failed: $source/$os-$arch/manifest"
-curl --proto '=https' --tlsv1.2 -fsSL "$source/$os-$arch/baley" -o "$scratch/baley" ||
+curl -q --proto '=https' --tlsv1.2 -fsSL "$source/$os-$arch/baley" -o "$scratch/baley" ||
     fail "binary download failed: $source/$os-$arch/baley"
 
 {
