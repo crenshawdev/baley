@@ -87,3 +87,5 @@ pub mod protected_paths;
 pub mod replace;
 /// The two settings files as bytes: the global file's path, one reader and its capped form for the guard.
 pub mod settings;
+/// The update check: staged versions beside the stable path, the daily claim and its records.
+pub mod update;
