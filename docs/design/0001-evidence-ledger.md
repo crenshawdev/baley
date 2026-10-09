@@ -130,7 +130,7 @@ graph LR
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Development artifacts: a<br />plain executable and an<br />unsigned two-line manifest of<br />version and SHA-256. #14<br />supplies signed checksum<br />manifests and release<br />verification.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
@@ -153,7 +153,7 @@ graph LR
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context from the shared C4 model. The host reaches Baley over MCP and its pre-tool hook. The session makes review and model-list API calls with the owner's environment keys; Baley receives their results. The planned foreground `baley update` command and the detached opt-in updater contact the release source; T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
+*Figure 1. System context from the shared C4 model. The host reaches Baley over MCP and its pre-tool hook. The session makes review and model-list API calls with the owner's environment keys; Baley receives their results. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 ```mermaid
 flowchart TB
