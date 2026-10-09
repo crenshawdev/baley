@@ -1800,3 +1800,33 @@ fn a_branch_list_set_outside_a_project_not_refused_as_not_a_project_first_is_cau
     .expect_err("refused");
     assert_eq!(refusal, SetRefusal::NotAProject);
 }
+
+#[test]
+fn a_config_set_source_the_file_parser_would_refuse_is_caught() {
+    let typed = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        false,
+        None,
+        &[
+            ("updates.source", "https://dl.example/baley"),
+            ("updates.auto", "true"),
+        ],
+    )
+    .expect("an https source and a boolean are accepted");
+    let bytes = render_file(Schema::standard(), FileLayer::Global, None, &typed).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[updates]\nauto = true\nsource = \"https://dl.example/baley\"\n"
+    );
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        false,
+        None,
+        &[("updates.source", "http://dl.example/baley")],
+    )
+    .expect_err("a plain http source is refused");
+    assert_eq!(refusal.code(), "invalid-value");
+    assert!(refusal.to_string().contains("https://"), "{refusal}");
+}

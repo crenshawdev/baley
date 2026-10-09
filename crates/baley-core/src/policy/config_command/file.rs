@@ -75,7 +75,8 @@ fn child<'t>(table: &'t mut Table, key: &str) -> &'t mut Table {
 }
 
 /// The TOML type each kind reads back: a boolean, or a string for a rung
-/// name, a model name, a remote name and an `on_protected` name.
+/// name, a model name, a remote name, an `https://` address and an
+/// `on_protected` name.
 fn toml_value(value: &Value) -> TomlValue {
     match value {
         Value::Bool(value) => TomlValue::Boolean(*value),
@@ -83,6 +84,7 @@ fn toml_value(value: &Value) -> TomlValue {
         Value::ModelName(name) => TomlValue::String(name.clone()),
         Value::RemoteName(name) => TomlValue::String(name.clone()),
         Value::OnProtected(on) => TomlValue::String(on.name().to_owned()),
+        Value::HttpsAddress(address) => TomlValue::String(address.clone()),
         Value::BranchList(names) => {
             TomlValue::Array(names.iter().cloned().map(TomlValue::String).collect())
         }
@@ -123,7 +125,9 @@ pub(super) fn value_text(value: &Value) -> String {
             let items: Vec<String> = names.iter().map(|name| quoted(name)).collect();
             format!("[{}]", items.join(", "))
         }
-        Value::ModelName(name) | Value::RemoteName(name) => quoted(name),
+        Value::ModelName(name) | Value::RemoteName(name) | Value::HttpsAddress(name) => {
+            quoted(name)
+        }
     }
 }
 

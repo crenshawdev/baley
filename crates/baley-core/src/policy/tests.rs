@@ -131,7 +131,7 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 17);
+    assert_eq!(schema.entries().len(), 19);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -697,7 +697,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 17);
+        assert_eq!(policy.settings.len(), 19);
         assert!(
             policy
                 .settings
@@ -1442,4 +1442,52 @@ fn the_branch_list_missing_main_and_master_with_no_file_is_caught() {
         value_of(&policy, "git.protected_branches").source,
         default_source()
     );
+}
+
+#[test]
+fn an_update_setting_missing_or_open_to_project_files_is_caught() {
+    let schema = Schema::standard();
+    let auto = schema.get("updates.auto").expect("updates.auto is missing");
+    assert_eq!(
+        (auto.kind, auto.default, auto.scope, auto.owner),
+        (Kind::Bool, Builtin::Bool(false), Scope::Global, "0012")
+    );
+    let source = schema
+        .get("updates.source")
+        .expect("updates.source is missing");
+    assert_eq!(
+        (source.kind, source.default, source.scope, source.owner),
+        (Kind::HttpsAddress, Builtin::Absent, Scope::Global, "0012")
+    );
+    assert_eq!(schema.entries().len(), 19);
+}
+
+#[test]
+fn an_update_source_that_is_not_https_read_from_the_global_file_is_caught() {
+    let policy = standard(
+        None,
+        Some("[updates]\nsource = \"https://dl.example/baley\"\n"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        value_of(&policy, "updates.source").value,
+        Some(Value::HttpsAddress("https://dl.example/baley".into()))
+    );
+    for line in [
+        "source = \"http://dl.example/baley\"",
+        "source = \"https://\"",
+        "source = \"\"",
+        "source = \"https://dl.example/a b\"",
+        "source = \"ftp://dl.example\"",
+        "source = 3",
+    ] {
+        let text = format!("[updates]\n{line}\n");
+        let refusal = global_fault(&text);
+        assert_eq!(refusal.code(), "config-unavailable", "{line}");
+        assert!(
+            refusal.to_string().contains("updates.source"),
+            "{line}: {refusal}"
+        );
+    }
 }
