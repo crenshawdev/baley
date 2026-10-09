@@ -37,6 +37,8 @@ pub enum HomeRefusal {
     Empty,
     /// `HOME` is not an absolute path.
     Relative(String),
+    /// `HOME` contains `..`, whose meaning depends on folder links.
+    ParentComponent(String),
     /// `HOME` is not valid UTF-8, so its text cannot be a stable identity.
     NotUtf8(String),
 }
@@ -53,6 +55,11 @@ impl fmt::Display for HomeRefusal {
                 "HOME is \"{}\", which is not an absolute path; set it to the absolute path of your home folder",
                 value.escape_debug()
             ),
+            HomeRefusal::ParentComponent(value) => write!(
+                f,
+                "HOME is \"{}\", which contains ..; set it to the absolute path of your home folder with no .. in it",
+                value.escape_debug()
+            ),
             HomeRefusal::NotUtf8(lossy) => write!(
                 f,
                 "HOME is \"{}\" and is not valid UTF-8; set it to a path that is",
@@ -65,9 +72,10 @@ impl fmt::Display for HomeRefusal {
 impl std::error::Error for HomeRefusal {}
 
 impl Layout {
-    /// The layout for the `HOME` the environment supplies. A trailing slash
-    /// on `HOME` changes nothing, so one home gives one spelling of every
-    /// path and so one installation identity.
+    /// The layout for the `HOME` the environment supplies. Empty and `.`
+    /// components are removed, including repeated and trailing slashes, so
+    /// one home gives one spelling of every path and installation identity.
+    /// A `..` component is refused because its meaning depends on folder links.
     pub fn resolve(env: &Environment) -> Result<Layout, HomeRefusal> {
         let value = env.home.as_ref().ok_or(HomeRefusal::Unset)?;
         if value.is_empty() {
@@ -79,6 +87,16 @@ impl Layout {
         if !home.starts_with('/') {
             return Err(HomeRefusal::Relative(home.to_owned()));
         }
+        if home.split('/').any(|component| component == "..") {
+            return Err(HomeRefusal::ParentComponent(home.to_owned()));
+        }
+        let home = format!(
+            "/{}",
+            home.split('/')
+                .filter(|component| !component.is_empty() && *component != ".")
+                .collect::<Vec<_>>()
+                .join("/")
+        );
         let home = home.trim_end_matches('/');
         Ok(Layout {
             stable: format!("{home}/.local/bin/baley"),
@@ -224,7 +242,17 @@ pub fn versions_present(children: &[Child]) -> Vec<Version> {
     found
 }
 
-/// Looks at the stable path without following it, then follows it once.
+/// Uses one generation of the link for both its target text and followed facts.
+fn followed_path(link: &Path, target: &Path) -> PathBuf {
+    if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        link.parent().unwrap_or(Path::new("")).join(target)
+    }
+}
+
+/// Looks at the stable path without following it, reads its target once,
+/// then reads the followed facts from that captured target.
 /// Owns no rule: [`judge_active`] reads the result.
 pub fn gather_stable(layout: &Layout) -> io::Result<StablePath> {
     let path = layout.stable_path();
@@ -237,7 +265,7 @@ pub fn gather_stable(layout: &Layout) -> io::Result<StablePath> {
         return Ok(StablePath::NotALink);
     }
     let target = fs::read_link(path)?;
-    let followed = match fs::metadata(path) {
+    let followed = match fs::metadata(followed_path(path, &target)) {
         Ok(meta) if meta.is_file() => Followed::RegularFile,
         Ok(_) => Followed::Other,
         Err(error) if error.kind() == io::ErrorKind::NotFound => Followed::Missing,
@@ -316,6 +344,22 @@ mod tests {
     }
 
     #[test]
+    fn a_home_spelled_with_dot_components_or_repeated_slashes_giving_a_second_identity_is_caught() {
+        for home in [
+            "/home/o/.",
+            "/home/o//",
+            "/home//o",
+            "/home/./o/./",
+            "/./home/o",
+        ] {
+            let layout = Layout::resolve(&env(Some(home.into()))).unwrap();
+            assert_eq!(layout.stable_path().as_os_str(), "/home/o/.local/bin/baley");
+            assert_eq!(layout.versions_folder().as_os_str(), VERSIONS);
+            assert_eq!(layout.installation(), "/home/o/.local/bin/baley");
+        }
+    }
+
+    #[test]
     fn an_unusable_home_given_a_stable_path_is_caught() {
         let cases = [
             (None, HomeRefusal::Unset),
@@ -328,12 +372,35 @@ mod tests {
                 Some(OsString::from_vec(b"/home/\xff".to_vec())),
                 HomeRefusal::NotUtf8("/home/\u{fffd}".into()),
             ),
+            (
+                Some("/home/o/../p".into()),
+                HomeRefusal::ParentComponent("/home/o/../p".into()),
+            ),
+            (
+                Some("/home/o/..".into()),
+                HomeRefusal::ParentComponent("/home/o/..".into()),
+            ),
         ];
         for (home, refusal) in cases {
             let got = Layout::resolve(&env(home)).expect_err("HOME is unusable");
             assert_eq!(got, refusal);
             assert!(got.to_string().starts_with("HOME "), "{got}");
         }
+    }
+
+    #[test]
+    fn a_relative_link_target_followed_from_the_wrong_folder_is_caught() {
+        let link = Path::new("/home/o/.local/bin/baley");
+        assert_eq!(
+            followed_path(
+                link,
+                Path::new("../lib/crenshawdev/baley/versions/0.2.0/baley")
+            )
+            .as_os_str(),
+            "/home/o/.local/bin/../lib/crenshawdev/baley/versions/0.2.0/baley"
+        );
+        let target = Path::new("/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley");
+        assert_eq!(followed_path(link, target).as_os_str(), target.as_os_str());
     }
 
     #[test]
