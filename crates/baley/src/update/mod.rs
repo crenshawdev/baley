@@ -13,6 +13,7 @@ pub mod fetch;
 pub mod installation;
 pub mod manifest;
 pub mod receipt;
+pub mod reconcile;
 pub mod record;
 pub mod seed;
 pub mod version;
