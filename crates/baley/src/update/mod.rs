@@ -8,6 +8,7 @@
 
 pub mod claim;
 pub mod events;
+pub mod fetch;
 pub mod installation;
 pub mod manifest;
 pub mod record;
