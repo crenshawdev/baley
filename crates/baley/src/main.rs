@@ -245,6 +245,22 @@ mod update_argument_tests {
     use baley::update::command::{UpdateArgs, UpdateCommand};
 
     #[test]
+    fn a_resolve_subcommand_misread_or_hidden_is_caught() {
+        let resolve = Cli::try_parse_from(["baley", "update", "resolve"]).unwrap();
+        assert!(matches!(
+            resolve.command,
+            Command::Update(UpdateArgs {
+                command: Some(UpdateCommand::Resolve)
+            })
+        ));
+        let help = Cli::try_parse_from(["baley", "update", "--help"])
+            .err()
+            .expect("long help");
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert!(help.to_string().contains("resolve"), "{help}");
+    }
+
+    #[test]
     fn an_update_subcommand_misread_or_the_seed_step_shown_is_caught() {
         let manual = Cli::try_parse_from(["baley", "update"]).unwrap();
         assert!(matches!(

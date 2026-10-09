@@ -1,12 +1,14 @@
 //! Reconciliation of an interrupted update from local observations
-//! (design 0012 section 6). No interrupted check fetches again.
+//! (design 0012 sections 6 and 12). No interrupted check fetches again.
 
 use baley_store::{
-    Actor, Claim, ClaimId, Command, CommandKind, Ledger, NewEvent, Observed, ProjectId,
+    Actor, Claim, ClaimId, ClaimState, Command, CommandKind, Ledger, NewEvent, Observed, ProjectId,
     ReconcileAuthority, Reconciliation, Refusal, RequestId, Resolution, StaleInput, StoreError,
-    request_digest,
+    claim_state, request_digest,
 };
 use serde_json::{Value, json};
+
+use crate::ledger::display::{self, Render};
 
 use super::claim::UPDATE_CHECK;
 use super::events::{ClaimRef, Facts, FailureCode};
@@ -27,10 +29,10 @@ pub enum ReconcileStep {
     AwaitingOwner,
 }
 
-/// The writes requested by automatic reconciliation.
+/// The writes requested by reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconcileDecision {
-    /// The failed check's event, absent while activation is ambiguous.
+    /// The failed check's event, absent when automatic reconciliation must wait.
     pub event: Option<NewEvent>,
     /// The finding and whether it closes the interrupted claim.
     pub reconciliation: Reconciliation,
@@ -94,6 +96,24 @@ pub fn reconcile_decision(
     children: &[Child],
     at: &str,
 ) -> Result<ReconcileDecision, StoreError> {
+    decision(
+        layout,
+        held,
+        stable,
+        children,
+        at,
+        ReconcileAuthority::Automatic,
+    )
+}
+
+fn decision(
+    layout: &Layout,
+    held: &Claim,
+    stable: &StablePath,
+    children: &[Child],
+    at: &str,
+    authority: ReconcileAuthority,
+) -> Result<ReconcileDecision, StoreError> {
     let installation = held.intent["installation"]
         .as_str()
         .ok_or_else(|| invalid("an update claim has no installation"))?;
@@ -115,28 +135,29 @@ pub fn reconcile_decision(
         "active_version": result.active_version.map(|version| version.to_string()),
         "staged_version": result.staged_version.map(|version| version.to_string()),
     });
-    let (event, resolution) = if result.active_version.is_some() {
-        let record = record_decision(
-            &Facts {
-                installation,
-                day,
-                claim: ClaimRef {
-                    request_id: &held.id.request_id,
-                    seq: held.seq,
+    let (event, resolution) =
+        if authority == ReconcileAuthority::Owner || result.active_version.is_some() {
+            let record = record_decision(
+                &Facts {
+                    installation,
+                    day,
+                    claim: ClaimRef {
+                        request_id: &held.id.request_id,
+                        seq: held.seq,
+                    },
+                    at,
+                    active_version: result.active_version,
+                    staged_version: result.staged_version,
                 },
-                at,
-                active_version: result.active_version,
-                staged_version: result.staged_version,
-            },
-            result.outcome,
-        );
-        (
-            Some(record.event),
-            Resolution::Resolved(Box::new(record.decision)),
-        )
-    } else {
-        (None, Resolution::AwaitingOwner)
-    };
+                result.outcome,
+            );
+            (
+                Some(record.event),
+                Resolution::Resolved(Box::new(record.decision)),
+            )
+        } else {
+            (None, Resolution::AwaitingOwner)
+        };
     Ok(ReconcileDecision {
         event,
         reconciliation: Reconciliation {
@@ -166,8 +187,26 @@ pub fn reconcile_from_observation(
         .find(|claim| claim.id == *holder)
         .ok_or_else(|| StoreError::Stale(StaleInput::Claim(holder.clone())))?;
     let plan = reconcile_decision(layout, &held, stable, children, at)?;
+    record_reconciliation(
+        ledger,
+        &held,
+        &plan,
+        request_id,
+        at,
+        ReconcileAuthority::Automatic,
+    )
+}
+
+fn record_reconciliation(
+    ledger: &dyn Ledger,
+    held: &Claim,
+    plan: &ReconcileDecision,
+    request_id: RequestId,
+    at: &str,
+    authority: ReconcileAuthority,
+) -> Result<ReconcileStep, StoreError> {
     let command = Command {
-        project,
+        project: ProjectId(USER.into()),
         kind: CommandKind(UPDATE_RECONCILE.into()),
         request_id,
         digest: request_digest(&json!({
@@ -178,34 +217,126 @@ pub fn reconcile_from_observation(
                 "request_id": held.id.request_id.0,
                 "seq": held.seq,
             },
-            "observation": observation_value(stable, children),
+            "observation": plan.reconciliation.finding["observation"],
             "observed_at": at,
         }))
         .map_err(invalid)?,
         scope: Vec::new(),
         policy_version: 0,
         recorded_at: at.into(),
-        actor: Actor::Baley,
+        actor: match authority {
+            ReconcileAuthority::Automatic => Actor::Baley,
+            ReconcileAuthority::Owner => Actor::Owner,
+        },
         caller: None,
     };
-    ledger.reconcile(
-        &command,
-        &held.id,
-        ReconcileAuthority::Automatic,
-        &mut |tx, claim| {
-            if claim.seq != held.seq {
-                return Err(StoreError::Stale(StaleInput::Claim(claim.id.clone())));
-            }
-            if let Some(event) = &plan.event {
-                tx.append(event.clone())?;
-            }
-            Ok(plan.reconciliation.clone())
-        },
-    )?;
+    ledger.reconcile(&command, &held.id, authority, &mut |tx, claim| {
+        if claim.seq != held.seq {
+            return Err(StoreError::Stale(StaleInput::Claim(claim.id.clone())));
+        }
+        if let Some(event) = &plan.event {
+            tx.append(event.clone())?;
+        }
+        Ok(plan.reconciliation.clone())
+    })?;
     Ok(match plan.reconciliation.resolution {
         Resolution::Resolved(_) => ReconcileStep::Resolved,
         Resolution::AwaitingOwner => ReconcileStep::AwaitingOwner,
     })
+}
+
+/// The claim the owner closed and the versions observed at resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedUpdate {
+    /// The interrupted check's identity.
+    pub claim: ClaimId,
+    /// The interrupted outcome and the active and staged versions recorded.
+    pub result: CheckResult,
+}
+
+/// Resolves this installation's owner hold from supplied local observations.
+/// Active claims reach the store's liveness guard. An unheld interrupted
+/// claim stays available for the next check's automatic reconciliation.
+pub fn resolve_from_observation(
+    ledger: &dyn Ledger,
+    layout: &Layout,
+    stable: &StablePath,
+    children: &[Child],
+    request_id: RequestId,
+    at: &str,
+) -> Result<Option<ResolvedUpdate>, StoreError> {
+    let held = ledger
+        .open_claims(&ProjectId(USER.into()))?
+        .into_iter()
+        .find(|claim| {
+            claim.id.kind.0 == UPDATE_CHECK
+                && claim.scope == [format!("update/{}", layout.installation())]
+        });
+    let Some(held) = held else {
+        return Ok(None);
+    };
+    if held.awaiting_owner.is_none()
+        && claim_state(&held, at).map_err(invalid)? != ClaimState::Active
+    {
+        return Ok(None);
+    }
+    let plan = decision(
+        layout,
+        &held,
+        stable,
+        children,
+        at,
+        ReconcileAuthority::Owner,
+    )?;
+    record_reconciliation(
+        ledger,
+        &held,
+        &plan,
+        request_id,
+        at,
+        ReconcileAuthority::Owner,
+    )?;
+    Ok(Some(ResolvedUpdate {
+        claim: held.id,
+        result: observed_result(layout, stable, children),
+    }))
+}
+
+/// Reports owner resolution, keeping a live check in the busy exit class.
+pub(crate) fn resolve_receipt(
+    installation: &str,
+    result: Result<Option<ResolvedUpdate>, StoreError>,
+) -> Render {
+    match result {
+        Ok(None) => Render::line("no update check is held for this installation", 0),
+        Ok(Some(resolved)) => Render {
+            lines: vec![
+                format!(
+                    "resolved update check {} for {installation}",
+                    resolved.claim.request_id.0
+                ),
+                format!(
+                    "observed active version: {}; staged version: {}",
+                    resolved
+                        .result
+                        .active_version
+                        .map_or_else(|| "none".into(), |version| version.to_string()),
+                    resolved
+                        .result
+                        .staged_version
+                        .map_or_else(|| "none".into(), |version| version.to_string()),
+                ),
+                "the next baley update can run".into(),
+            ],
+            code: 0,
+            error: false,
+        },
+        Err(StoreError::Stale(StaleInput::ClaimActive(holder))) => Render::refusal(format!(
+            "update-check-busy: update check {} for {installation} is active",
+            holder.request_id.0
+        )),
+        Err(error) => display::store_error(&error, Some(USER)),
+    }
 }
 
 #[cfg(test)]
@@ -246,6 +377,165 @@ mod tests {
                 holds_binary: true,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_held_update_claim_left_blocking_after_the_owner_resolves_it_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = store(&dir.path().join("home"), "2026-10-08T08:00:00Z", options()).unwrap();
+        models::create_user(&ledger, "2026-10-08T08:00:00Z").unwrap();
+        let manual = |request: &str, at: &str| Check {
+            installation: INSTALLATION.into(),
+            trigger: Trigger::Manual,
+            request_id: RequestId(request.into()),
+            at: at.into(),
+            owner: claim_owner(4242, at),
+        };
+        let first = manual(CLAIM_ID, CLAIMED_AT);
+        let Claimed::New { seq } = claim_check(&ledger, &first).unwrap() else {
+            panic!("the first check must claim the installation");
+        };
+        let holder = ClaimId {
+            kind: CommandKind("update.check".into()),
+            request_id: first.request_id.clone(),
+        };
+        assert_eq!(
+            reconcile_from_observation(
+                &ledger,
+                &layout(),
+                &holder,
+                &StablePath::NotALink,
+                &children(&["0.1.0"]),
+                RequestId("00000000-0000-4000-8000-0000000000cc".into()),
+                OBSERVED_AT,
+            )
+            .unwrap(),
+            ReconcileStep::AwaitingOwner
+        );
+        let blocked = manual("00000000-0000-4000-8000-0000000000dd", OBSERVED_AT);
+        assert_eq!(
+            claim_check(&ledger, &blocked),
+            Err(StoreError::Blocked(Block {
+                claim: holder.clone(),
+                state: ClaimState::AwaitingOwner,
+            }))
+        );
+        let resolved = resolve_from_observation(
+            &ledger,
+            &layout(),
+            &link("0.1.0", Followed::RegularFile),
+            &children(&["0.1.0"]),
+            RequestId("00000000-0000-4000-8000-0000000000ee".into()),
+            "2026-10-08T09:02:00Z",
+        )
+        .unwrap()
+        .expect("the owner must resolve the held claim");
+        assert_eq!(resolved.claim, holder);
+        let user = ProjectId("user".into());
+        assert!(ledger.open_claims(&user).unwrap().is_empty());
+        let install = ledger
+            .stream(
+                &user,
+                &StreamName("install".into()),
+                0,
+                PageRequest {
+                    limit: 100,
+                    after: None,
+                },
+            )
+            .unwrap()
+            .items;
+        assert_eq!(install.len(), 1);
+        assert_eq!(install[0].type_name, "update.failed");
+        assert_eq!(install[0].type_version, 1);
+        assert_eq!(install[0].actor, Actor::Owner);
+        assert_eq!(install[0].policy_version, 0);
+        assert_eq!(install[0].caller, None);
+        assert_eq!(
+            install[0].payload,
+            json!({
+                "installation": INSTALLATION,
+                "day": "2026-10-08",
+                "claim": {"request_id": CLAIM_ID, "seq": seq},
+                "observed_at": "2026-10-08T09:02:00Z",
+                "code": "update-interrupted",
+                "active_version": "0.1.0",
+                "staged_version": null,
+            })
+        );
+        let retry = manual(
+            "00000000-0000-4000-8000-0000000000ff",
+            "2026-10-08T09:03:00Z",
+        );
+        assert!(matches!(
+            claim_check(&ledger, &retry),
+            Ok(Claimed::New { .. })
+        ));
+    }
+
+    #[test]
+    fn an_owner_resolve_with_nothing_held_recording_something_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = store(&dir.path().join("home"), "2026-10-08T08:00:00Z", options()).unwrap();
+        models::create_user(&ledger, "2026-10-08T08:00:00Z").unwrap();
+        let user = ProjectId("user".into());
+        let before = ledger.head(&user).unwrap();
+        let resolve = |request: &str, at: &str| {
+            resolve_from_observation(
+                &ledger,
+                &layout(),
+                &link("0.1.0", Followed::RegularFile),
+                &children(&["0.1.0"]),
+                RequestId(request.into()),
+                at,
+            )
+        };
+        let nothing = resolve("00000000-0000-4000-8000-0000000000aa", CLAIMED_AT);
+        assert_eq!(nothing, Ok(None));
+        assert_eq!(ledger.head(&user).unwrap(), before);
+        let receipt = resolve_receipt(INSTALLATION, nothing);
+        assert_eq!(receipt.code, 0);
+        assert!(!receipt.error);
+        assert_eq!(
+            receipt.lines,
+            ["no update check is held for this installation"]
+        );
+
+        let check = Check {
+            installation: INSTALLATION.into(),
+            trigger: Trigger::Manual,
+            request_id: RequestId(CLAIM_ID.into()),
+            at: CLAIMED_AT.into(),
+            owner: claim_owner(4242, CLAIMED_AT),
+        };
+        assert!(matches!(
+            claim_check(&ledger, &check),
+            Ok(Claimed::New { .. })
+        ));
+        let holder = ClaimId {
+            kind: CommandKind("update.check".into()),
+            request_id: check.request_id.clone(),
+        };
+        ledger
+            .renew_lease(&user, &holder, &check.owner, "2026-10-08T09:00:30Z")
+            .unwrap();
+        let before = ledger.head(&user).unwrap();
+        let open = ledger.open_claims(&user).unwrap();
+        let busy = resolve(
+            "00000000-0000-4000-8000-0000000000cc",
+            "2026-10-08T09:00:40Z",
+        );
+        assert_eq!(
+            busy,
+            Err(StoreError::Stale(StaleInput::ClaimActive(holder)))
+        );
+        assert_eq!(ledger.head(&user).unwrap(), before);
+        assert_eq!(ledger.open_claims(&user).unwrap(), open);
+        let receipt = resolve_receipt(INSTALLATION, busy);
+        assert_eq!(receipt.code, 2);
+        assert!(receipt.error);
+        assert!(receipt.lines[0].contains("update-check-busy"));
+        assert!(receipt.lines[0].contains("active"));
     }
 
     #[test]

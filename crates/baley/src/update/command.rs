@@ -46,21 +46,59 @@ pub enum UpdateCommand {
     /// Record this binary's compiled catalog seed.
     #[command(hide = true)]
     Seed,
+    /// Clear an update check held for the owner, from what is installed now.
+    Resolve,
 }
 
-/// Runs the foreground check or the newly active binary's seed command.
+/// Runs the foreground check, catalog seed or owner's recovery command.
 pub fn run(args: UpdateArgs) -> ExitCode {
-    match args.command {
-        Some(UpdateCommand::Seed) => seed::run(),
-        None => {
-            let render = manual().unwrap_or_else(|error| error);
-            ExitCode::from(display::emit(
-                &render,
-                &mut io::stdout().lock(),
-                &mut io::stderr().lock(),
-            ))
-        }
+    let render = match args.command {
+        Some(UpdateCommand::Seed) => return seed::run(),
+        Some(UpdateCommand::Resolve) => resolve(),
+        None => manual(),
     }
+    .unwrap_or_else(|error| error);
+    ExitCode::from(display::emit(
+        &render,
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
+    ))
+}
+
+fn resolve() -> Result<Render, Render> {
+    let at = SystemClock::now();
+    let env = Environment::read();
+    let layout =
+        Layout::resolve(&env).map_err(|error| receipt::before_claim(&BeforeClaim::Home(error)))?;
+    let folders = Folders::resolve(Platform::current(), &env)
+        .map_err(|error| Render::refusal(error.to_string()))?;
+    let store = open::store(&folders.home, &at, open::options())
+        .map_err(|error| display::store_error(&error, None))?;
+    models::create_user(&store, &at)
+        .map_err(|error| display::store_error(&error, Some(USER_PROJECT)))?;
+    let stable = installation::gather_stable(&layout).map_err(|error| {
+        display::store_error(
+            &StoreError::Unavailable(format!("{}: {error}", layout.stable_path().display())),
+            Some(USER_PROJECT),
+        )
+    })?;
+    let children = installation::gather_children(&layout).map_err(|error| {
+        display::store_error(
+            &StoreError::Unavailable(format!("{}: {error}", layout.versions_folder().display())),
+            Some(USER_PROJECT),
+        )
+    })?;
+    Ok(reconcile::resolve_receipt(
+        layout.installation(),
+        reconcile::resolve_from_observation(
+            &store,
+            &layout,
+            &stable,
+            &children,
+            new_request_id(),
+            &at,
+        ),
+    ))
 }
 
 fn manual() -> Result<Render, Render> {
