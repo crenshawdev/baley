@@ -12,11 +12,15 @@ use baley_core::policy::recorded::{PolicyProjector, register_policy_events};
 use baley_core::{Registry, register_anchor_events, register_project_events};
 use baley_store_sqlite::Options;
 
+use crate::update::events::register_update_events;
+
 /// Registers exactly the anchor types, `project.initialized`, the four
 /// `models.*` types, `policy.effective`, `checkout.seen`, `capture.recorded`,
-/// `guard.answered` and `guard.policy_recorded` understood by the CLI, and
-/// declares view set version 7,
+/// `guard.answered`, `guard.policy_recorded`, `update.checked` and
+/// `update.failed` understood by the CLI, and declares view set version 7,
 /// `capture checkout claim_scope guard guard_policy model_catalog policy request`.
+/// The update events have no view: a view would raise the set version and
+/// fence every older running server.
 /// The startup `quick_check` is off, so every command-line caller opens as
 /// before.
 pub(crate) fn options() -> Options {
@@ -28,6 +32,7 @@ pub(crate) fn options() -> Options {
     register_checkout_events(&mut registry).expect("unique checkout types");
     register_capture_events(&mut registry).expect("unique capture types");
     register_guard_events(&mut registry).expect("unique guard types");
+    register_update_events(&mut registry).expect("unique update types");
     Options {
         schema: Box::new(registry),
         projectors: vec![
@@ -160,6 +165,32 @@ pub(crate) mod tests {
                 Box::new(CaptureProjector::new()),
             ],
             view_set_version: NonZeroU32::new(6).unwrap(),
+            ..Options::default()
+        }
+    }
+
+    /// The options as they stood at view set 7, before the update events
+    /// were registered. The newer binary must stay compatible with them.
+    fn view_set_7() -> Options {
+        let mut registry = Registry::new();
+        register_anchor_events(&mut registry).unwrap();
+        register_project_events(&mut registry).unwrap();
+        register_model_events(&mut registry).unwrap();
+        register_policy_events(&mut registry).unwrap();
+        register_checkout_events(&mut registry).unwrap();
+        register_capture_events(&mut registry).unwrap();
+        register_guard_events(&mut registry).unwrap();
+        Options {
+            schema: Box::new(registry),
+            projectors: vec![
+                Box::new(ModelCatalogProjector::new()),
+                Box::new(PolicyProjector::new()),
+                Box::new(CheckoutProjector::new()),
+                Box::new(CaptureProjector::new()),
+                Box::new(GuardProjector::new()),
+                Box::new(GuardPolicyProjector::new()),
+            ],
+            view_set_version: NonZeroU32::new(7).unwrap(),
             ..Options::default()
         }
     }
@@ -422,5 +453,270 @@ pub(crate) mod tests {
         let reopened = store(&home, T1, options());
 
         assert!(reopened.is_ok(), "{:?}", reopened.err());
+    }
+
+    // Catches update events a binary cannot read back, which would fence
+    // `user` for itself, or an `install` view that raises the view set.
+    #[test]
+    fn the_update_events_left_unregistered_or_given_a_view_is_caught() {
+        use crate::update::events::{UPDATE_CHECKED, UPDATE_EVENT_VERSION, UPDATE_FAILED};
+
+        for opened in [
+            options(),
+            server_options(),
+            guard_options(Duration::from_millis(1_500)),
+        ] {
+            for name in [UPDATE_CHECKED, UPDATE_FAILED] {
+                assert!(opened.schema.reads(name, UPDATE_EVENT_VERSION), "{name}");
+                assert!(
+                    !opened.schema.reads(name, UPDATE_EVENT_VERSION + 1),
+                    "{name}"
+                );
+            }
+            assert_eq!(opened.view_set_version, NonZeroU32::new(7).unwrap());
+            let mut names = view_names(&opened);
+            names.sort();
+            assert_eq!(
+                names,
+                [
+                    "capture",
+                    "checkout",
+                    "guard",
+                    "guard_policy",
+                    "model_catalog",
+                    "policy"
+                ]
+            );
+        }
+    }
+    /// One capture in `project`, recorded as the capture command does.
+    fn record_capture(
+        store: &baley_store_sqlite::SqliteStore,
+        project: &baley_store::ProjectId,
+        request: &str,
+        id: &str,
+        text: &str,
+        at: &str,
+    ) -> baley_store::Recorded {
+        use baley_core::capture::{
+            CAPTURE_RECORDED, CAPTURE_RECORDED_VERSION, CAPTURE_STREAM, CaptureKind, inline_payload,
+        };
+        use baley_store::{
+            Actor, Command, CommandKind, Decision, Hash, NewEvent, Observed, OutcomeKind,
+            RequestId, StreamName,
+        };
+
+        let command = Command {
+            project: project.clone(),
+            kind: CommandKind("capture.record".into()),
+            request_id: RequestId(request.into()),
+            digest: Hash([7; 32]),
+            scope: vec![],
+            policy_version: 0,
+            recorded_at: at.into(),
+            actor: Actor::Baley,
+            caller: None,
+        };
+        store
+            .transact(&command, &mut |tx| {
+                tx.append(NewEvent {
+                    stream: StreamName(CAPTURE_STREAM.into()),
+                    type_name: CAPTURE_RECORDED.into(),
+                    type_version: CAPTURE_RECORDED_VERSION,
+                    git: None,
+                    payload: inline_payload(id, CaptureKind::Note, None, text),
+                    attachments: vec![],
+                })?;
+                Ok(Decision {
+                    kind: OutcomeKind::Done,
+                    answer: serde_json::json!({}),
+                    sensitive: false,
+                    observed: Observed::default(),
+                    git: None,
+                })
+            })
+            .unwrap()
+    }
+
+    /// One event in `user`, recorded under a command of the given kind.
+    fn record_in_user(
+        store: &baley_store_sqlite::SqliteStore,
+        kind: &str,
+        request: &str,
+        event: baley_store::NewEvent,
+        at: &str,
+    ) {
+        use baley_core::catalog::USER_PROJECT;
+        use baley_store::{
+            Actor, Command, CommandKind, Decision, Hash, Observed, OutcomeKind, ProjectId,
+            RequestId,
+        };
+
+        let command = Command {
+            project: ProjectId(USER_PROJECT.into()),
+            kind: CommandKind(kind.into()),
+            request_id: RequestId(request.into()),
+            digest: Hash([9; 32]),
+            scope: vec![],
+            policy_version: 0,
+            recorded_at: at.into(),
+            actor: Actor::Baley,
+            caller: None,
+        };
+        let mut event = Some(event);
+        store
+            .transact(&command, &mut |tx| {
+                if let Some(event) = event.take() {
+                    tx.append(event)?;
+                }
+                Ok(Decision {
+                    kind: OutcomeKind::Done,
+                    answer: serde_json::json!({}),
+                    sensitive: false,
+                    observed: Observed::default(),
+                    git: None,
+                })
+            })
+            .unwrap();
+    }
+
+    // Catches a newer binary that fences the session's project for the older
+    // one: an `install` view that raises the view set so the newer write
+    // rebuilds and the older read is refused, or an update event appended to
+    // the session's project instead of `user`.
+    #[test]
+    fn an_older_baley_fenced_out_of_the_session_project_by_the_newer_binary_is_caught() {
+        use crate::models;
+        use crate::update::events::{CheckOutcome, ClaimRef, Facts, checked_event};
+        use crate::update::version::Version;
+        use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW};
+        use baley_core::catalog::HINT_VERSION;
+        use baley_core::guard::{
+            Answer, AnsweredFacts, GUARD_ANSWERED, GUARD_ANSWERED_VERSION, GUARD_STREAM,
+            SettingsFact, answered_payload,
+        };
+        use baley_store::{
+            Admin, IndexQuery, KeyValue, NewEvent, PageRequest, ProjectId, Recorded, RequestId,
+            StreamName, Views,
+        };
+
+        const T2: &str = "2026-10-01T10:00:02Z";
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+
+        // The older binary: a project with a capture, and a seeded `user`.
+        let older = store(&home, T0, view_set_7()).unwrap();
+        older.create_project(&project, "sample", T0).unwrap();
+        let first = record_capture(
+            &older,
+            &project,
+            "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e21",
+            "c1",
+            "first",
+            T0,
+        );
+        assert!(matches!(first, Recorded::New { .. }), "{first:?}");
+        models::create_user(&older, T0).unwrap();
+        models::record_seed(&older, seed_request(), T0).unwrap();
+        drop(older);
+
+        // The newer binary records an update event, then a guard record, in `user`.
+        let newer = store(
+            &home,
+            T1,
+            Options {
+                timing: std::sync::Arc::new(Fixed),
+                ..options()
+            },
+        )
+        .unwrap();
+        let request = RequestId("00000000-0000-4000-8000-0000000000aa".into());
+        let checked = checked_event(
+            &Facts {
+                installation: "/home/o/.local/bin/baley",
+                day: "2026-10-01",
+                claim: ClaimRef {
+                    request_id: &request,
+                    seq: 3,
+                },
+                at: T1,
+                active_version: Some(Version::parse("0.1.0").unwrap()),
+                staged_version: None,
+            },
+            CheckOutcome::Current,
+        );
+        record_in_user(
+            &newer,
+            "update.check",
+            "00000000-0000-4000-8000-0000000000ab",
+            checked,
+            T1,
+        );
+        drop(newer);
+
+        let guarded = store(&home, T1, guard()).unwrap();
+        let payload = answered_payload(
+            &AnsweredFacts {
+                host: "claude-code",
+                session: Some("s1"),
+                call: "call-1",
+                project_directory: None,
+                cwd: "/work",
+                tool: "Write",
+                input_digest: "d",
+                target: None,
+                verb: None,
+                branch: None,
+                settings: SettingsFact::Absent,
+            },
+            &Answer::Deny("protected".into()),
+        )
+        .unwrap();
+        record_in_user(
+            &guarded,
+            "guard.record",
+            "00000000-0000-4000-8000-0000000000ac",
+            NewEvent {
+                stream: StreamName(GUARD_STREAM.into()),
+                type_name: GUARD_ANSWERED.into(),
+                type_version: GUARD_ANSWERED_VERSION,
+                git: None,
+                payload,
+                attachments: vec![],
+            },
+            T1,
+        );
+        drop(guarded);
+
+        // The older binary reopens: `user`'s catalog reads, and the project
+        // still takes and finds a capture.
+        let older = store(&home, T2, view_set_7()).unwrap();
+        assert_eq!(models::observe_hint_version(&older), Ok(Some(HINT_VERSION)));
+        let second = record_capture(
+            &older,
+            &project,
+            "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e22",
+            "c2",
+            "second",
+            T2,
+        );
+        assert!(matches!(second, Recorded::New { .. }), "{second:?}");
+        let found = older
+            .find(
+                &project,
+                CAPTURE_VIEW,
+                &IndexQuery {
+                    index: CAPTURE_ID_INDEX.into(),
+                    equals: vec![KeyValue::Text("c2".into())],
+                    page: PageRequest {
+                        limit: 1,
+                        after: None,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(found.items.len(), 1);
+        assert_eq!(found.items[0].body["text"], "second");
     }
 }
