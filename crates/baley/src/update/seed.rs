@@ -1,6 +1,6 @@
 //! The newly active binary records its own catalog (design 0012 section 5).
-//! The updater runs this after stopping renewal and attempting completion,
-//! so a newer view set cannot fence the older updater's record (Plan 2 Task 7).
+//! The updater runs this after the heartbeat stops and claim completion
+//! returns, whatever its result, so a newer view set cannot fence its record.
 
 use std::io;
 use std::process::ExitCode;

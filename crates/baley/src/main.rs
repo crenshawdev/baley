@@ -32,6 +32,8 @@ enum Command {
     Init(baley::init::InitArgs),
     /// List, add, remove and update the model names Baley accepts per host and provider.
     Models(baley::models::ModelsArgs),
+    /// Check the update source and stage a newer version behind the stable path.
+    Update(baley::update::command::UpdateArgs),
     /// Owner operations on the evidence ledger.
     #[command(flatten)]
     Ledger(baley::ledger::LedgerCommand),
@@ -112,6 +114,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::Init(args) => return baley::init::run(args),
         Command::Config(args) => return baley::config_command::run(args),
         Command::Models(args) => return baley::models::run(args),
+        Command::Update(args) => return baley::update::command::run(args),
         other => other,
     };
     let arguments: Vec<&str> = match &command {
@@ -120,7 +123,8 @@ fn run_command(command: Command) -> std::process::ExitCode {
         | Command::Artifact(_)
         | Command::Init(_)
         | Command::Config(_)
-        | Command::Models(_) => {
+        | Command::Models(_)
+        | Command::Update(_) => {
             unreachable!("dispatched above")
         }
         Command::Serve => return run_serve(),
@@ -232,6 +236,37 @@ mod serve_argument_tests {
             runtime.handle().runtime_flavor(),
             tokio::runtime::RuntimeFlavor::CurrentThread
         );
+    }
+}
+
+#[cfg(test)]
+mod update_argument_tests {
+    use super::*;
+    use baley::update::command::{UpdateArgs, UpdateCommand};
+
+    #[test]
+    fn an_update_subcommand_misread_or_the_seed_step_shown_is_caught() {
+        let manual = Cli::try_parse_from(["baley", "update"]).unwrap();
+        assert!(matches!(
+            manual.command,
+            Command::Update(UpdateArgs { command: None })
+        ));
+        let seed = Cli::try_parse_from(["baley", "update", "seed"]).unwrap();
+        assert!(matches!(
+            seed.command,
+            Command::Update(UpdateArgs {
+                command: Some(UpdateCommand::Seed)
+            })
+        ));
+        let error = Cli::try_parse_from(["baley", "update", "--source", "x"])
+            .err()
+            .expect("an unknown flag must be refused");
+        assert_eq!(error.exit_code(), 2);
+        let help = Cli::try_parse_from(["baley", "update", "--help"])
+            .err()
+            .expect("long help");
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert!(!help.to_string().contains("seed"), "{help}");
     }
 }
 

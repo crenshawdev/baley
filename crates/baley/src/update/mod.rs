@@ -7,6 +7,7 @@
 //! signature; that replaces its body before any release.
 
 pub mod claim;
+pub mod command;
 pub mod deliver;
 pub mod events;
 pub mod fetch;

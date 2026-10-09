@@ -10,7 +10,7 @@ pub(crate) mod forge;
 pub(crate) mod open;
 #[cfg(test)]
 mod tests;
-mod ticker;
+pub(crate) mod ticker;
 mod trace;
 
 use crate::folders::{Environment, Folders, Platform};

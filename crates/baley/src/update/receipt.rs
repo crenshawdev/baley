@@ -121,10 +121,6 @@ pub enum BeforeClaim {
 }
 
 /// Keeps early refusals in the command's usage exit class.
-#[allow(
-    dead_code,
-    reason = "Plan 2 Task 7 wires the command to these receipts"
-)]
 pub(crate) fn before_claim(reason: &BeforeClaim) -> Render {
     Render::refusal(match reason {
         BeforeClaim::SourceUnset => "update-source-unset: updates.source is not set; set it with baley config set --global updates.source=https://...".into(),
@@ -134,10 +130,6 @@ pub(crate) fn before_claim(reason: &BeforeClaim) -> Render {
 }
 
 /// Renders a stopped claim gate. A fetch permit has no receipt yet.
-#[allow(
-    dead_code,
-    reason = "Plan 2 Task 7 wires the command to these receipts"
-)]
 pub(crate) fn at_claim(installation: &str, day: &str, gate: &Gate) -> Option<Render> {
     let text = match gate {
         Gate::Fetch(_) => return None,
@@ -181,10 +173,6 @@ fn busy(installation: &str, holder: &ClaimId, state: ClaimState) -> String {
 }
 
 /// Renders a claimed check without reading the installation or the ledger.
-#[allow(
-    dead_code,
-    reason = "Plan 2 Task 7 wires the command to these receipts"
-)]
 pub(crate) fn render(
     installation: &str,
     outcome: &Outcome,
