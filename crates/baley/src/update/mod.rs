@@ -6,4 +6,5 @@
 //! checks the SHA-256 of a development artifact. It does not check a
 //! signature; that replaces its body before any release.
 
+pub mod installation;
 pub mod version;
