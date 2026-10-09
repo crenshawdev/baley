@@ -13,4 +13,5 @@ pub mod fetch;
 pub mod installation;
 pub mod manifest;
 pub mod record;
+pub mod seed;
 pub mod version;
