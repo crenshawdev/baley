@@ -127,6 +127,8 @@ pub(super) fn judge(
             home: folders.home,
             config: folders.config,
             files,
+            // T15 passes the placement map's write-only folders here.
+            write_only_folders: Vec::new(),
         }),
     }
 }
@@ -158,6 +160,7 @@ mod tests {
             home: "/u/.local/share/crenshawdev/baley".into(),
             config: "/u/.config/crenshawdev/baley".into(),
             files: files.iter().map(PathBuf::from).collect(),
+            write_only_folders: Vec::new(),
         })
     }
 

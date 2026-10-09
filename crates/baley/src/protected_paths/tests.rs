@@ -469,6 +469,7 @@ fn protected_list() -> ProtectedPaths {
             "/q/baley.toml".into(),
             "/u/.claude/CLAUDE.md".into(),
         ],
+        write_only_folders: Vec::new(),
     }
 }
 
@@ -594,6 +595,7 @@ fn write_beside_missing_file(target: &str, fs: &Tree) -> Answer {
         home: "/u/.local/share/baley".into(),
         config: "/u/.config/baley".into(),
         files: vec!["/p/baley.toml".into()],
+        write_only_folders: Vec::new(),
     };
     write_answer("/p", target, &list, &Lease::NoActiveDispatch, fs)
 }
@@ -772,4 +774,95 @@ fn a_refusal_names_the_folder_it_protects() {
         reason.contains("config folder (/u/.config/baley)"),
         "{reason}"
     );
+}
+
+const VERSIONS: &str = "/home/o/.local/lib/crenshawdev/baley/versions";
+const STAGED: &str = "/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley";
+
+fn versions_list() -> ProtectedPaths {
+    ProtectedPaths {
+        home: "/h".into(),
+        config: "/c".into(),
+        files: Vec::new(),
+        write_only_folders: vec![VERSIONS.into()],
+    }
+}
+
+fn versions_tree() -> Tree {
+    tree()
+        .dir("/work")
+        .dir("/home/o/.local/bin")
+        .dir("/home/o/.local/lib")
+        .dir("/home/o/.local/lib/crenshawdev/baley/versions/0.2.0")
+        .file(STAGED)
+        .link("/home/o/.local/bin/baley", STAGED)
+}
+
+#[test]
+fn a_write_through_the_stable_link_into_the_versions_folder_passed_is_caught() {
+    let answer = write_answer(
+        "/work",
+        "/home/o/.local/bin/baley",
+        &versions_list(),
+        &Lease::NoActiveDispatch,
+        &versions_tree(),
+    );
+    let Answer::Deny(reason) = answer else {
+        panic!("a write through the stable link was not denied: {answer:?}");
+    };
+    assert!(reason.contains(VERSIONS), "{reason}");
+}
+
+#[test]
+fn a_read_of_a_staged_binary_refused_as_if_the_folder_were_home_is_caught() {
+    let fs = versions_tree();
+    let list = versions_list();
+    assert_eq!(
+        read_answer("/work", Some(STAGED), None, &list, &fs),
+        Answer::Pass
+    );
+    assert_eq!(
+        read_answer("/home/o/.local/lib", None, Some("**/baley"), &list, &fs),
+        Answer::Pass
+    );
+}
+
+#[test]
+fn a_relative_write_only_folder_failing_open_is_caught() {
+    let list = ProtectedPaths {
+        write_only_folders: vec!["versions".into()],
+        ..versions_list()
+    };
+    let answer = write_answer(
+        "/work",
+        "/work/a.txt",
+        &list,
+        &Lease::NoActiveDispatch,
+        &tree().dir("/work"),
+    );
+    let Answer::Deny(reason) = answer else {
+        panic!("a bad folder entry did not fail closed: {answer:?}");
+    };
+    assert!(reason.contains("Baley cannot tell whether"), "{reason}");
+}
+
+#[test]
+fn a_write_beside_the_versions_folder_denied_by_a_text_prefix_match_is_caught() {
+    let fs = tree().dir("/work");
+    for target in [
+        "/home/o/.local/lib/crenshawdev/baley/versions-old/notes.txt",
+        "/home/o/.local/lib/crenshawdev/baley/versions.txt",
+    ] {
+        assert_eq!(
+            write_answer(
+                "/work",
+                target,
+                &versions_list(),
+                &Lease::NoActiveDispatch,
+                &fs
+            ),
+            Answer::Pass,
+            "{target}"
+        );
+    }
 }

@@ -656,4 +656,73 @@ mod tests {
         assert!(text.contains("versions folder"), "{text}");
         assert!(text.contains("not absolute"), "{text}");
     }
+
+    #[test]
+    fn a_versions_folder_left_writable_by_the_settings_or_the_guard_is_caught() {
+        use crate::folders::Folders;
+        use crate::host_artifacts::security;
+        use crate::protected_paths::tests::tree;
+        use crate::protected_paths::{Lease, ProtectedPaths, write_answer};
+        use baley_core::guard::Answer;
+
+        const VERSIONS: &str = "/home/o/.local/lib/crenshawdev/baley/versions";
+        const STAGED: &str = "/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley";
+        const NOT_YET: &str = "/home/o/.local/lib/crenshawdev/baley/versions/0.3.0/baley";
+        let folders = Folders {
+            home: "/home/o/.local/share/crenshawdev/baley".into(),
+            config: "/home/o/.config/crenshawdev/baley".into(),
+        };
+        let map = PlacementMap::new(
+            Executable::new("/home/o/.local/bin/baley").unwrap(),
+            stubs(Placement::Unknown, Placement::Unknown),
+            Placement::Unknown,
+            Placement::Unknown,
+            Placement::Unknown,
+            at(VERSIONS),
+        )
+        .unwrap();
+
+        let ours = security::propose(
+            &folders,
+            map.executable(),
+            &map.protected_paths(),
+            &map.write_only_folders(),
+        );
+        let filesystem = &ours.settings["sandbox"]["filesystem"];
+        let listed = |list: &serde_json::Value| -> Vec<String> {
+            list.as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert!(listed(&filesystem["denyWrite"]).contains(&VERSIONS.to_owned()));
+        assert!(!listed(&filesystem["denyRead"]).contains(&VERSIONS.to_owned()));
+        let rules = listed(&ours.settings["permissions"]["deny"]);
+        assert!(
+            rules.contains(&format!("Edit(/{VERSIONS}/**)")),
+            "{rules:?}"
+        );
+        assert!(
+            !rules
+                .iter()
+                .any(|rule| rule.starts_with("Read(") && rule.contains("/versions")),
+            "{rules:?}"
+        );
+
+        let protected = ProtectedPaths {
+            home: folders.home.clone(),
+            config: folders.config.clone(),
+            files: Vec::new(),
+            write_only_folders: map.write_only_folders(),
+        };
+        let fs = tree().dir("/work").file(STAGED);
+        for target in [STAGED, NOT_YET] {
+            let answer = write_answer("/work", target, &protected, &Lease::NoActiveDispatch, &fs);
+            match answer {
+                Answer::Deny(reason) => assert!(reason.contains(VERSIONS), "{target}: {reason}"),
+                other => panic!("{target} was not denied: {other:?}"),
+            }
+        }
+    }
 }

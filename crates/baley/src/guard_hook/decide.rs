@@ -299,6 +299,7 @@ mod tests {
                 home: HOME.into(),
                 config: CONFIG.into(),
                 files,
+                write_only_folders: Vec::new(),
             }),
         }
     }
