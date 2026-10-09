@@ -1,4 +1,4 @@
-//! Foreground update gathering and wiring (design 0012 sections 5 and 6).
+//! Manual and detached update gathering and wiring (design 0012 sections 5 and 6).
 
 use std::io;
 use std::process::ExitCode;
@@ -43,6 +43,9 @@ pub struct UpdateArgs {
 /// Further operations on an installation's update state.
 #[derive(Debug, Subcommand)]
 pub enum UpdateCommand {
+    /// Run the daily check started by the server.
+    #[command(hide = true)]
+    Detached,
     /// Record this binary's compiled catalog seed.
     #[command(hide = true)]
     Seed,
@@ -50,12 +53,13 @@ pub enum UpdateCommand {
     Resolve,
 }
 
-/// Runs the foreground check, catalog seed or owner's recovery command.
+/// Runs an update check, catalog seed or owner's recovery command.
 pub fn run(args: UpdateArgs) -> ExitCode {
     let render = match args.command {
+        Some(UpdateCommand::Detached) => check(Trigger::Detached),
         Some(UpdateCommand::Seed) => return seed::run(),
         Some(UpdateCommand::Resolve) => resolve(),
-        None => manual(),
+        None => check(Trigger::Manual),
     }
     .unwrap_or_else(|error| error);
     ExitCode::from(display::emit(
@@ -101,7 +105,7 @@ fn resolve() -> Result<Render, Render> {
     ))
 }
 
-fn manual() -> Result<Render, Render> {
+fn check(trigger: Trigger) -> Result<Render, Render> {
     let at = SystemClock::now();
     let env = Environment::read();
     let layout =
@@ -128,7 +132,7 @@ fn manual() -> Result<Render, Render> {
         .map_err(|error| display::store_error(&error, Some(USER_PROJECT)))?;
     let mut check = Check {
         installation: layout.installation().into(),
-        trigger: Trigger::Manual,
+        trigger,
         request_id: new_request_id(),
         owner: claim::claim_owner(std::process::id(), &at),
         at,
