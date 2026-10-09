@@ -6,9 +6,10 @@ use baley_store::{ClaimId, ClaimState, Recorded, StoreError};
 use crate::ledger::display::{self, Render};
 
 use super::claim::{CHECK_BUSY, Gate, NEEDS_RECONCILIATION, NOT_DUE};
-use super::deliver::{Activated, Failure};
+use super::deliver::{Activated, Failure, Step};
 use super::events::CheckOutcome;
-use super::installation::HomeRefusal;
+use super::installation::{Active, HomeRefusal};
+use super::record::CheckResult;
 use super::seed;
 use super::version::Version;
 
@@ -24,13 +25,52 @@ pub enum Check {
     },
     /// Delivery staged and activated a version.
     Activated(Activated),
-    /// The check ended before activation succeeded.
+    /// A delivery step failed, with the latest installation facts available.
     Failed {
-        /// The version active before the failed step, when known.
+        /// The latest observed active version, when managed and known.
         active_version: Option<Version>,
         /// The step, code, cause and any staged version.
         failure: Failure,
     },
+}
+
+impl Check {
+    /// Uses fresh installation facts after an activation failure when available.
+    pub fn failed(initial: Option<Version>, failure: Failure, fresh: Option<Active>) -> Self {
+        let active_version = match fresh {
+            Some(Active::Version(version)) => Some(version),
+            Some(Active::NotManaged(_)) => None,
+            None => initial,
+        };
+        Self::Failed {
+            active_version,
+            failure,
+        }
+    }
+
+    /// Supplies completion with the same version facts used by the receipt.
+    pub fn record_result(&self) -> CheckResult {
+        match self {
+            Self::Current { active_version, .. } => CheckResult {
+                outcome: Ok(CheckOutcome::Current),
+                active_version: Some(*active_version),
+                staged_version: None,
+            },
+            Self::Activated(activated) => CheckResult {
+                outcome: Ok(CheckOutcome::Staged),
+                active_version: Some(activated.active_version),
+                staged_version: Some(activated.staged_version),
+            },
+            Self::Failed {
+                active_version,
+                failure,
+            } => CheckResult {
+                outcome: Err(failure.code),
+                active_version: *active_version,
+                staged_version: failure.staged_version,
+            },
+        }
+    }
 }
 
 /// What the owner is told after the attempt to record a claimed check.
@@ -52,14 +92,14 @@ pub enum Outcome {
     },
     /// A named step failed and the failure was recorded.
     Failed {
-        /// The version active before the failed step, when known.
+        /// The latest observed active version, when managed and known.
         active_version: Option<Version>,
         /// The step, code, cause and any staged version.
         failure: Failure,
     },
     /// The effects stand, but completion did not confirm the record.
     Incomplete {
-        /// The newly active version after activation, otherwise the prior one.
+        /// The newly activated or latest observed managed version, when known.
         active_version: Option<Version>,
         /// A successful activation, absent when no activation succeeded.
         activated: Option<Activated>,
@@ -208,7 +248,11 @@ pub(crate) fn render(
                     failure.code.as_str(),
                     failure.cause
                 ),
-                unchanged_line(installation, *active_version),
+                if failure.step == Step::Activation {
+                    observed_line(installation, *active_version)
+                } else {
+                    unchanged_line(installation, *active_version)
+                },
             ],
             code: 1,
             error: true,
@@ -221,7 +265,7 @@ pub(crate) fn render(
         } => {
             let mut lines = match activated {
                 Some(activated) => staged_lines(installation, activated, seed.as_ref()),
-                None => vec![unchanged_line(installation, *active_version)],
+                None => vec![observed_line(installation, *active_version)],
             };
             lines.push(format!(
                 "the record of this check is incomplete: {cause}; the next update check reconciles it"
@@ -248,6 +292,13 @@ fn unchanged_line(installation: &str, active_version: Option<Version>) -> String
             format!("{installation} still runs {version}; the active version is unchanged")
         }
         None => format!("{installation} is unchanged; no managed active version was known"),
+    }
+}
+
+fn observed_line(installation: &str, active_version: Option<Version>) -> String {
+    match active_version {
+        Some(version) => format!("observed active version at {installation}: {version}"),
+        None => format!("no managed active version was observed at {installation}"),
     }
 }
 
@@ -535,5 +586,56 @@ mod tests {
                 cause: "store unavailable: database or disk is full".into(),
             }
         );
+    }
+
+    #[test]
+    fn an_activation_conflict_reported_or_recorded_as_the_initial_version_is_caught() {
+        use crate::update::installation::Occupant;
+
+        for (fresh, expected, line) in [
+            (
+                Active::Version(v("0.3.0")),
+                Some(v("0.3.0")),
+                "observed active version at /home/o/.local/bin/baley: 0.3.0",
+            ),
+            (
+                Active::NotManaged(Occupant::NotALink),
+                None,
+                "no managed active version was observed at /home/o/.local/bin/baley",
+            ),
+        ] {
+            let check = Check::failed(
+                Some(v("0.1.0")),
+                Failure {
+                    step: Step::Activation,
+                    code: FailureCode::ActivationConflict,
+                    cause: "the stable path changed before activation".into(),
+                    staged_version: Some(v("0.2.0")),
+                },
+                Some(fresh),
+            );
+            assert_eq!(
+                check.record_result(),
+                CheckResult {
+                    outcome: Err(FailureCode::ActivationConflict),
+                    active_version: expected,
+                    staged_version: Some(v("0.2.0")),
+                },
+                "completion must receive the fresh active version"
+            );
+            for completion in [completed(OutcomeKind::Refused), Err(StoreError::Busy)] {
+                let receipt = render(INSTALLATION, &outcome(check.clone(), completion, None), &[]);
+                assert!(
+                    receipt.lines.iter().any(|seen| seen == line),
+                    "{:?}",
+                    receipt.lines
+                );
+                assert!(!receipt.lines.iter().any(|line| line.contains("0.1.0")
+                    || line.contains("unchanged")
+                    || line.contains("still runs")));
+                assert_eq!(receipt.code, 1);
+                assert!(receipt.error);
+            }
+        }
     }
 }

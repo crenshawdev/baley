@@ -1,8 +1,10 @@
 //! Verified staging beside old versions and activation through the stable
 //! link (design 0012 section 5).
 
+use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -69,7 +71,7 @@ pub struct Activated {
 #[derive(Debug, PartialEq, Eq)]
 enum StagedPath {
     Nothing,
-    RegularFile { sha256: String },
+    RegularFile { sha256: String, owner_runs: bool },
     Directory,
     SymbolicLink,
     Other,
@@ -81,8 +83,11 @@ enum Operation<'a> {
     Write { path: PathBuf, bytes: &'a [u8] },
     SetMode { path: PathBuf, mode: u32 },
     Sync { path: PathBuf },
+    SyncFolder { path: PathBuf },
     Link { path: PathBuf, target: PathBuf },
     Rename { from: PathBuf, to: PathBuf },
+    Exchange { from: PathBuf, to: PathBuf },
+    Remove { path: PathBuf },
 }
 
 fn temporary_name(attempt: &RequestId) -> String {
@@ -103,7 +108,9 @@ fn staging_decision<'a>(
     let path = layout.staged_binary(download.version());
     match seen {
         StagedPath::Nothing => {}
-        StagedPath::RegularFile { sha256 } if *sha256 == hex(&Sha256::digest(download.bytes())) => {
+        StagedPath::RegularFile { sha256, owner_runs }
+            if *owner_runs && *sha256 == hex(&Sha256::digest(download.bytes())) =>
+        {
             return Ok(Vec::new());
         }
         _ => {
@@ -111,7 +118,7 @@ fn staging_decision<'a>(
                 step: Step::Staging,
                 code: FailureCode::StagingConflict,
                 cause: format!(
-                    "{} already holds something other than this binary",
+                    "{} already holds something other than this runnable binary",
                     path.display()
                 ),
                 staged_version: None,
@@ -138,7 +145,13 @@ fn staging_decision<'a>(
         },
         Operation::Rename {
             from: temporary,
-            to: path,
+            to: path.clone(),
+        },
+        Operation::SyncFolder {
+            path: folder.into(),
+        },
+        Operation::SyncFolder {
+            path: layout.versions_folder().into(),
         },
     ])
 }
@@ -171,9 +184,12 @@ fn activation_decision(
             path: temporary.clone(),
             target: layout.staged_binary(staged),
         },
-        Operation::Rename {
+        Operation::Exchange {
             from: temporary,
             to: layout.stable_path().into(),
+        },
+        Operation::SyncFolder {
+            path: layout.stable_path().parent().expect("stable folder").into(),
         },
     ])
 }
@@ -181,12 +197,17 @@ fn activation_decision(
 /// Verifies, stages and activates a selected version under one claim attempt.
 /// `start` is the managed link observed before fetching. The caller selects
 /// the offered version before passing its manifest and download here.
+/// `before_step` confirms the claim immediately before staging and activation.
+/// Activation exchanges links atomically on Linux and macOS and restores an
+/// unexpected occupant. A failed restoration keeps its temporary entry for
+/// inspection. Directory syncs precede success.
 pub fn deliver(
     layout: &Layout,
     start: &StablePath,
     manifest: &Manifest,
     download: fetch::Observation,
     attempt: &RequestId,
+    mut before_step: impl FnMut(Step) -> Result<(), Failure>,
 ) -> Result<Activated, Failure> {
     let bytes = fetch::interpret(download).map_err(|error| Failure {
         step: Step::Download,
@@ -205,6 +226,7 @@ pub fn deliver(
     let seen =
         gather_staged(&path).map_err(|error| not_writable(Step::Staging, None, &path, error))?;
     let operations = staging_decision(layout, &verified, &seen, attempt)?;
+    before_step(Step::Staging)?;
     apply_step(&operations, Step::Staging, None)?;
 
     // Read before activation so a listing failure cannot hide an active update.
@@ -221,7 +243,8 @@ pub fn deliver(
         not_writable(Step::Activation, Some(version), layout.stable_path(), error)
     })?;
     let operations = activation_decision(layout, start, &fresh, version, attempt)?;
-    apply_step(&operations, Step::Activation, Some(version))?;
+    before_step(Step::Activation)?;
+    apply_activation(layout, start, version, attempt, &operations)?;
     Ok(Activated {
         active_version: version,
         staged_version: version,
@@ -248,18 +271,140 @@ fn apply_step(
     step: Step,
     staged: Option<Version>,
 ) -> Result<(), Failure> {
-    apply(operations).map_err(|error| {
-        let mut failure = not_writable(step, staged, &error.path, error.cause);
-        if let Some(temporary) = error.temporary
-            && let Err(error) = fs::remove_file(&temporary)
-        {
-            failure.cause.push_str(&format!(
-                "; could not remove temporary {}: {error}",
-                temporary.display()
-            ));
+    apply(operations).map_err(|error| clean_failed_apply(error, step, staged))
+}
+
+fn clean_failed_apply(error: ApplyFailure, step: Step, staged: Option<Version>) -> Failure {
+    let mut failure = not_writable(step, staged, &error.path, error.cause);
+    if let Some(temporary) = error.temporary
+        && let Err(error) = fs::remove_file(&temporary)
+    {
+        failure.cause.push_str(&format!(
+            "; could not remove temporary {}: {error}",
+            temporary.display()
+        ));
+    }
+    failure
+}
+
+fn restore_operations(layout: &Layout, temporary: &Path) -> Vec<Operation<'static>> {
+    vec![
+        Operation::Exchange {
+            from: temporary.into(),
+            to: layout.stable_path().into(),
+        },
+        Operation::SyncFolder {
+            path: layout.stable_path().parent().expect("stable folder").into(),
+        },
+        Operation::Remove {
+            path: temporary.into(),
+        },
+    ]
+}
+
+fn swapped_decision(
+    layout: &Layout,
+    start: &StablePath,
+    swapped_target: Option<&Path>,
+    temporary: &Path,
+) -> (Vec<Operation<'static>>, bool) {
+    let matches = matches!(start, StablePath::Link { target, .. }
+        if swapped_target == Some(target.as_path()))
+        && matches!(judge_active(layout, start), Active::Version(_));
+    if !matches {
+        return (restore_operations(layout, temporary), true);
+    }
+    (
+        vec![Operation::Remove {
+            path: temporary.into(),
+        }],
+        false,
+    )
+}
+
+fn apply_activation(
+    layout: &Layout,
+    start: &StablePath,
+    staged: Version,
+    attempt: &RequestId,
+    operations: &[Operation<'_>],
+) -> Result<(), Failure> {
+    let temporary = layout
+        .stable_path()
+        .parent()
+        .expect("stable folder")
+        .join(temporary_name(attempt));
+    if let Err(error) = apply(operations) {
+        let exchanged = error.exchanged;
+        let mut failure = clean_failed_apply(error, Step::Activation, Some(staged));
+        if exchanged {
+            restore_after_error(layout, &temporary, &mut failure);
         }
-        failure
-    })
+        return Err(failure);
+    }
+    let swapped = fs::read_link(&temporary);
+    let (finish, conflict) = swapped_decision(layout, start, swapped.as_deref().ok(), &temporary);
+    if let Err(error) = apply(&finish) {
+        let mut failure = clean_failed_apply(error, Step::Activation, Some(staged));
+        if !conflict {
+            restore_after_error(layout, &temporary, &mut failure);
+        }
+        return Err(failure);
+    }
+    if conflict {
+        return Err(Failure {
+            step: Step::Activation,
+            code: FailureCode::ActivationConflict,
+            cause: format!(
+                "{} changed before activation; its occupant was restored",
+                layout.stable_path().display()
+            ),
+            staged_version: Some(staged),
+        });
+    }
+    Ok(())
+}
+
+fn restore_after_error(layout: &Layout, temporary: &Path, failure: &mut Failure) {
+    if let Err(error) = apply(&restore_operations(layout, temporary)) {
+        failure.cause.push_str(&format!(
+            "; restoration failed at {}: {}; inspect the retained entry at {}",
+            error.path.display(),
+            error.cause,
+            temporary.display()
+        ));
+    }
+}
+
+fn exchange(from: &Path, to: &Path) -> io::Result<()> {
+    let from = CString::new(from.as_os_str().as_bytes())?;
+    let to = CString::new(to.as_os_str().as_bytes())?;
+    // Both C strings remain alive through the call and contain no NUL bytes.
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_SWAP) };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let result = {
+        let _ = (from, to);
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "atomic link exchange is unavailable",
+        ));
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn gather_staged(path: &Path) -> io::Result<StagedPath> {
@@ -290,6 +435,7 @@ fn gather_staged(path: &Path) -> io::Result<StagedPath> {
     }
     Ok(StagedPath::RegularFile {
         sha256: hex(&hash.finalize()),
+        owner_runs: metadata.permissions().mode() & 0o100 != 0,
     })
 }
 
@@ -297,10 +443,12 @@ struct ApplyFailure {
     path: PathBuf,
     cause: io::Error,
     temporary: Option<PathBuf>,
+    exchanged: bool,
 }
 
 fn apply(operations: &[Operation<'_>]) -> Result<(), ApplyFailure> {
     let mut temporary = None;
+    let mut exchanged = false;
     for operation in operations {
         let (path, result) = match operation {
             Operation::CreateFolder { path, mode } => (path, create_folder(path, *mode)),
@@ -326,6 +474,9 @@ fn apply(operations: &[Operation<'_>]) -> Result<(), ApplyFailure> {
                     .open(path)
                     .and_then(|file| file.sync_all()),
             ),
+            Operation::SyncFolder { path } => {
+                (path, File::open(path).and_then(|folder| folder.sync_all()))
+            }
             Operation::Link { path, target } => {
                 let result = symlink(target, path).map(|()| temporary = Some(path.clone()));
                 (path, result)
@@ -334,12 +485,22 @@ fn apply(operations: &[Operation<'_>]) -> Result<(), ApplyFailure> {
                 let result = fs::rename(from, to).map(|()| temporary = None);
                 (to, result)
             }
+            Operation::Exchange { from, to } => {
+                let result = exchange(from, to).map(|()| {
+                    // The temporary name now holds someone else's entry.
+                    temporary = None;
+                    exchanged = true;
+                });
+                (to, result)
+            }
+            Operation::Remove { path } => (path, fs::remove_file(path)),
         };
         if let Err(cause) = result {
             return Err(ApplyFailure {
                 path: path.clone(),
                 cause,
                 temporary,
+                exchanged,
             });
         }
     }
@@ -478,6 +639,7 @@ mod tests {
                 &manifest(),
                 observation,
                 &RequestId(ATTEMPT.into()),
+                |_| Ok(()),
             )
             .expect_err(step);
             assert_eq!(failure.step.as_str(), step);
@@ -524,6 +686,7 @@ mod tests {
             &verified,
             &StagedPath::RegularFile {
                 sha256: NEW_DIGEST.into(),
+                owner_runs: true,
             },
             &attempt,
         )
@@ -532,6 +695,7 @@ mod tests {
         for seen in [
             StagedPath::RegularFile {
                 sha256: "00".repeat(32),
+                owner_runs: true,
             },
             StagedPath::Directory,
             StagedPath::SymbolicLink,
@@ -564,7 +728,11 @@ mod tests {
         let activate = activation_decision(&layout, &start, &start, v("0.2.0"), &attempt).unwrap();
         assert!(matches!(
             activate.as_slice(),
-            [Operation::Link { .. }, Operation::Rename { .. }]
+            [
+                Operation::Link { .. },
+                Operation::Exchange { .. },
+                Operation::SyncFolder { .. }
+            ]
         ));
         for fresh in [
             managed(&layout, "0.3.0"),
@@ -625,6 +793,12 @@ mod tests {
                         from: temporary.clone(),
                         to: binary.clone()
                     },
+                    Operation::SyncFolder {
+                        path: folder.into()
+                    },
+                    Operation::SyncFolder {
+                        path: layout.versions_folder().into()
+                    },
                 ]
             );
             names.push(temporary.clone());
@@ -663,9 +837,12 @@ mod tests {
                         path: temporary.clone(),
                         target: "/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley".into(),
                     },
-                    Operation::Rename {
+                    Operation::Exchange {
                         from: temporary.clone(),
                         to: stable.clone()
+                    },
+                    Operation::SyncFolder {
+                        path: folder.into()
                     },
                 ]
             );
@@ -683,6 +860,7 @@ mod tests {
             &manifest(),
             download(b"new"),
             &RequestId(ATTEMPT.into()),
+            |_| Ok(()),
         )
         .unwrap();
         assert_eq!(
@@ -699,5 +877,94 @@ mod tests {
         assert!(target.is_absolute());
         assert_eq!(target, layout.staged_binary(v("0.2.0")));
         no_temporary_names(&layout, true);
+    }
+
+    #[test]
+    fn a_staged_file_that_matches_its_digest_but_cannot_run_activated_is_caught() {
+        let layout = layout(Path::new("/home/o"));
+        let verified = verify_download(b"new".to_vec(), &manifest()).unwrap();
+        let attempt = RequestId(ATTEMPT.into());
+        let seen = StagedPath::RegularFile {
+            sha256: NEW_DIGEST.into(),
+            owner_runs: false,
+        };
+        let failure = staging_decision(&layout, &verified, &seen, &attempt)
+            .expect_err("a digest match without owner execute permission must be refused");
+        assert_eq!(failure.step, Step::Staging);
+        assert_eq!(failure.code, FailureCode::StagingConflict);
+        assert_eq!(failure.staged_version, None);
+        let runnable = StagedPath::RegularFile {
+            sha256: NEW_DIGEST.into(),
+            owner_runs: true,
+        };
+        assert!(
+            staging_decision(&layout, &verified, &runnable, &attempt)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_owner_replacement_discarded_after_the_activation_swap_is_caught() {
+        let layout = layout(Path::new("/home/o"));
+        let start = managed(&layout, "0.1.0");
+        let temporary = Path::new("/home/o/.local/bin/.attempt");
+        let moved = layout.staged_binary(v("0.3.0"));
+        for swapped in [None, Some(moved.as_path())] {
+            let (operations, conflict) = swapped_decision(&layout, &start, swapped, temporary);
+            assert!(conflict, "an unexpected swapped occupant must be restored");
+            assert_eq!(
+                operations,
+                vec![
+                    Operation::Exchange {
+                        from: temporary.into(),
+                        to: layout.stable_path().into()
+                    },
+                    Operation::SyncFolder {
+                        path: "/home/o/.local/bin".into()
+                    },
+                    Operation::Remove {
+                        path: temporary.into()
+                    },
+                ]
+            );
+        }
+        let old = layout.staged_binary(v("0.1.0"));
+        let (operations, conflict) = swapped_decision(&layout, &start, Some(&old), temporary);
+        assert!(!conflict);
+        assert_eq!(
+            operations,
+            vec![Operation::Remove {
+                path: temporary.into()
+            }]
+        );
+    }
+
+    #[test]
+    fn publication_or_activation_without_a_following_directory_sync_is_caught() {
+        let layout = layout(Path::new("/home/o"));
+        let verified = verify_download(b"new".to_vec(), &manifest()).unwrap();
+        let attempt = RequestId(ATTEMPT.into());
+        let staging = staging_decision(&layout, &verified, &StagedPath::Nothing, &attempt).unwrap();
+        assert!(
+            matches!(staging.as_slice(), [
+            Operation::CreateFolder { .. }, Operation::Write { .. },
+            Operation::SetMode { .. }, Operation::Sync { .. },
+            Operation::Rename { to, .. }, Operation::SyncFolder { path },
+            Operation::SyncFolder { path: parent },
+        ] if to == Path::new("/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley")
+            && path == Path::new("/home/o/.local/lib/crenshawdev/baley/versions/0.2.0")
+            && parent == Path::new("/home/o/.local/lib/crenshawdev/baley/versions")),
+            "publication must sync the version folder after its rename"
+        );
+        let start = managed(&layout, "0.1.0");
+        let activation =
+            activation_decision(&layout, &start, &start, v("0.2.0"), &attempt).unwrap();
+        assert!(
+            matches!(activation.as_slice(), [
+            Operation::Link { .. }, Operation::Exchange { to, .. }, Operation::SyncFolder { path },
+        ] if to == Path::new("/home/o/.local/bin/baley") && path == Path::new("/home/o/.local/bin")),
+            "activation must sync the stable folder after its exchange"
+        );
     }
 }

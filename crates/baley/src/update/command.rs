@@ -2,12 +2,12 @@
 
 use std::io;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use baley_core::catalog::USER_PROJECT;
 use baley_core::policy::{FileLayer, Schema, Value, merge, parse_layer};
 use baley_core::with_heartbeat;
-use baley_store::{ClaimId, ClaimState, CommandKind, Ledger, ProjectId, StoreError};
+use baley_store::{Claim, ClaimId, ClaimState, CommandKind, Ledger, ProjectId, StoreError};
 use baley_store_sqlite::SqliteStore;
 use clap::{Args, Subcommand};
 
@@ -22,15 +22,15 @@ use crate::{models, settings};
 
 use super::claim::{self, Check, FetchPermit, Gate, Trigger};
 use super::deliver::{self, Failure, Step};
-use super::events::{CheckOutcome, FailureCode};
+use super::events::FailureCode;
 use super::fetch::{self, HttpFetcher};
 use super::installation::{self, Active, Layout};
 use super::manifest;
 use super::receipt::{self, BeforeClaim};
 use super::reconcile::{self, ReconcileStep};
-use super::record::{self, CheckResult};
+use super::record;
 use super::seed;
-use super::version::{self, Selection};
+use super::version::{self, Selection, Version};
 
 /// A manual check unless a further update command is supplied.
 #[derive(Debug, Args)]
@@ -186,40 +186,39 @@ fn claimed_check(
     check: &Check,
     permit: &FetchPermit,
 ) -> Render {
+    let renewal_failure = Arc::new(Mutex::new(None));
     let renew = {
         let store = Arc::clone(&store);
+        let renewal_failure = Arc::clone(&renewal_failure);
         let project = ProjectId(USER_PROJECT.into());
         let claim = ClaimId {
             kind: CommandKind(claim::UPDATE_CHECK.into()),
             request_id: check.request_id.clone(),
         };
         let owner = check.owner.clone();
-        move |at: &str| store.renew_lease(&project, &claim, &owner, at)
+        move |_at: &str| {
+            let mut failure = renewal_failure
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            // Read time under the lock so two renewals cannot arrive backwards.
+            let result = store.renew_lease(&project, &claim, &owner, &SystemClock::now());
+            if let Err(error) = &result {
+                failure.get_or_insert_with(|| error.clone());
+            }
+            result
+        }
     };
     let mut ticker = ThreadTicker::new(Arc::new(SystemClock::now));
     let ((result, launch), renewal_errors) = with_heartbeat(renew, &check.at, &mut ticker, || {
-        gather_check(layout, source, check, permit)
+        gather_check(layout, source, check, permit, |step, version| {
+            let failure = renewal_failure
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let observation = gather_lease(store.as_ref(), check, failure.clone());
+            lease_decision(check, permit.claim_seq(), step, version, &observation)
+        })
     });
-    let recorded = match &result {
-        receipt::Check::Current { active_version, .. } => CheckResult {
-            outcome: Ok(CheckOutcome::Current),
-            active_version: Some(*active_version),
-            staged_version: None,
-        },
-        receipt::Check::Activated(activated) => CheckResult {
-            outcome: Ok(CheckOutcome::Staged),
-            active_version: Some(activated.active_version),
-            staged_version: Some(activated.staged_version),
-        },
-        receipt::Check::Failed {
-            active_version,
-            failure,
-        } => CheckResult {
-            outcome: Err(failure.code),
-            active_version: *active_version,
-            staged_version: failure.staged_version,
-        },
-    };
+    let recorded = result.record_result();
     let completion = record::complete(
         store.as_ref(),
         check,
@@ -240,6 +239,7 @@ fn gather_check(
     source: &str,
     check: &Check,
     permit: &FetchPermit,
+    mut before_step: impl FnMut(Step, Version) -> Result<(), Failure>,
 ) -> (receipt::Check, Option<Launch>) {
     let mut active_version = None;
     let gathered = (|| {
@@ -289,20 +289,182 @@ fn gather_check(
             )),
             Selection::Stage { .. } => {
                 let download = fetcher.binary(permit, &addresses);
-                let delivery =
-                    deliver::deliver(layout, &start, &manifest, download, &check.request_id);
+                let delivery = deliver::deliver(
+                    layout,
+                    &start,
+                    &manifest,
+                    download,
+                    &check.request_id,
+                    |step| before_step(step, manifest.version),
+                );
                 let launch = seed::launch_for(layout, &delivery);
                 Ok((receipt::Check::Activated(delivery?), launch))
             }
         }
     })();
-    gathered.unwrap_or_else(|failure| {
-        (
-            receipt::Check::Failed {
-                active_version,
-                failure,
-            },
-            None,
-        )
+    gathered.unwrap_or_else(|mut failure| {
+        let fresh = if failure.step == Step::Activation {
+            match installation::gather_stable(layout) {
+                Ok(seen) => Some(installation::judge_active(layout, &seen)),
+                Err(error) => {
+                    failure
+                        .cause
+                        .push_str(&format!("; could not observe the stable path: {error}"));
+                    active_version = None;
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        (receipt::Check::failed(active_version, failure, fresh), None)
     })
+}
+
+struct LeaseObservation {
+    previous_error: Option<StoreError>,
+    renewal: Result<(), StoreError>,
+    claims: Result<Vec<Claim>, StoreError>,
+}
+
+fn gather_lease(
+    store: &dyn Ledger,
+    check: &Check,
+    previous_error: Option<StoreError>,
+) -> LeaseObservation {
+    let project = ProjectId(USER_PROJECT.into());
+    let claim = ClaimId {
+        kind: CommandKind(claim::UPDATE_CHECK.into()),
+        request_id: check.request_id.clone(),
+    };
+    LeaseObservation {
+        previous_error,
+        renewal: store.renew_lease(&project, &claim, &check.owner, &SystemClock::now()),
+        claims: store.open_claims(&project),
+    }
+}
+
+fn lease_decision(
+    check: &Check,
+    seq: u64,
+    step: Step,
+    version: Version,
+    seen: &LeaseObservation,
+) -> Result<(), Failure> {
+    let cause = if let Some(error) = seen
+        .previous_error
+        .as_ref()
+        .or(seen.renewal.as_ref().err())
+        .or(seen.claims.as_ref().err())
+    {
+        Some(error.to_string())
+    } else {
+        let held = seen.claims.as_ref().is_ok_and(|claims| {
+            claims.iter().any(|held| {
+                held.id.kind.0 == claim::UPDATE_CHECK
+                    && held.id.request_id == check.request_id
+                    && held.seq == seq
+                    && held.owner == check.owner
+                    && held.awaiting_owner.is_none()
+                    && held.scope == [format!("update/{}", check.installation)]
+            })
+        });
+        (!held).then(|| {
+            "the update claim is closed, held for the owner or held by another check".into()
+        })
+    };
+    match cause {
+        None => Ok(()),
+        Some(cause) => Err(Failure {
+            step,
+            code: FailureCode::Interrupted,
+            cause: format!(
+                "claim {} is no longer confirmed: {cause}",
+                check.request_id.0
+            ),
+            staged_version: (step == Step::Activation).then_some(version),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baley_store::RequestId;
+    use serde_json::json;
+
+    #[test]
+    fn a_lost_claim_allowed_to_stage_or_activate_is_caught() {
+        let check = Check {
+            installation: "/home/o/.local/bin/baley".into(),
+            trigger: Trigger::Manual,
+            request_id: RequestId("00000000-0000-4000-8000-0000000000aa".into()),
+            at: "2026-10-08T09:00:00Z".into(),
+            owner: claim::claim_owner(4242, "2026-10-08T09:00:00Z"),
+        };
+        let held = Claim {
+            id: ClaimId {
+                kind: CommandKind("update.check".into()),
+                request_id: check.request_id.clone(),
+            },
+            seq: 7,
+            claimed_at: check.at.clone(),
+            intent: json!({"installation": check.installation, "day": "2026-10-08"}),
+            scope: vec!["update//home/o/.local/bin/baley".into()],
+            owner: check.owner.clone(),
+            lease_renewed_at: Some("2026-10-08T09:00:10Z".into()),
+            awaiting_owner: None,
+        };
+        let observation = || LeaseObservation {
+            previous_error: None,
+            renewal: Ok(()),
+            claims: Ok(vec![held.clone()]),
+        };
+        let version = Version::parse("0.2.0").unwrap();
+        for step in [Step::Staging, Step::Activation] {
+            assert_eq!(
+                lease_decision(&check, 7, step, version, &observation()),
+                Ok(())
+            );
+            for defect in [
+                "renewal",
+                "heartbeat",
+                "closed",
+                "request",
+                "sequence",
+                "owner",
+                "held",
+                "scope",
+                "read",
+            ] {
+                let mut seen = observation();
+                match defect {
+                    "renewal" => seen.renewal = Err(StoreError::Busy),
+                    "heartbeat" => seen.previous_error = Some(StoreError::Busy),
+                    "closed" => seen.claims = Ok(vec![]),
+                    "read" => seen.claims = Err(StoreError::Busy),
+                    _ => {
+                        let held = &mut seen.claims.as_mut().unwrap()[0];
+                        match defect {
+                            "request" => held.id.request_id = RequestId("another-request".into()),
+                            "sequence" => held.seq = 8,
+                            "owner" => held.owner.process = "5555".into(),
+                            "held" => held.awaiting_owner = Some(9),
+                            "scope" => held.scope = vec!["update/another-installation".into()],
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                let failure = lease_decision(&check, 7, step, version, &seen)
+                    .expect_err("a lost or unconfirmed claim must fence the next filesystem step");
+                assert_eq!(failure.step, step, "{defect}");
+                assert_eq!(failure.code, FailureCode::Interrupted, "{defect}");
+                assert_eq!(
+                    failure.staged_version,
+                    (step == Step::Activation).then_some(version)
+                );
+                assert!(failure.cause.contains(&check.request_id.0));
+            }
+        }
+    }
 }
