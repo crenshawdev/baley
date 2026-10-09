@@ -10,4 +10,5 @@ pub mod claim;
 pub mod events;
 pub mod installation;
 pub mod manifest;
+pub mod record;
 pub mod version;
