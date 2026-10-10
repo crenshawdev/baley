@@ -1941,3 +1941,46 @@ fn a_reviewer_list_shown_without_its_kind_default_or_scope_is_caught() {
         "review.reviewers: kind list of host, openai or deepseek, default [\"host\"], scope both"
     );
 }
+
+#[test]
+fn a_reviewer_list_set_from_the_command_line_not_refused_as_a_list_is_caught() {
+    let cases: [(FileLayer, bool); 2] = [(FileLayer::Global, false), (FileLayer::Project, true)];
+    for (layer, in_project) in cases {
+        for pairs in [
+            vec![("review.reviewers", "openai")],
+            vec![("review.reviewers", "[\"host\",\"openai\"]")],
+            vec![
+                ("escalate_on_failure", "true"),
+                ("review.reviewers", "openai"),
+            ],
+        ] {
+            let refusal = judge_pairs(Schema::standard(), layer, in_project, None, &pairs)
+                .expect_err("a list is never set from the command line");
+            assert_eq!(
+                refusal,
+                SetRefusal::ListNotSettable {
+                    name: "review.reviewers".into()
+                },
+                "{layer:?} {pairs:?}"
+            );
+            let text = refusal.to_string();
+            assert!(
+                text.starts_with(
+                    "list-not-settable: review.reviewers is a list, and config set does not write lists"
+                ),
+                "{text}"
+            );
+            assert!(text.contains("baley config interview"), "{text}");
+            assert!(text.contains("config.toml"), "{text}");
+            assert!(!text.ends_with("edit the list in baley.toml"), "{text}");
+        }
+    }
+    let branches = judge_standard(FileLayer::Project, &[("git.protected_branches", "main")])
+        .expect_err("a list is never set from the command line");
+    assert!(
+        branches
+            .to_string()
+            .ends_with("edit the list in baley.toml"),
+        "{branches}"
+    );
+}
