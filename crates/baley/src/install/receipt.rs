@@ -157,7 +157,7 @@ pub(crate) fn render(
         && notes.sandbox_held_back.is_none();
     if sandbox_written {
         lines.push(format!(
-            "the sandbox settings in {settings_path} apply to the Claude Code sessions that read that file, including projects Baley does not manage, but not to another user's sessions or to sessions run with a different CLAUDE_CONFIG_DIR"
+            "the sandbox settings in {settings_path} apply to the Claude Code sessions that read that file, including projects Baley does not manage, but not to another user's sessions or to sessions that read a different settings file, such as one run with CLAUDE_CONFIG_DIR set to another folder"
         ));
         lines.push(format!(
             "managed settings, command-line settings and a project's own .claude/settings.json and .claude/settings.local.json take precedence over {settings_path} for single values such as sandbox.enabled"
@@ -524,7 +524,7 @@ mod tests {
         };
         let line_with =
             |receipt: &Render, text: &str| receipt.lines.iter().any(|line| line.contains(text));
-        let reach = "apply to the Claude Code sessions that read that file, including projects Baley does not manage, but not to another user's sessions or to sessions run with a different CLAUDE_CONFIG_DIR";
+        let reach = "apply to the Claude Code sessions that read that file, including projects Baley does not manage, but not to another user's sessions or to sessions that read a different settings file, such as one run with CLAUDE_CONFIG_DIR set to another folder";
         let precedence = [
             "managed settings",
             "command-line settings",
