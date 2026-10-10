@@ -1864,3 +1864,80 @@ fn a_config_set_source_with_a_query_or_fragment_the_parser_would_refuse_is_caugh
         "[updates]\nsource = \"https://dl.example/dev\"\n"
     );
 }
+
+fn reviewers(names: &[&str]) -> TypedPair {
+    pair(
+        "review.reviewers",
+        None,
+        Value::ReviewerList(names.iter().map(|name| name.to_string()).collect()),
+    )
+}
+
+#[test]
+fn a_reviewer_list_rendered_as_anything_but_a_toml_array_is_caught() {
+    let bytes = render_file(
+        Schema::standard(),
+        FileLayer::Global,
+        None,
+        &[reviewers(&["host", "openai"])],
+    )
+    .unwrap();
+    let read = |bytes: Vec<u8>| {
+        let file = SettingsFile {
+            path: "/c/config.toml".into(),
+            bytes,
+            digest: "d".into(),
+        };
+        parse_layer(&file, FileLayer::Global, Schema::standard()).expect("the render reads back")
+    };
+    let layer = read(bytes);
+    let written: Vec<_> = layer
+        .values
+        .iter()
+        .filter(|written| written.name == "review.reviewers")
+        .collect();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].host, None);
+    assert_eq!(
+        written[0].value,
+        Value::ReviewerList(vec!["host".into(), "openai".into()])
+    );
+
+    let empty = render_file(
+        Schema::standard(),
+        FileLayer::Global,
+        None,
+        &[reviewers(&[])],
+    )
+    .unwrap();
+    let layer = read(empty);
+    let written: Vec<_> = layer
+        .values
+        .iter()
+        .filter(|written| written.name == "review.reviewers")
+        .collect();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].value, Value::ReviewerList(Vec::new()));
+}
+
+#[test]
+fn a_reviewer_list_shown_without_its_kind_default_or_scope_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = render_show(&ShowRequest {
+        schema: Schema::standard(),
+        host: None,
+        names: &["review.reviewers"],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(
+        lines[0],
+        "review.reviewers: kind list of host, openai or deepseek, default [\"host\"], scope both"
+    );
+}

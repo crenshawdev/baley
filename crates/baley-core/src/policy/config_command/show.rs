@@ -156,6 +156,7 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::RemoteName => "remote name",
         Kind::OnProtected => "one of ask, refuse or allow",
         Kind::BranchList => "list of branch names",
+        Kind::ReviewerList => "list of host, openai or deepseek",
         Kind::HttpsAddress => "https:// address",
     }
 }
@@ -175,6 +176,9 @@ fn default_text(default: Builtin) -> String {
         Builtin::Rung(rung) => value_text(&Value::Rung(rung)),
         Builtin::OnProtected(on) => value_text(&Value::OnProtected(on)),
         Builtin::BranchList(names) => value_text(&Value::BranchList(
+            names.iter().map(|name| (*name).to_owned()).collect(),
+        )),
+        Builtin::ReviewerList(names) => value_text(&Value::ReviewerList(
             names.iter().map(|name| (*name).to_owned()).collect(),
         )),
     }

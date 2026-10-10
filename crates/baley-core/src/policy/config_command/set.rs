@@ -125,6 +125,7 @@ impl fmt::Display for SetRefusal {
                         format!("one of {}", names.join(", "))
                     }
                     Kind::BranchList => "a list of branch names".to_owned(),
+                    Kind::ReviewerList => "a list of host, openai or deepseek".to_owned(),
                     Kind::HttpsAddress => {
                         "an https:// address with no spaces, query or fragment".to_owned()
                     }
@@ -188,7 +189,7 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
         Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
         // A list is edited in `baley.toml`, so no command-line text is one.
-        Kind::BranchList => None,
+        Kind::BranchList | Kind::ReviewerList => None,
         Kind::HttpsAddress => is_https_address(text).then(|| Value::HttpsAddress(text.to_owned())),
     }
 }
