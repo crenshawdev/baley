@@ -9,6 +9,7 @@ use baley_store::StoreError;
 use crate::host_artifacts::placement::{Artifact, PlacementMap};
 use crate::ledger::display::{self, Render};
 
+use super::registration;
 use super::settings::{self, Replaced};
 
 /// What the run left at an artifact's placed path.
@@ -42,6 +43,9 @@ pub struct Notes {
     pub replaced: Vec<Replaced>,
     /// Why the sandbox block was left out of the settings file, if it was.
     pub sandbox_held_back: Option<String>,
+    /// Whether a `claude` command failed, so the owner is given the command
+    /// to run by hand.
+    pub registration_by_hand: bool,
 }
 
 impl Notes {
@@ -51,6 +55,7 @@ impl Notes {
             gaps: decision.gaps.clone(),
             replaced: decision.replaced.clone(),
             sandbox_held_back: decision.held_back.clone(),
+            registration_by_hand: false,
         }
     }
 }
@@ -84,8 +89,19 @@ pub(crate) fn render(
             {
                 "written without the sandbox block".into()
             }
+            ArtifactOutcome::Written if file.artifact == Artifact::Registration => {
+                "registered".into()
+            }
             ArtifactOutcome::Written => "written".into(),
             ArtifactOutcome::Replaced => "replaced".into(),
+            ArtifactOutcome::Failed(cause)
+                if file.artifact == Artifact::Registration && notes.registration_by_hand =>
+            {
+                format!(
+                    "not written: {cause}; run `{}` by hand to finish it",
+                    registration::hand_command(&registration::entry(placements.executable()))
+                )
+            }
             ArtifactOutcome::Unchanged => "unchanged".into(),
             ArtifactOutcome::Failed(cause) => format!("not written: {cause}"),
         };
@@ -232,6 +248,8 @@ mod tests {
             ],
             failure: None,
             notes: Notes::default(),
+            registration_seen: None,
+            registration_removed: false,
         };
         let receipt = render_applied(
             "0.2.0",
@@ -382,6 +400,7 @@ mod tests {
         use crate::host_doctor::placed::FileState;
         use crate::install::fixtures::{folders, prerequisites};
         use crate::install::plan::{self, Gathered, Observation};
+        use crate::install::registration::{Attempt, Registered};
 
         let installed = installed();
         let owner = json!({"sandbox": {
@@ -422,7 +441,12 @@ mod tests {
         .expect("a gap is not a refusal");
         let written: Vec<Result<(), crate::replace::Failure>> =
             plan.writes.iter().map(|_| Ok(())).collect();
-        let applied = plan::applied(&plan, &written);
+        let registered = Attempt {
+            seen: None,
+            removed: false,
+            result: Registered::Registered,
+        };
+        let applied = plan::applied(&plan, &written, &registered);
 
         let receipt = render_applied(
             "0.2.0",
@@ -553,6 +577,69 @@ mod tests {
                 .lines
                 .iter()
                 .any(|line| precedence.iter().all(|part| line.contains(part)))
+        );
+    }
+    #[test]
+    fn a_registration_failure_without_the_command_to_run_is_caught() {
+        let cause =
+            "not-writable: /home/o/.claude.json: could not start claude: No such file or directory";
+        let failed = |home: &str| {
+            let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+            let env = Environment {
+                home: Some(home.into()),
+                ..Environment::default()
+            };
+            let installed = installed::resolve(&env, None, &manifest).unwrap();
+            let mut outcomes = outcomes(ArtifactOutcome::Written);
+            outcomes[2].1 = ArtifactOutcome::Failed(cause.into());
+            let applied = super::super::plan::Applied {
+                outcomes,
+                failure: None,
+                notes: Notes {
+                    registration_by_hand: true,
+                    ..Notes::default()
+                },
+                registration_seen: None,
+                registration_removed: false,
+            };
+            render_applied(
+                "0.2.0",
+                installed.layout.stable_path(),
+                &installed.placements,
+                &applied,
+                &Ok(true),
+                &Ok(true),
+            )
+        };
+
+        let receipt = failed("/home/o");
+        assert_eq!(receipt.lines[0], "install outcome: partial");
+        assert_eq!(receipt.code, 1);
+        let line = receipt
+            .lines
+            .iter()
+            .find(|line| line.starts_with("registration at "))
+            .expect("a registration line");
+        assert!(line.contains(": not written: "), "{line}");
+        assert!(line.contains("could not start claude"), "{line}");
+        assert!(
+            line.contains(
+                r#"claude mcp add-json --scope user baley '{"command":"/home/o/.local/bin/baley","args":["serve"]}'"#
+            ),
+            "{line}"
+        );
+
+        let receipt = failed("/home/o'connor");
+        let line = receipt
+            .lines
+            .iter()
+            .find(|line| line.starts_with("registration at "))
+            .expect("a registration line");
+        assert!(
+            line.contains(
+                r#"claude mcp add-json --scope user baley '{"command":"/home/o'\''connor/.local/bin/baley","args":["serve"]}'"#
+            ),
+            "{line}"
         );
     }
 }

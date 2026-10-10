@@ -1,8 +1,7 @@
 //! Installation writes decided from supplied placements, file observations
-//! and the latest ownership record. Any stub or settings conflict refuses the
-//! whole plan. Applied outcomes retain older ownership evidence when a write
-//! cannot finish.
-//! The registration decision joins this judge in phase 15 plan 2.
+//! and the latest ownership record. Any stub, settings or registration
+//! conflict refuses the whole plan. Applied outcomes retain older ownership
+//! evidence when a write or launch cannot finish.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +11,7 @@ use baley_store::StoreError;
 use serde_json::Value;
 
 use crate::folders::Folders;
+use crate::host_artifacts::compose::same_server;
 use crate::host_artifacts::placement::{Artifact, PlacementMap};
 use crate::host_doctor::placed::{Fault, FileState};
 use crate::host_doctor::prerequisites::Judged;
@@ -20,7 +20,7 @@ use crate::replace::Failure;
 
 use super::event;
 use super::receipt::{ArtifactOutcome, Notes};
-use super::registration::{self, Step};
+use super::registration::{self, Attempt, Registered, Step};
 use super::settings::{self, Input};
 use super::stubs::{self, Decision};
 
@@ -75,6 +75,9 @@ pub struct Plan {
     /// The registration decision: the `claude` commands to run after every
     /// file is written, or that the entry is Baley's already.
     pub registration: Step,
+    /// The `mcpServers.baley` entry the first read of the registration file
+    /// held, which the record keeps if no launch changes it.
+    pub registration_seen: Option<Value>,
 }
 
 fn unobserved() -> Observation {
@@ -161,9 +164,10 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         .find(|file| file.artifact == Artifact::Registration)
         .map(|file| file.path.to_path_buf())
         .expect("install places the registration file");
+    let registration_read = observed(&registration_path).state;
     let registration = match registration::judge(
         &registration_path,
-        &observed(&registration_path).state,
+        &registration_read,
         gathered.latest,
         placements.executable(),
     ) {
@@ -209,6 +213,7 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         outcomes,
         settings: decision,
         registration,
+        registration_seen: registration::held(&registration_read),
     })
 }
 
@@ -221,15 +226,23 @@ pub struct Applied {
     pub failure: Option<String>,
     /// The gaps and replaced values the receipt reports.
     pub notes: Notes,
+    /// The `mcpServers.baley` entry the latest read of the registration file
+    /// held.
+    pub registration_seen: Option<Value>,
+    /// Whether a remove launch succeeded after that read.
+    pub registration_removed: bool,
 }
 
-/// Interprets write observations in plan order. A failed folder sync still
-/// placed the bytes, but every failure stops subsequent writes.
-pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>]) -> Applied {
+/// Interprets write observations in plan order, then the registration step.
+/// A failed folder sync still placed the bytes, but every failure stops
+/// subsequent writes.
+pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>], attempt: &Attempt) -> Applied {
     let mut applied = Applied {
         outcomes: plan.outcomes.clone(),
         failure: None,
         notes: Notes::from_settings(&plan.settings),
+        registration_seen: attempt.seen.clone(),
+        registration_removed: attempt.removed,
     };
     for (index, write) in plan.writes.iter().enumerate() {
         let result = results.get(index);
@@ -271,6 +284,27 @@ pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>]) -> Applied {
             }
         }
     }
+    let registration = match &attempt.result {
+        Registered::Unchanged => ArtifactOutcome::Unchanged,
+        Registered::Registered => ArtifactOutcome::Written,
+        Registered::Replaced => ArtifactOutcome::Replaced,
+        Registered::Refused(cause) => ArtifactOutcome::Failed(cause.clone()),
+        Registered::Failed(cause) => {
+            applied.notes.registration_by_hand = true;
+            ArtifactOutcome::Failed(cause.clone())
+        }
+        Registered::NotReached(cause) => ArtifactOutcome::Failed(match &applied.failure {
+            Some(failure) => format!("{cause}: {failure}"),
+            None => cause.clone(),
+        }),
+    };
+    if let Some((_, state)) = applied
+        .outcomes
+        .iter_mut()
+        .find(|(placed, _)| *placed == Artifact::Registration)
+    {
+        *state = registration;
+    }
     applied
 }
 
@@ -294,8 +328,8 @@ pub(crate) fn complete(
 
 /// Builds ownership facts from applied outcomes without reading any path.
 /// Failed or unreached writes keep that identity's previous entry, so the
-/// next install can still recognize an older stub, hook or deny entry.
-/// The registration joins in phase 15 plan 2 at this same seam.
+/// next install can still recognize an older stub, hook, deny entry or
+/// registration while the file still holds it.
 pub(crate) fn facts(
     version: &str,
     placements: &PlacementMap,
@@ -337,18 +371,62 @@ pub(crate) fn facts(
         .iter()
         .any(|(artifact, outcome)| *artifact == Artifact::Settings && outcome.is_owned());
     let (hook, sandbox) = settings::recorded(settings, settings_owned, latest);
+    let registration = recorded_registration(placements, latest, applied);
     event::Facts {
         host: Host::ClaudeCode,
         binary_version: version.into(),
         binary_path: placements.executable().as_str().into(),
         complete: applied.failure.is_none()
             && complete(placements, &applied.outcomes, &applied.notes, seed),
-        registration: None,
+        registration,
         hook,
         stubs,
         sandbox,
         updates,
     }
+}
+
+/// The registration to record. With the entry Baley's after the run, it is
+/// this binary's. Otherwise the file still holds what the latest read saw, so
+/// it is this binary's entry when that read held it, or the latest record's
+/// entry while that read holds it by the registration rule and no remove
+/// launch succeeded since. Dropping it would make the next install refuse
+/// Baley's own older registration as foreign.
+fn recorded_registration(
+    placements: &PlacementMap,
+    latest: Option<&Value>,
+    applied: &Applied,
+) -> Option<event::Registration> {
+    let path = placements
+        .expected_files()
+        .into_iter()
+        .find(|file| file.artifact == Artifact::Registration)?
+        .path
+        .to_str()
+        .expect("placements are UTF-8")
+        .to_owned();
+    let ours = registration::entry(placements.executable());
+    let owned = applied
+        .outcomes
+        .iter()
+        .any(|(artifact, outcome)| *artifact == Artifact::Registration && outcome.is_owned());
+    if owned {
+        return Some(event::Registration { path, entry: ours });
+    }
+    let seen = applied.registration_seen.as_ref()?;
+    if same_server(seen, &ours) {
+        return Some(event::Registration { path, entry: ours });
+    }
+    let older = latest?.pointer("/registered/registration")?;
+    let entry = older.get("entry")?;
+    (!applied.registration_removed && same_server(seen, entry)).then(|| event::Registration {
+        path: older
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(&path)
+            .to_owned(),
+        entry: entry.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -358,6 +436,7 @@ mod tests {
     use super::*;
     use crate::host_artifacts::installed::Installed;
     use crate::host_artifacts::stubs;
+    use crate::host_doctor::prerequisites::Judged;
     use crate::install::fixtures::{
         complete_settings, folders, four_spaces, hook_item, installed, linux,
     };
@@ -442,6 +521,8 @@ mod tests {
                 ],
                 failure: None,
                 notes: Notes::default(),
+                registration_seen: None,
+                registration_removed: false,
             };
             let facts = facts(
                 "0.2.0",
@@ -523,6 +604,8 @@ mod tests {
                 outcomes,
                 failure: failure.map(str::to_owned),
                 notes: Notes::default(),
+                registration_seen: None,
+                registration_removed: false,
             };
             facts(
                 "0.2.0",
@@ -673,5 +756,236 @@ mod tests {
             assert_eq!(refusal.code, 2);
             assert!(refusal.error);
         }
+    }
+    fn gathered_for<'a>(
+        installed: &'a Installed,
+        latest: Option<&'a Value>,
+        observations: &'a BTreeMap<PathBuf, Observation>,
+        prerequisites: &'a Judged,
+        folders: &'a Folders,
+    ) -> Gathered<'a> {
+        Gathered {
+            placements: &installed.placements,
+            folders,
+            latest,
+            observations,
+            prerequisites,
+        }
+    }
+
+    #[test]
+    fn an_executable_reference_to_anything_but_the_stable_path_is_caught() {
+        let installed = installed();
+        let observations = all_absent(&installed);
+        let (folders, prerequisites) = (folders(), linux());
+
+        let plan = judge(&gathered_for(
+            &installed,
+            None,
+            &observations,
+            &prerequisites,
+            &folders,
+        ))
+        .expect("an empty machine plans");
+
+        let document = &plan.settings.document;
+        assert_eq!(
+            document["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "'/home/o/.local/bin/baley' guard"
+        );
+        let Step::Run(launches) = &plan.registration else {
+            panic!("the registration is requested");
+        };
+        assert_eq!(launches.len(), 1);
+        let arguments: Vec<&str> = launches[0]
+            .args
+            .iter()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        let entry: Value = serde_json::from_str(arguments[5]).unwrap();
+        assert_eq!(entry["command"], "/home/o/.local/bin/baley");
+        assert!(
+            document["permissions"]["deny"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Edit(//home/o/.local/bin/baley)"))
+        );
+        assert!(
+            document["sandbox"]["filesystem"]["denyWrite"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("/home/o/.local/bin/baley"))
+        );
+        let mut named = Vec::new();
+        collect_versions(document, &mut named);
+        named.extend(
+            arguments
+                .iter()
+                .filter(|argument| argument.contains("/versions"))
+                .map(|argument| (*argument).to_owned()),
+        );
+        named.sort();
+        assert_eq!(
+            named,
+            [
+                "/home/o/.local/lib/crenshawdev/baley/versions",
+                "Edit(//home/o/.local/lib/crenshawdev/baley/versions/**)",
+            ]
+        );
+    }
+
+    /// Every string in the document that names the versions folder.
+    fn collect_versions(value: &Value, found: &mut Vec<String>) {
+        match value {
+            Value::String(text) if text.contains("/crenshawdev/baley/versions") => {
+                found.push(text.clone());
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect_versions(item, found)),
+            Value::Object(map) => map.values().for_each(|item| collect_versions(item, found)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn a_completed_installation_rewritten_by_a_second_install_is_caught() {
+        let installed = installed();
+        let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+        let mut observations = all_absent(&installed);
+        let seen = |bytes: Vec<u8>| Observation {
+            state: FileState::Bytes(bytes),
+            symbolic_link: false,
+        };
+        observations.insert(
+            PathBuf::from(SETTINGS),
+            seen(four_spaces(&complete_settings())),
+        );
+        for entry in &manifest {
+            observations.insert(
+                PathBuf::from(format!(
+                    "/home/o/.claude/skills/{}/SKILL.md",
+                    entry.identity
+                )),
+                seen(entry.bytes.clone()),
+            );
+        }
+        let stored = json!({"mcpServers": {"baley": {
+            "type": "stdio",
+            "command": "/home/o/.local/bin/baley",
+            "args": ["serve"],
+            "env": {},
+        }}});
+        observations.insert(
+            PathBuf::from("/home/o/.claude.json"),
+            seen(serde_json::to_vec(&stored).unwrap()),
+        );
+        let record = json!({
+            "registered": {
+                "registration": {
+                    "path": "/home/o/.claude.json",
+                    "entry": {"command": "/home/o/.local/bin/baley", "args": ["serve"]},
+                },
+                "hook": {"path": SETTINGS, "item": hook_item()},
+            },
+            "stubs": manifest.iter().map(|entry| json!({
+                "identity": entry.identity,
+                "path": format!("/home/o/.claude/skills/{}/SKILL.md", entry.identity),
+                "sha256": entry.digest,
+            })).collect::<Vec<_>>(),
+        });
+        let (folders, prerequisites) = (folders(), linux());
+
+        let plan = judge(&gathered_for(
+            &installed,
+            Some(&record),
+            &observations,
+            &prerequisites,
+            &folders,
+        ))
+        .expect("a completed installation plans");
+
+        assert!(plan.writes.is_empty(), "{:?}", plan.writes);
+        assert_eq!(plan.registration, Step::Unchanged);
+        assert_eq!(plan.outcomes.len(), 5);
+        for (artifact, outcome) in &plan.outcomes {
+            assert_eq!(*outcome, ArtifactOutcome::Unchanged, "{artifact}");
+        }
+    }
+
+    #[test]
+    fn a_failed_seed_recorded_complete_or_the_registration_misrecorded_after_a_failed_launch_is_caught()
+     {
+        let installed = installed();
+        let settings = decision(&complete_settings(), None);
+        let outcomes = |registration: ArtifactOutcome| {
+            vec![
+                (
+                    Artifact::Stub("bal-capture".into()),
+                    ArtifactOutcome::Written,
+                ),
+                (Artifact::Stub("bal-help".into()), ArtifactOutcome::Written),
+                (Artifact::Registration, registration),
+                (Artifact::Hook, ArtifactOutcome::Written),
+                (Artifact::Settings, ArtifactOutcome::Written),
+            ]
+        };
+        let build = |latest: Option<&Value>, applied: Applied, seed: &Result<bool, StoreError>| {
+            facts(
+                "0.2.0",
+                &installed.placements,
+                latest,
+                &settings,
+                &applied,
+                seed,
+                updates(),
+            )
+        };
+        let applied = |outcomes, seen: Option<Value>, removed| Applied {
+            outcomes,
+            failure: None,
+            notes: Notes::default(),
+            registration_seen: seen,
+            registration_removed: removed,
+        };
+
+        // Everything is Baley's: complete follows the catalog seed.
+        let done = || applied(outcomes(ArtifactOutcome::Written), None, false);
+        let busy: Result<bool, StoreError> = Err(StoreError::Busy);
+        assert!(!build(None, done(), &busy).complete);
+        assert!(build(None, done(), &Ok(true)).complete);
+
+        // A failed remove leaves Baley's older entry in the file.
+        let older = json!({"command": "/home/o/.local/bin/baley", "args": ["serve", "--old"]});
+        let record = json!({"registered": {"registration": {
+            "path": "/home/o/.claude.json",
+            "entry": older,
+        }}});
+        let stored = json!({
+            "type": "stdio",
+            "command": "/home/o/.local/bin/baley",
+            "args": ["serve", "--old"],
+            "env": {},
+        });
+        let failed =
+            ArtifactOutcome::Failed("not-writable: /home/o/.claude.json: exit status 1".into());
+        let facts = build(
+            Some(&record),
+            applied(outcomes(failed.clone()), Some(stored.clone()), false),
+            &Ok(true),
+        );
+        let kept = facts
+            .registration
+            .expect("the older entry is still in the file");
+        assert_eq!(kept.path, "/home/o/.claude.json");
+        assert_eq!(kept.entry, older);
+        assert!(!facts.complete);
+
+        // A failed add after a removed entry leaves nothing to record.
+        let facts = build(
+            Some(&record),
+            applied(outcomes(failed), Some(stored), true),
+            &Ok(true),
+        );
+        assert_eq!(facts.registration, None);
+        assert!(!facts.complete);
     }
 }

@@ -3,10 +3,11 @@
 //! any replacement. Gathering is kept apart from judging.
 //! One install runs at a time: the command holds an exclusive lock in Baley's
 //! own home from reading the latest record to recording the result.
-//! Stubs are applied and recorded here. Phase 15 plan 2 adds the registration,
-//! hook and settings writes through the same plan and ownership facts.
+//! The stubs and the settings file (the hook, the deny rules and the sandbox
+//! block) are written and the registration is requested from Claude Code, all
+//! from one plan and recorded with the same ownership facts.
 
-/// Planned stub writes and their filesystem observations.
+/// Planned file writes, then the registration launches, applied in order.
 pub mod apply;
 /// Command arguments, host selection and installation gathering.
 pub mod command;

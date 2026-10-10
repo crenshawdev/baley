@@ -155,7 +155,13 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
         observations: &observations,
         prerequisites: &prerequisites,
     })?;
-    let applied = plan::applied(&plan, &apply::run(&plan));
+    let applying = apply::run(
+        &plan,
+        latest_payload,
+        &installed.registration_file,
+        installed.placements.executable(),
+    );
+    let applied = plan::applied(&plan, &applying.writes, &applying.attempt);
     let seed = models::seed(&store, new_request_id(), &SystemClock::now());
 
     let schema = Schema::standard();
