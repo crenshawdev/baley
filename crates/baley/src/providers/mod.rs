@@ -11,13 +11,6 @@ pub mod event;
 /// The owner identity from git.
 pub(crate) mod identity;
 /// Recording the acknowledgement unless a current one covers it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview records the acknowledgement and is wired in next"
-    )
-)]
 pub(crate) mod record;
 /// The compiled provider warning, its version and its digest.
 pub mod warning;

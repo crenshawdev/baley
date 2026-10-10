@@ -3,8 +3,9 @@
 //! and for `escalate_on_failure` in the terminal, then asks which outside review
 //! providers to use and takes a typed `yes` to the warning for each one chosen.
 //! The conversation opens no store and runs no policy step itself, and its one
-//! seam is the process that reads git's `user.name`. The answers are written
-//! through one `set::apply`.
+//! seam is the process that reads git's `user.name`. Only after the final `yes`
+//! does the command open the per-user ledger to record the acknowledgement, and
+//! then write the answers through one `set::apply`.
 
 use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
@@ -22,10 +23,13 @@ use super::reviewers::{self, Selection};
 use super::set;
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
+use crate::ledger::clock::SystemClock;
+use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
+use crate::ledger::open;
 use crate::policy_step::{self, Reads};
 use crate::process::Process;
-use crate::providers::warning;
+use crate::providers::{record, warning};
 use crate::settings;
 
 /// Asks the questions on `input` and `output`, then writes the answers.
@@ -108,16 +112,71 @@ fn attempt(
         Outcome::Unchanged => {
             Render::line("Nothing changed: every answer kept the value in force.", 0)
         }
-        Outcome::Send(request) => set::apply(
-            request.layer,
-            request.host,
-            &request.pairs,
-            Some(&set::Expected {
-                path: start.target,
-                digest: start.digest,
-            }),
-        ),
+        Outcome::Send(request) => {
+            let recorded = match &request.acknowledgement {
+                Some(acknowledgement) => Some(acknowledge(&folders.home, acknowledgement)?),
+                None => None,
+            };
+            let mut render = if request.pairs.is_empty() {
+                Render::line("", 0)
+            } else {
+                set::apply(
+                    request.layer,
+                    request.host,
+                    &request.pairs,
+                    Some(&set::Expected {
+                        path: start.target,
+                        digest: start.digest,
+                    }),
+                )
+            };
+            // The recorded line leads, so a refused write still shows what was done.
+            match recorded {
+                Some(line) if request.pairs.is_empty() => render.lines = vec![line],
+                Some(line) => render.lines.insert(0, line),
+                None => {}
+            }
+            render
+        }
     })
+}
+
+/// Records the acknowledgement in the per-user ledger unless a current one
+/// covers it, and says which. A store failure is the ledger step's own line
+/// with exit 3, and nothing else is written after it.
+fn acknowledge(home: &Path, acknowledgement: &Acknowledge) -> Result<String, Render> {
+    let stopped = |error: StoreError| {
+        let mut render = record::failure(&error);
+        render.lines.push("Nothing else was written.".to_owned());
+        render
+    };
+    let at = SystemClock::now();
+    let store = open::store(home, &at, open::options()).map_err(stopped)?;
+    let seen = record::read(&store).map_err(stopped)?;
+    let names: Vec<&str> = acknowledgement
+        .providers
+        .iter()
+        .map(|provider| provider.name())
+        .collect();
+    let version = warning::WARNING_VERSION;
+    match record::judge(
+        &seen.payloads,
+        &acknowledgement.providers,
+        &acknowledgement.owner,
+        &at,
+    ) {
+        None => Ok(format!(
+            "The acknowledgement of {} at warning version {version} was already recorded.",
+            names.join(", ")
+        )),
+        Some(event) => {
+            record::append(&store, event, seen.version, new_request_id(), &at).map_err(stopped)?;
+            Ok(format!(
+                "The acknowledgement of {} at warning version {version} was recorded.",
+                names.join(", ")
+            ))
+        }
+    }
 }
 
 /// What the gatherer found.
