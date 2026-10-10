@@ -55,20 +55,8 @@ pub fn acknowledged_event(providers: &[Provider], owner: &str, at: &str) -> NewE
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
-
     use super::*;
-
-    /// Design 0003 section 5's warning paragraph, written out here so the
-    /// expected digest does not come from the constant under test.
-    const DESIGN_WARNING: &str = "Baley never reads your API keys. Keys live in your environment, where every program Claude Code starts can see them, agents and subagents included. Nothing scrubs a key a command prints. Your code goes to the chosen provider under its terms.";
-
-    fn sha256_hex(text: &str) -> String {
-        Sha256::digest(text.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
+    use crate::providers::fixtures::{DESIGN_WARNING, sha256_hex};
 
     #[test]
     fn an_acknowledgement_listing_providers_out_of_catalog_order_or_twice_is_caught() {
