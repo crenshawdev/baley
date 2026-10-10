@@ -1,4 +1,5 @@
-//! The install receipt from supplied placements, artifact outcomes and seed result.
+//! The install receipt from supplied placements, artifact outcomes, catalog
+//! seed and record results. Write and recording failures remain visible.
 
 use std::path::Path;
 
@@ -9,12 +10,25 @@ use crate::host_artifacts::placement::{Artifact, PlacementMap};
 use crate::ledger::display::{self, Render};
 
 /// What the run left at an artifact's placed path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactOutcome {
     /// The artifact has not been placed or confirmed as Baley's.
     NotWritten,
+    /// The manifest bytes were placed at an absent path.
+    Written,
+    /// An older owned artifact was replaced with the manifest bytes.
+    Replaced,
     /// The artifact is already Baley's and needed no write.
     Unchanged,
+    /// The write failed or was not reached, with the cause.
+    Failed(String),
+}
+
+impl ArtifactOutcome {
+    /// Whether this run placed or confirmed the current artifact's bytes.
+    pub fn is_owned(&self) -> bool {
+        matches!(self, Self::Written | Self::Replaced | Self::Unchanged)
+    }
 }
 
 /// Renders every placed artifact in map order. A missing outcome counts as
@@ -27,19 +41,19 @@ pub(crate) fn render(
     outcomes: &[(Artifact, ArtifactOutcome)],
     seed: &Result<bool, StoreError>,
 ) -> Render {
-    let mut complete = placements.not_installed().is_empty() && seed.is_ok();
+    let complete = super::plan::complete(placements, outcomes, seed);
     let mut artifacts = Vec::new();
     for file in placements.expected_files() {
         let outcome = outcomes
             .iter()
             .find(|(artifact, _)| *artifact == file.artifact)
-            .map_or(ArtifactOutcome::NotWritten, |(_, outcome)| *outcome);
+            .map_or(&ArtifactOutcome::NotWritten, |(_, outcome)| outcome);
         let text = match outcome {
-            ArtifactOutcome::NotWritten => {
-                complete = false;
-                "not written"
-            }
-            ArtifactOutcome::Unchanged => "unchanged",
+            ArtifactOutcome::NotWritten => "not written".into(),
+            ArtifactOutcome::Written => "written".into(),
+            ArtifactOutcome::Replaced => "replaced".into(),
+            ArtifactOutcome::Unchanged => "unchanged".into(),
+            ArtifactOutcome::Failed(cause) => format!("not written: {cause}"),
         };
         artifacts.push(format!(
             "{} at {}: {text}",
@@ -82,6 +96,38 @@ pub(crate) fn render(
     }
 }
 
+/// Adds write and recording failures to the artifact receipt. Either failure
+/// leaves a partial outcome, including a rename whose folder was not synced.
+pub(crate) fn render_applied(
+    version: &str,
+    stable_path: &Path,
+    placements: &PlacementMap,
+    applied: &super::plan::Applied,
+    seed: &Result<bool, StoreError>,
+    recorded: &Result<bool, StoreError>,
+) -> Render {
+    let mut receipt = render(version, stable_path, placements, &applied.outcomes, seed);
+    let mut failures = Vec::new();
+    if let Some(failure) = &applied.failure {
+        failures.push(failure.clone());
+    }
+    if let Err(error) = recorded {
+        failures.push(format!(
+            "the install record was not written: {}",
+            display::store_error(error, Some(USER_PROJECT))
+                .lines
+                .join("; ")
+        ));
+    }
+    if !failures.is_empty() {
+        receipt.lines[0] = "install outcome: partial".into();
+        receipt.code = 1;
+        let after_seed = 3 + placements.expected_files().len();
+        receipt.lines.splice(after_seed..after_seed, failures);
+    }
+    receipt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,12 +145,69 @@ mod tests {
 
     fn outcomes(outcome: ArtifactOutcome) -> Vec<(Artifact, ArtifactOutcome)> {
         vec![
-            (Artifact::Stub("bal-capture".into()), outcome),
-            (Artifact::Stub("bal-help".into()), outcome),
-            (Artifact::Registration, outcome),
-            (Artifact::Hook, outcome),
+            (Artifact::Stub("bal-capture".into()), outcome.clone()),
+            (Artifact::Stub("bal-help".into()), outcome.clone()),
+            (Artifact::Registration, outcome.clone()),
+            (Artifact::Hook, outcome.clone()),
             (Artifact::Settings, outcome),
         ]
+    }
+
+    #[test]
+    fn a_replaced_or_unchanged_stub_reported_as_written_is_caught() {
+        let installed = installed();
+        let mut applied = super::super::plan::Applied {
+            outcomes: vec![
+                (
+                    Artifact::Stub("bal-capture".into()),
+                    ArtifactOutcome::Replaced,
+                ),
+                (
+                    Artifact::Stub("bal-help".into()),
+                    ArtifactOutcome::Unchanged,
+                ),
+            ],
+            failure: None,
+        };
+        let receipt = render_applied(
+            "0.2.0",
+            installed.layout.stable_path(),
+            &installed.placements,
+            &applied,
+            &Ok(true),
+            &Ok(true),
+        );
+        assert_eq!(
+            receipt.lines[2],
+            "stub `bal-capture` at /home/o/.claude/skills/bal-capture/SKILL.md: replaced"
+        );
+        assert_eq!(
+            receipt.lines[3],
+            "stub `bal-help` at /home/o/.claude/skills/bal-help/SKILL.md: unchanged"
+        );
+
+        applied.outcomes[1].1 = ArtifactOutcome::Failed("Permission denied".into());
+        applied.failure = Some(
+            "not-writable: /home/o/.claude/skills/bal-help/SKILL.md: Permission denied".into(),
+        );
+        let receipt = render_applied(
+            "0.2.0",
+            installed.layout.stable_path(),
+            &installed.placements,
+            &applied,
+            &Ok(true),
+            &Err(StoreError::Busy),
+        );
+        assert_eq!(
+            receipt.lines[3],
+            "stub `bal-help` at /home/o/.claude/skills/bal-help/SKILL.md: not written: Permission denied"
+        );
+        assert!(receipt.lines.contains(applied.failure.as_ref().unwrap()));
+        assert!(receipt.lines.iter().any(|line| line
+            == "the install record was not written: the ledger is busy; run the command again"));
+        assert_eq!(receipt.lines[0], "install outcome: partial");
+        assert_eq!(receipt.code, 1);
+        assert!(!receipt.error);
     }
 
     #[test]

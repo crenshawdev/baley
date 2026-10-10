@@ -1,20 +1,24 @@
 //! Host selection and gathering for `baley install`.
 
-use std::io;
+use std::collections::BTreeMap;
 use std::process::ExitCode;
+use std::{fs, io};
 
-use baley_core::policy::Host;
+use baley_core::catalog::USER_PROJECT;
+use baley_core::policy::{FileLayer, Host, Schema, Value, merge, parse_layer};
 use clap::Args;
 
 use crate::folders::{Environment, Folders, Platform};
 use crate::host_artifacts::{installed, stubs};
+use crate::host_doctor::placed;
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
-use crate::models;
+use crate::update::installation::{self, Active};
+use crate::{models, settings};
 
-use super::receipt::{self, ArtifactOutcome};
+use super::{apply, event, plan, receipt, record};
 
 /// The host whose user-level wiring install places.
 #[derive(Debug, Args)]
@@ -55,20 +59,64 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let at = SystemClock::now();
     let store = open::store(&folders.home, &at, open::options())
         .map_err(|error| display::store_error(&error, None))?;
+    let latest = record::read(&store, args.host.as_str())
+        .map_err(|error| display::store_error(&error, Some(USER_PROJECT)))?;
+    let mut observations = BTreeMap::new();
+    for file in installed.placements.expected_files() {
+        if file.stub.is_some() {
+            observations
+                .entry(file.path.to_path_buf())
+                .or_insert_with(|| plan::Observation {
+                    state: placed::read(file.path),
+                    symbolic_link: fs::symlink_metadata(file.path)
+                        .is_ok_and(|meta| meta.is_symlink()),
+                });
+        }
+    }
+    let plan = plan::judge(&installed.placements, latest.as_ref(), &observations)?;
+    let applied = plan::applied(&plan, &apply::run(&plan));
     let seed = models::seed(&store, new_request_id(), &SystemClock::now());
-    // Phase 15 plan 1 adds stub writes in tasks 6 and 7. Plan 2 adds JSON writes.
-    let outcomes: Vec<_> = installed
-        .placements
-        .expected_files()
-        .into_iter()
-        .map(|file| (file.artifact, ArtifactOutcome::NotWritten))
-        .collect();
-    Ok(receipt::render(
+
+    let schema = Schema::standard();
+    let global = settings::read(&settings::global_path(&folders)).and_then(|file| {
+        file.as_ref()
+            .map(|file| parse_layer(file, FileLayer::Global, schema))
+            .transpose()
+    });
+    let auto = global.ok().and_then(|global| {
+        let policy = merge(schema, None, global.as_ref(), None);
+        match policy.settings["updates.auto"].value {
+            Some(Value::Bool(value)) => Some(value),
+            _ => None,
+        }
+    });
+    let staged_version = installation::gather_stable(&installed.layout)
+        .ok()
+        .and_then(
+            |seen| match installation::judge_active(&installed.layout, &seen) {
+                Active::Version(version) => Some(version.to_string()),
+                Active::NotManaged(_) => None,
+            },
+        );
+    let facts = plan::facts(
+        env!("CARGO_PKG_VERSION"),
+        &installed.placements,
+        latest.as_ref(),
+        &applied,
+        &seed,
+        event::Updates {
+            auto,
+            staged_version,
+        },
+    );
+    let recorded = record::write(&store, &facts, new_request_id(), &SystemClock::now());
+    Ok(receipt::render_applied(
         env!("CARGO_PKG_VERSION"),
         installed.layout.stable_path(),
         &installed.placements,
-        &outcomes,
+        &applied,
         &seed,
+        &recorded,
     ))
 }
 

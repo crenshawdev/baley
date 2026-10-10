@@ -1,7 +1,11 @@
 //! `baley install`: Claude Code's wiring at the stable path, from the content
 //! `host_artifacts` renders, with ownership evidence in the ledger before
 //! any replacement. Gathering is kept apart from judging.
+//! Stubs are applied and recorded here. Phase 15 plan 2 adds the registration,
+//! hook and settings writes through the same plan and ownership facts.
 
+/// Planned stub writes and their filesystem observations.
+pub mod apply;
 /// Command arguments, host selection and installation gathering.
 pub mod command;
 /// Installation ownership facts and the `install.recorded` event.
