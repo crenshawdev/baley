@@ -530,7 +530,9 @@ mod tests {
                 root: "/p".into(),
             }),
             checkout: Some("/q".into()),
-            protected: Err(crate::folders::FolderRefusal::UserHomeUnset),
+            protected: Err(super::super::context::Refusal::Folders(
+                crate::folders::FolderRefusal::UserHomeUnset,
+            )),
         }
     }
 

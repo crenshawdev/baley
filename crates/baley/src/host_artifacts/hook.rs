@@ -102,22 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn drift_between_the_tracked_hooks_json_and_the_renderer_is_caught() {
-        // The tracked file is what T12 runs by hand; its command is a bare
-        // `baley` on purpose and is not compared. T15 removes the file and
-        // this test once `baley install` writes the hook from `render`.
-        let tracked: Value = serde_json::from_str(include_str!("../../../../hooks/hooks.json"))
-            .expect("hooks/hooks.json parses");
-        let item = &tracked["hooks"][EVENT][0];
-        let ours = rendered("/usr/local/bin/baley");
-        assert_eq!(item["matcher"], ours["hooks"][EVENT][0]["matcher"]);
-        assert_eq!(
-            item["hooks"][0]["timeout"],
-            ours["hooks"][EVENT][0]["hooks"][0]["timeout"]
-        );
-    }
-
-    #[test]
     fn a_second_hook_or_another_event_is_caught() {
         let ours = rendered("/usr/local/bin/baley");
         let top: Vec<&String> = ours.as_object().unwrap().keys().collect();

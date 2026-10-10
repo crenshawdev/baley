@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Baley from unsigned development artifacts only.
 # Issue #14 adds signature verification inside verify_download before any release.
-# Running baley install at the end belongs to Build 3 T15.
+# The script ends by running baley install through the stable path, which writes Claude Code's wiring.
 set -eu
 
 LC_ALL=C
@@ -208,3 +208,5 @@ for folder in "$versions"/*; do
     valid_version "$present" || continue
     printf '  %s\n' "$present"
 done
+
+"$stable" install

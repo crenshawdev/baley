@@ -17,11 +17,13 @@
 //! target platform, and a missing one marks the sandbox unsupported for the
 //! coverage judge.
 //!
-//! The held delivery doctor (Build 3 T17) takes the same three steps over a
-//! placement map `baley install` supplies. Nothing here writes a file, the
-//! ledger or Claude Code's settings, and nothing guesses where an artifact
-//! belongs: an artifact whose placement is unknown is reported as not
-//! installed, and that alone never raises the exit status.
+//! The placement map is decided by [`installed_placements`] from the paths
+//! the guard and `baley install` share and from the latest install record:
+//! only an artifact the record shows `baley install` wrote has a place.
+//! Nothing here writes a file, the ledger or Claude Code's settings, and
+//! nothing guesses where an artifact belongs: an artifact whose placement is
+//! unknown is reported as not installed, and that alone never raises the exit
+//! status.
 
 pub mod guard_records;
 pub mod placed;
@@ -34,59 +36,87 @@ pub mod store_health;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use baley_store::{Health, Ledger, ProjectId};
+use baley_store::{Health, Ledger, ProjectId, StoreError};
+use serde_json::Value;
 
 pub use report::Report;
 
 use placed::{ExecutableGap, FileState, RegistrationJudgement, StubJudgement};
 
 use crate::folders::Folders;
-use crate::host_artifacts::executable::{Executable, MissingPrerequisite};
+use crate::host_artifacts::installed::{self, Installed};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
-use crate::host_artifacts::stubs;
 
-/// Why no placement map could be built for the running binary.
+/// Why no placement map could be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapFault {
-    /// The running binary's path could not be read; the system's cause.
-    PathUnreadable(String),
-    /// The running binary's path is not usable as the executable the hook
-    /// and the registration run.
-    Executable {
-        /// The path as read.
-        path: PathBuf,
-        /// What is wrong with it.
-        refusal: MissingPrerequisite,
-    },
-    /// The map was refused when it was built; the reason.
-    Refused(String),
+    /// `HOME` or `CLAUDE_CONFIG_DIR` cannot place the artifacts, or the paths
+    /// derived from them cannot form a map; the reason as worded for the owner.
+    Placements(String),
+    /// The latest install record could not be read; the store's text. An
+    /// unreadable record is never taken for a machine where install never ran.
+    Record(String),
 }
 
-/// The placement map the command line uses: every stub of the compiled
-/// manifest, the registration, the hook and the settings all with an
-/// unknown place, and the running binary as the executable. `running` is
-/// what `std::env::current_exe()` returned.
-pub fn all_unknown(running: std::io::Result<PathBuf>) -> Result<PlacementMap, MapFault> {
-    let path = running.map_err(|error| MapFault::PathUnreadable(error.to_string()))?;
-    let executable = Executable::new(&path).map_err(|refusal| MapFault::Executable {
-        path: path.clone(),
-        refusal,
-    })?;
-    let manifest = stubs::manifest(&stubs::front_doors())
-        .map_err(|duplicate| MapFault::Refused(duplicate.to_string()))?;
-    let stubs = manifest
+/// Decides the placement map from the derivation the guard and install share
+/// and from what reading the latest install record for `claude-code` found.
+///
+/// The executable is always the derived stable path, never the running
+/// binary. With no record every artifact and the versions folder are unknown,
+/// so the report says `not installed` for each and raises nothing for it. With
+/// a record, a stub takes its derived path when the record lists its identity,
+/// the registration when the record holds a registration, the hook when it
+/// holds a hook and the settings when it holds a sandbox entry, and the
+/// versions folder takes its derived path. A derivation refusal or a failed
+/// read of the record is the fault.
+pub fn installed_placements(
+    derived: Result<Installed, installed::Refusal>,
+    record: Result<Option<Value>, StoreError>,
+) -> Result<PlacementMap, MapFault> {
+    let installed = derived.map_err(|refusal| MapFault::Placements(refusal.to_string()))?;
+    let record = record.map_err(|error| MapFault::Record(error.to_string()))?;
+    let versions = match record {
+        Some(_) => Placement::At(installed.layout.versions_folder().to_path_buf()),
+        None => Placement::Unknown,
+    };
+    let record = record.unwrap_or(Value::Null);
+    let lists = |identity: &str| {
+        record["stubs"]
+            .as_array()
+            .is_some_and(|stubs| stubs.iter().any(|stub| stub["identity"] == identity))
+    };
+    let holds = |value: &Value| !value.is_null();
+    let place = |held: bool, path: &Path| {
+        if held {
+            Placement::At(path.to_path_buf())
+        } else {
+            Placement::Unknown
+        }
+    };
+    let stubs = installed
+        .placements
+        .expected_files()
         .into_iter()
-        .map(|entry| (entry, Placement::Unknown))
+        .filter_map(|file| {
+            file.stub
+                .map(|entry| (entry.clone(), place(lists(&entry.identity), file.path)))
+        })
         .collect();
     PlacementMap::new(
-        executable,
+        installed.placements.executable().clone(),
         stubs,
-        Placement::Unknown,
-        Placement::Unknown,
-        Placement::Unknown,
-        Placement::Unknown,
+        place(
+            holds(&record["registered"]["registration"]),
+            &installed.registration_file,
+        ),
+        place(
+            holds(&record["registered"]["hook"]),
+            &installed.settings_file,
+        ),
+        place(holds(&record["sandbox"]), &installed.settings_file),
+        versions,
     )
-    .map_err(|refusal| MapFault::Refused(refusal.to_string()))
+    .map_err(|refusal| MapFault::Placements(refusal.to_string()))
 }
 
 /// One path read once.
@@ -233,7 +263,8 @@ pub enum ArtifactState {
         /// The place.
         path: PathBuf,
     },
-    /// The registration document's entry runs another command or arguments.
+    /// The registration document's entry runs another command or arguments,
+    /// or sets environment entries.
     RegistrationDiffers {
         /// The place.
         path: PathBuf,
@@ -456,6 +487,8 @@ pub fn judge(observation: &Observation) -> Findings {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
+    use crate::host_artifacts::executable::Executable;
+    use crate::host_artifacts::stubs;
 
     pub(crate) const EXECUTABLE: &str = "/usr/local/bin/baley";
     pub(crate) const HELP: &str = "/home/o/.claude/skills/bal-help/SKILL.md";
@@ -720,6 +753,155 @@ mod tests {
             }
         }
     }
+
+    fn record_for(
+        stubs: &[&str],
+        registration: bool,
+        hook: bool,
+        sandbox: bool,
+    ) -> serde_json::Value {
+        let settings = "/home/o/.claude/settings.json";
+        serde_json::json!({
+            "host": "claude-code",
+            "binary_version": "0.1.0",
+            "binary_path": "/home/o/.local/bin/baley",
+            "complete": stubs.len() == 2 && registration && hook && sandbox,
+            "registered": {
+                "registration": registration.then(|| serde_json::json!({
+                    "path": "/home/o/.claude.json",
+                    "entry": {"command": "/home/o/.local/bin/baley", "args": ["serve"]},
+                })),
+                "hook": hook.then(|| serde_json::json!({
+                    "path": settings,
+                    "item": {"matcher": "Bash", "hooks": [{"type": "command", "command": "baley guard"}]},
+                })),
+            },
+            "stubs": stubs.iter().map(|identity| serde_json::json!({
+                "identity": identity,
+                "path": format!("/home/o/.claude/skills/{identity}/SKILL.md"),
+                "sha256": "a".repeat(64),
+            })).collect::<Vec<_>>(),
+            "sandbox": sandbox.then(|| serde_json::json!({"settings_path": settings})),
+            "defaults": {},
+            "updates": {"auto": false, "staged_version": null},
+        })
+    }
+
+    fn derived() -> Result<
+        crate::host_artifacts::installed::Installed,
+        crate::host_artifacts::installed::Refusal,
+    > {
+        Ok(crate::install::fixtures::installed())
+    }
+
+    fn files(map: &PlacementMap) -> Vec<(Artifact, String)> {
+        map.expected_files()
+            .into_iter()
+            .map(|file| (file.artifact, file.path.to_str().unwrap().to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn an_installed_artifact_reported_not_installed_by_the_doctor_is_caught() {
+        let record = record_for(&["bal-capture", "bal-help"], true, true, true);
+        let map = installed_placements(derived(), Ok(Some(record))).unwrap();
+        assert_eq!(map.not_installed(), []);
+        assert_eq!(
+            files(&map),
+            [
+                (
+                    Artifact::Stub("bal-capture".into()),
+                    "/home/o/.claude/skills/bal-capture/SKILL.md".to_owned()
+                ),
+                (
+                    Artifact::Stub("bal-help".into()),
+                    "/home/o/.claude/skills/bal-help/SKILL.md".to_owned()
+                ),
+                (Artifact::Registration, "/home/o/.claude.json".to_owned()),
+                (Artifact::Hook, "/home/o/.claude/settings.json".to_owned()),
+                (
+                    Artifact::Settings,
+                    "/home/o/.claude/settings.json".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(map.executable().as_str(), "/home/o/.local/bin/baley");
+        assert_eq!(
+            map.write_only_folders(),
+            [PathBuf::from(
+                "/home/o/.local/lib/crenshawdev/baley/versions"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_never_installed_machine_reported_missing_or_judged_by_the_running_binary_is_caught() {
+        let map = installed_placements(derived(), Ok(None)).unwrap();
+        assert_eq!(
+            map.not_installed(),
+            [
+                Artifact::Stub("bal-capture".into()),
+                Artifact::Stub("bal-help".into()),
+                Artifact::Registration,
+                Artifact::Hook,
+                Artifact::Settings,
+            ]
+        );
+        assert_eq!(files(&map), []);
+        assert_eq!(map.executable().as_str(), "/home/o/.local/bin/baley");
+
+        let fault =
+            installed_placements(derived(), Err(baley_store::StoreError::Busy)).unwrap_err();
+        assert_eq!(
+            fault,
+            MapFault::Record(baley_store::StoreError::Busy.to_string())
+        );
+    }
+
+    #[test]
+    fn an_artifact_the_record_does_not_list_reported_installed_is_caught() {
+        let capture_only = record_for(&["bal-capture"], false, true, true);
+        let map = installed_placements(derived(), Ok(Some(capture_only))).unwrap();
+        assert_eq!(
+            files(&map),
+            [
+                (
+                    Artifact::Stub("bal-capture".into()),
+                    "/home/o/.claude/skills/bal-capture/SKILL.md".to_owned()
+                ),
+                (Artifact::Hook, "/home/o/.claude/settings.json".to_owned()),
+                (
+                    Artifact::Settings,
+                    "/home/o/.claude/settings.json".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            map.not_installed(),
+            [Artifact::Stub("bal-help".into()), Artifact::Registration]
+        );
+
+        let help_only = record_for(&["bal-help"], true, false, false);
+        let map = installed_placements(derived(), Ok(Some(help_only))).unwrap();
+        assert_eq!(
+            files(&map),
+            [
+                (
+                    Artifact::Stub("bal-help".into()),
+                    "/home/o/.claude/skills/bal-help/SKILL.md".to_owned()
+                ),
+                (Artifact::Registration, "/home/o/.claude.json".to_owned()),
+            ]
+        );
+        assert_eq!(
+            map.not_installed(),
+            [
+                Artifact::Stub("bal-capture".into()),
+                Artifact::Hook,
+                Artifact::Settings,
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -737,6 +919,7 @@ mod integration {
     use super::fixtures::{executable, folders, map};
     use super::*;
     use crate::host_artifacts::compose::compose;
+    use crate::host_artifacts::stubs;
     use crate::host_artifacts::{hook, security};
     use crate::mcp::capture::{CAPTURE_COMMAND, record};
     use crate::mcp::prepare::{WriteRequest, prepared_command};

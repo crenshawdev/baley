@@ -49,8 +49,8 @@ pub enum Conflict {
     /// not Baley's hook item: another matcher, another executable or another
     /// field. It stays, and Baley's item is added beside it.
     OtherGuardHook(Value),
-    /// `mcpServers.baley` runs another command or other arguments. It stays
-    /// as it was.
+    /// `mcpServers.baley` runs another command or other arguments, or sets
+    /// environment entries. It stays as it was.
     OtherRegistration(Value),
     /// An `allowRead` or `allowWrite` entry equals or lies inside the home or
     /// the config folder.
@@ -103,8 +103,8 @@ impl Composed {
 /// Baley adds goes last. Arrays gain each Baley entry not already present,
 /// so composing the result again changes nothing. Baley's own values win,
 /// and each one that replaced an owner value is reported. An existing
-/// `mcpServers.baley` running something else is left as it was and
-/// reported.
+/// `mcpServers.baley` running something else, or setting environment
+/// entries, is left as it was and reported.
 pub fn compose(
     existing: Option<&Value>,
     ours: &[Value],
@@ -174,11 +174,25 @@ fn merge(target: &mut Value, ours: &Value, key: &str, conflicts: &mut Vec<Confli
     }
 }
 
-/// Whether an existing `mcpServers` entry runs the same command with the
-/// same arguments as ours. `alwaysLoad` and every other key are ignored, so
-/// the doctor judges a registration by composition's own rule.
+/// Whether an existing `mcpServers` entry is a stdio server that runs the
+/// same command with the same arguments as ours and sets no environment
+/// entry. Claude Code writes a stdio entry with `type` set to `stdio` or
+/// leaves it out, so any other `type` (`http`, `sse` and the like) is not
+/// launched through `command`, whatever command and arguments it still
+/// holds. `env` must be absent or an empty object, since an entry that sets
+/// one can point Baley at another ledger and gains no ownership from its
+/// command alone. `alwaysLoad` and every other key are ignored, so the
+/// doctor, `baley install` and composition judge a registration by this one
+/// rule.
 pub(crate) fn same_server(existing: &Value, ours: &Value) -> bool {
-    existing.get("command") == ours.get("command") && existing.get("args") == ours.get("args")
+    existing
+        .get("type")
+        .is_none_or(|transport| transport == "stdio")
+        && existing.get("command") == ours.get("command")
+        && existing.get("args") == ours.get("args")
+        && existing
+            .get("env")
+            .is_none_or(|env| env.as_object().is_some_and(Map::is_empty))
 }
 
 fn strings<'v>(document: &'v Value, pointer: &str) -> Vec<&'v str> {

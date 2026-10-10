@@ -24,6 +24,7 @@ use super::version::Version;
 /// The paths of one installation, all derived from `HOME`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
+    home: String,
     stable: String,
     versions: String,
 }
@@ -97,11 +98,17 @@ impl Layout {
                 .collect::<Vec<_>>()
                 .join("/")
         );
-        let home = home.trim_end_matches('/');
+        let prefix = home.trim_end_matches('/');
         Ok(Layout {
-            stable: format!("{home}/.local/bin/baley"),
-            versions: format!("{home}/.local/lib/crenshawdev/baley/versions"),
+            stable: format!("{prefix}/.local/bin/baley"),
+            versions: format!("{prefix}/.local/lib/crenshawdev/baley/versions"),
+            home,
         })
+    }
+
+    /// The normalized `HOME` used for every installation path.
+    pub fn home_folder(&self) -> &Path {
+        Path::new(&self.home)
     }
 
     /// The stable path, `~/.local/bin/baley`.

@@ -4,13 +4,13 @@
 //! D-20).
 //!
 //! The proposal is content, not a write. `baley install` merges it into
-//! Claude Code's settings in Build 3 T15, and T12 applies it by hand. It reads
+//! Claude Code's user settings file (Build 3 T15). It reads
 //! nothing: every path is a supplied value, and a path that cannot be written
 //! as a rule is reported beside the content instead of rendered.
 //!
 //! It holds no `sandbox.network` key. Allowing the owner's chosen providers'
-//! API hosts is T15's: once the key ADR and the delivery ADR record the host
-//! list, T15 adds it to [`propose`]'s inputs and renders it as
+//! API hosts is T16's: once the key ADR and the delivery ADR record the host
+//! list, T16 adds it to [`propose`]'s inputs and renders it as
 //! `sandbox.network.allowedDomains`.
 //!
 //! Host facts the keys and spellings depend on, confirmed on 2026-10-06

@@ -1,13 +1,13 @@
 //! The guard's one time budget (design 0010, GRD-R14).
 //!
 //! One guard call has to answer inside the host's hook timeout, the
-//! `"timeout": 10` that `hooks/hooks.json` gives `baley guard`. The budget
-//! starts when the guard starts, before it reads its input. Git and storage
-//! waits each have one allowance for the whole call, and no step runs past the
-//! end of the work time, so the reserve after it is left for killing and
-//! reaping a child and writing the answer. Each grant is decided from the time
-//! elapsed since the start and the time already spent, so no step resets the
-//! total.
+//! `"timeout": 10` that `host_artifacts::hook::render` writes into the hook
+//! `baley install` places for `baley guard`. The budget starts when the guard
+//! starts, before it reads its input. Git and storage waits each have one
+//! allowance for the whole call, and no step runs past the end of the work
+//! time, so the reserve after it is left for killing and reaping a child and
+//! writing the answer. Each grant is decided from the time elapsed since the
+//! start and the time already spent, so no step resets the total.
 //!
 //! The input is bounded by size, not time: at most
 //! [`crate::hook_input::MAX_INPUT_BYTES`] bytes, read inside the work time.
@@ -17,7 +17,8 @@
 
 use std::time::{Duration, Instant};
 
-/// The host's hook timeout for `baley guard`, from `hooks/hooks.json`.
+/// The host's hook timeout for `baley guard`: the value
+/// `host_artifacts::hook::render` writes into the installed hook.
 pub const HOST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Work ends this long after the guard starts.
 pub const WORK: Duration = Duration::from_secs(8);

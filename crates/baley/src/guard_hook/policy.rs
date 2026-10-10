@@ -3,10 +3,9 @@
 //! each bounded, merged with Claude Code's host sections. Nothing here admits
 //! a checkout or records a policy.
 
-use super::context::Bound;
+use super::context::{Bound, Refusal};
 use crate::committed::{self, Committed, GuardRefusal};
 use crate::discovery::PROJECT_FILE;
-use crate::folders::FolderRefusal;
 use crate::guard_budget::Budget;
 use crate::policy_step::{self, Reads};
 use crate::process::Process;
@@ -18,8 +17,8 @@ use std::path::{Path, PathBuf};
 /// What the policy reads found, before any rule is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Seen {
-    /// The global file's bounded read, or why the config folder is unknown.
-    pub global: Result<Result<Option<SettingsFile>, Unavailable>, FolderRefusal>,
+    /// The global file's bounded read, or why the protected paths are unresolved.
+    pub global: Result<Result<Option<SettingsFile>, Unavailable>, Refusal>,
     /// The working-tree `baley.toml` the walk found.
     pub working_path: PathBuf,
     /// The working-tree `baley.toml`'s bounded read.
@@ -31,7 +30,7 @@ pub(super) struct Seen {
 /// Reads the global file from `config` and the project's files, HEAD's copy
 /// on the guard's budget. It owns no policy, so it has no unit test.
 pub(super) fn gather(
-    config: Result<&Path, &FolderRefusal>,
+    config: Result<&Path, &Refusal>,
     project: &Bound,
     process: &mut dyn Process,
     budget: &mut Budget,
@@ -60,9 +59,9 @@ pub(super) fn gather(
 
 /// The settings a commit is judged under, and the excerpt of git's stderr
 /// in them when HEAD's copy is the torn file, which a record leaves out. A
-/// refused working-tree read is torn, and so is the global file when Baley's
-/// folders are unknown, since a policy without the owner's global file is
-/// not the owner's policy. The merge applies Claude Code's
+/// refused working-tree read is torn, and so is the global file when the
+/// protected paths are unresolved, since a policy without the owner's global
+/// file is not the owner's policy. The merge applies Claude Code's
 /// `[host.claude-code]` sections.
 pub(super) fn settings(seen: Seen) -> (SettingsInput, Option<String>) {
     let global = seen.global.unwrap_or_else(|refusal| {
@@ -109,6 +108,7 @@ pub(super) fn settings(seen: Seen) -> (SettingsInput, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::folders::FolderRefusal;
     use baley_core::policy::OnProtected;
 
     const PROJECT: &str = "/p/baley.toml";
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(settings(seen), (SettingsInput::Torn(refused), None));
 
         let seen = Seen {
-            global: Err(FolderRefusal::UserHomeUnset),
+            global: Err(Refusal::Folders(FolderRefusal::UserHomeUnset)),
             ..at_head("[git]\non_protected = \"refuse\"\n")
         };
         let (SettingsInput::Torn(torn), None) = settings(seen) else {

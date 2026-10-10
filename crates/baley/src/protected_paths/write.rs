@@ -21,8 +21,9 @@ pub struct ProtectedPaths {
     /// Baley's configuration folder, protected whole.
     pub config: PathBuf,
     /// Files protected one by one: the session project's `baley.toml`, the
-    /// `baley.toml` of the checkout the hook's cwd is in, and the instruction
-    /// stubs. Any other file named `baley.toml` is not on the list.
+    /// `baley.toml` of the checkout the hook's cwd is in, and the installed
+    /// stubs, settings file, registration file and executable. Any other
+    /// file named `baley.toml` is not on the list.
     pub files: Vec<PathBuf>,
     /// Folders protected against writes only, such as the folder of staged
     /// versions: a write inside one is denied, a read is not, because the

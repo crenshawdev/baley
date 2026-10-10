@@ -151,8 +151,8 @@ pub(super) fn next(input: &HookInput, context: &HookContext, seen: &Seen, fs: &d
     }
 }
 
-/// A path call, judged against the hook's cwd. Without Baley's folders
-/// nothing can be cleared, so the call is refused.
+/// A path call, judged against the hook's cwd. Without the complete protected
+/// paths nothing can be cleared, so the call is refused.
 fn path(envelope: &Envelope, target: &PathTarget, context: &HookContext, fs: &dyn Lookup) -> Next {
     let spelled = target.path.as_deref();
     let pattern = target.pattern.as_deref();
@@ -180,7 +180,7 @@ fn path(envelope: &Envelope, target: &PathTarget, context: &HookContext, fs: &dy
     let cwd = envelope.cwd.as_str();
     let answer = match (&context.protected, target.tool) {
         (Err(refusal), tool) => Answer::Deny(format!(
-            "Baley cannot find its home and config folders ({refusal}), so this {} call is refused",
+            "Baley cannot resolve its protected paths ({refusal}), so this {} call is refused",
             tool.name()
         )),
         (Ok(protected), PathTool::Write | PathTool::Edit | PathTool::NotebookEdit) => write_answer(
@@ -629,7 +629,9 @@ mod tests {
     #[test]
     fn a_path_call_judged_without_baleys_folders_is_caught() {
         let mut unresolved = context(Some("/p"));
-        unresolved.protected = Err(FolderRefusal::UserHomeUnset);
+        unresolved.protected = Err(super::super::context::Refusal::Folders(
+            FolderRefusal::UserHomeUnset,
+        ));
         let decided = decided(next(
             &write("/p", "/p/src/lib.rs"),
             &unresolved,
@@ -654,6 +656,196 @@ mod tests {
             record.input_digest,
             input_digest("PowerShell", &ToolInput::default())
         );
+    }
+
+    #[test]
+    fn a_write_to_an_installed_placement_passed_by_the_guard_is_caught() {
+        use crate::discovery::Discovery;
+        use crate::folders::{Environment, Folders};
+        use crate::guard_hook::context;
+        use crate::host_artifacts::{installed, stubs};
+        use crate::mcp::context::ProjectContext;
+        use crate::protected_paths::Entry;
+        use std::ffi::OsStr;
+        use std::io;
+        use std::path::Path;
+
+        const STABLE: &str = "/u/.local/bin/baley";
+        const STAGED: &str = "/u/.local/lib/crenshawdev/baley/versions/0.2.0/baley";
+
+        // Supply the stable link's observations without resolving paths in the fake.
+        struct WithStableLink(Tree);
+
+        impl Lookup for WithStableLink {
+            fn metadata(&self, path: &Path) -> io::Result<Entry> {
+                self.0.metadata(if path == Path::new(STABLE) {
+                    Path::new(STAGED)
+                } else {
+                    path
+                })
+            }
+
+            fn present(&self, path: &Path) -> io::Result<()> {
+                self.0.present(path)
+            }
+
+            fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+                if path == Path::new(STABLE) {
+                    Ok(STAGED.into())
+                } else {
+                    self.0.canonicalize(path)
+                }
+            }
+
+            fn absolute(&self, path: &Path) -> io::Result<PathBuf> {
+                self.0.absolute(path)
+            }
+        }
+
+        let fs = [
+            "/",
+            "/p",
+            "/q",
+            "/u",
+            "/u/.config",
+            "/u/.config/crenshawdev",
+            CONFIG,
+            "/u/.local",
+            "/u/.local/share",
+            "/u/.local/share/crenshawdev",
+            HOME,
+            "/u/.claude",
+            "/u/.claude/skills",
+            "/u/.claude/skills/bal-capture",
+            "/u/.claude/skills/bal-help",
+            "/u/.local/bin",
+            "/u/.local/lib",
+            "/u/.local/lib/crenshawdev",
+            "/u/.local/lib/crenshawdev/baley",
+            "/u/.local/lib/crenshawdev/baley/versions",
+            "/u/.local/lib/crenshawdev/baley/versions/0.2.0",
+        ]
+        .into_iter()
+        .fold(tree(), |fs, path| fs.dir(path));
+        let fs = WithStableLink(
+            fs.file("/p/baley.toml")
+                .file("/q/baley.toml")
+                .file("/u/.claude/skills/bal-capture/SKILL.md")
+                .file("/u/.claude/skills/bal-help/SKILL.md")
+                .file("/u/.claude/settings.json")
+                .file("/u/.claude.json")
+                .file(STAGED)
+                .file(STABLE),
+        );
+        let env = Environment {
+            home: Some("/u".into()),
+            ..Environment::default()
+        };
+        let installed =
+            installed::resolve(&env, None, &stubs::manifest(&stubs::front_doors()).unwrap());
+        let managed = |path: &str| {
+            Ok(Discovery::Managed {
+                folder: path.into(),
+                root: path.into(),
+            })
+        };
+        let context = context::judge(
+            Some(OsStr::new("/p")),
+            &ProjectContext::Valid("/p".into()),
+            Some(managed("/p")),
+            managed("/q"),
+            Ok(Folders {
+                home: HOME.into(),
+                config: CONFIG.into(),
+            }),
+            installed.map(Some),
+        );
+
+        for (tool, path) in [
+            (PathTool::Write, "/u/.claude/skills/bal-help/SKILL.md"),
+            (PathTool::Edit, "/u/.claude/settings.json"),
+            (PathTool::Write, "/u/.claude.json"),
+            (PathTool::Write, STABLE),
+            (
+                PathTool::NotebookEdit,
+                "/u/.local/lib/crenshawdev/baley/versions/0.2.0/notes.ipynb",
+            ),
+        ] {
+            let call = HookInput::Path {
+                envelope: envelope("/q"),
+                target: PathTarget {
+                    tool,
+                    path: Some(path.into()),
+                    pattern: None,
+                },
+            };
+            let answer = decided(next(&call, &context, &Seen::default(), &fs)).answer;
+            assert!(
+                matches!(answer, Answer::Deny(_)),
+                "{} {path}: {answer:?}",
+                tool.name()
+            );
+        }
+        assert_eq!(
+            decided(next(
+                &write("/q", "/q/notes.txt"),
+                &context,
+                &Seen::default(),
+                &fs
+            ))
+            .answer,
+            Answer::Pass,
+        );
+    }
+
+    #[test]
+    fn a_placement_refusal_letting_a_path_tool_through_is_caught() {
+        use crate::discovery::Discovery;
+        use crate::folders::{Environment, Folders};
+        use crate::guard_hook::context;
+        use crate::host_artifacts::{installed, stubs};
+        use crate::mcp::context::ProjectContext;
+
+        let env = Environment {
+            home: Some("/u".into()),
+            ..Environment::default()
+        };
+        let installed = installed::resolve(
+            &env,
+            Some("claude".into()),
+            &stubs::manifest(&stubs::front_doors()).unwrap(),
+        );
+        let context = context::judge(
+            None,
+            &ProjectContext::Missing,
+            None,
+            Ok(Discovery::Outside),
+            Ok(Folders {
+                home: HOME.into(),
+                config: CONFIG.into(),
+            }),
+            installed.map(Some),
+        );
+        let fs = tree().dir("/q");
+        for tool in [PathTool::Write, PathTool::Read] {
+            let call = HookInput::Path {
+                envelope: envelope("/q"),
+                target: PathTarget {
+                    tool,
+                    path: Some("/q/notes.txt".into()),
+                    pattern: None,
+                },
+            };
+            let answer = decided(next(&call, &context, &Seen::default(), &fs)).answer;
+            let Answer::Deny(reason) = answer else {
+                panic!("{} was not denied: {answer:?}", tool.name())
+            };
+            assert!(reason.contains("CLAUDE_CONFIG_DIR"), "{reason}");
+            assert!(
+                !reason.contains("home folder") && !reason.contains("home and config folders"),
+                "{reason}"
+            );
+        }
     }
 
     #[test]

@@ -1,13 +1,16 @@
-//! Where the hook runs (design 0010, GRD-R2): the session project from
+//! Where the hook runs: the session project from
 //! `CLAUDE_PROJECT_DIR`, the checkout the hook's cwd is in, Baley's folders
-//! and the paths the guard protects. The cwd never stands in for the project,
-//! so a `/cd` never changes whose policy applies.
+//! and the installed paths derived from HOME and CLAUDE_CONFIG_DIR. The cwd
+//! never stands in for the project, so a `/cd` never changes whose policy
+//! applies.
 
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, FolderRefusal, Folders, Platform};
+use crate::host_artifacts::{installed, stubs};
 use crate::mcp::context::{DirectoryFault, ProjectContext, project_context};
 use crate::protected_paths::ProtectedPaths;
 use std::ffi::OsStr;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// The session project, bound because its directory is in a managed
@@ -32,9 +35,27 @@ pub(super) struct HookContext {
     /// The root of the cwd's checkout, used for remembered denials when a
     /// commit has no redirect. A redirected commit supplies its own walk.
     pub checkout: Option<PathBuf>,
-    /// The paths path tools are judged against, or why Baley's folders could
-    /// not be resolved.
-    pub protected: Result<ProtectedPaths, FolderRefusal>,
+    /// The paths path tools are judged against, or why Baley's folders or
+    /// installed artifact paths could not be resolved.
+    pub protected: Result<ProtectedPaths, Refusal>,
+}
+
+/// Why the guard cannot establish the complete set of protected paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// Baley's ledger home or configuration folder could not be resolved.
+    Folders(FolderRefusal),
+    /// The installed Claude files or executable could not be placed.
+    Placements(installed::Refusal),
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Folders(refusal) => refusal.fmt(f),
+            Self::Placements(refusal) => refusal.fmt(f),
+        }
+    }
 }
 
 /// A directory's discovery, or why its walk failed. A failed walk is not
@@ -53,13 +74,18 @@ pub(super) fn gather(cwd: &str) -> HookContext {
         ProjectContext::Valid(directory) => Some(walk(Path::new(directory))),
         ProjectContext::Missing | ProjectContext::Invalid(_) => None,
     };
-    let folders = Folders::resolve(Platform::current(), &Environment::read());
+    let env = Environment::read();
+    let folders = Folders::resolve(Platform::current(), &env);
+    let claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
+    let installed = installed::resolve(&env, claude_config_dir, &manifest);
     judge(
         project_dir.as_deref(),
         &project,
         project_walk,
         walk(Path::new(cwd)),
         folders,
+        installed.map(Some),
     )
 }
 
@@ -81,13 +107,16 @@ pub(super) fn walk(directory: &Path) -> Walk {
 /// The protected files are the bound project's `baley.toml` and the one that
 /// binds the cwd's checkout: its project file when managed, or the root's
 /// missing `baley.toml` when unmanaged, so an agent cannot create the file
-/// that would bind it. Stubs are not listed yet.
+/// that would bind it. Supplied installed placements follow, each file once
+/// in first-seen order, with the versions folder protected against writes.
+/// A folder or placement refusal leaves no protected paths to judge against.
 pub(super) fn judge(
     project_dir: Option<&OsStr>,
     project: &ProjectContext,
     project_walk: Option<Walk>,
     cwd_walk: Walk,
     folders: Result<Folders, FolderRefusal>,
+    installed: Result<Option<installed::Installed>, installed::Refusal>,
 ) -> HookContext {
     let project = match (project, project_walk) {
         (ProjectContext::Valid(_), Some(Ok(Discovery::Managed { folder, root }))) => {
@@ -123,12 +152,23 @@ pub(super) fn judge(
         project_directory,
         project,
         checkout,
-        protected: folders.map(|folders| ProtectedPaths {
-            home: folders.home,
-            config: folders.config,
-            files,
-            // T15 passes the placement map's write-only folders here.
-            write_only_folders: Vec::new(),
+        protected: folders.map_err(Refusal::Folders).and_then(|folders| {
+            let installed = installed.map_err(Refusal::Placements)?;
+            let mut write_only_folders = Vec::new();
+            if let Some(installed) = installed {
+                for file in installed.placements.protected_paths() {
+                    if !files.contains(&file) {
+                        files.push(file);
+                    }
+                }
+                write_only_folders = installed.placements.write_only_folders();
+            }
+            Ok(ProtectedPaths {
+                home: folders.home,
+                config: folders.config,
+                files,
+                write_only_folders,
+            })
         }),
     }
 }
@@ -155,7 +195,7 @@ mod tests {
         Ok(Discovery::Unmanaged { root: path.into() })
     }
 
-    fn protecting(files: &[&str]) -> Result<ProtectedPaths, FolderRefusal> {
+    fn protecting(files: &[&str]) -> Result<ProtectedPaths, Refusal> {
         Ok(ProtectedPaths {
             home: "/u/.local/share/crenshawdev/baley".into(),
             config: "/u/.config/crenshawdev/baley".into(),
@@ -172,6 +212,62 @@ mod tests {
     }
 
     #[test]
+    fn the_installed_placements_left_off_or_repeated_in_the_protected_list_is_caught() {
+        use crate::host_artifacts::{installed, stubs};
+
+        let env = Environment {
+            home: Some("/u".into()),
+            ..Environment::default()
+        };
+        let installed =
+            installed::resolve(&env, None, &stubs::manifest(&stubs::front_doors()).unwrap())
+                .unwrap();
+        let placed = [
+            "/u/.claude/skills/bal-capture/SKILL.md",
+            "/u/.claude/skills/bal-help/SKILL.md",
+            "/u/.claude.json",
+            "/u/.claude/settings.json",
+            "/u/.local/bin/baley",
+        ];
+        for (given, project, project_walk, cwd_walk, project_files) in [
+            (
+                Some(OsStr::new("/p")),
+                ProjectContext::Valid("/p".into()),
+                Some(managed("/p")),
+                managed("/q"),
+                vec!["/p/baley.toml", "/q/baley.toml"],
+            ),
+            (
+                None,
+                ProjectContext::Missing,
+                None,
+                Ok(Discovery::Outside),
+                vec![],
+            ),
+        ] {
+            let context = judge(
+                given,
+                &project,
+                project_walk,
+                cwd_walk,
+                folders(),
+                Ok(Some(installed.clone())),
+            );
+            let protected = context.protected.unwrap();
+            let expected: Vec<PathBuf> = project_files
+                .into_iter()
+                .chain(placed)
+                .map(PathBuf::from)
+                .collect();
+            assert_eq!(protected.files, expected);
+            assert_eq!(
+                protected.write_only_folders,
+                [PathBuf::from("/u/.local/lib/crenshawdev/baley/versions")]
+            );
+        }
+    }
+
+    #[test]
     fn the_cwd_taking_over_the_session_project_is_caught() {
         let context = judge(
             Some(OsStr::new("/p")),
@@ -179,6 +275,7 @@ mod tests {
             Some(managed("/p")),
             managed("/q"),
             folders(),
+            Ok(None),
         );
         assert_eq!(
             context,
@@ -207,6 +304,7 @@ mod tests {
                 None,
                 managed("/q"),
                 folders(),
+                Ok(None),
             );
             assert_eq!(
                 context,
@@ -231,6 +329,7 @@ mod tests {
             None,
             managed("/q"),
             folders(),
+            Ok(None),
         );
         assert_eq!(context.project_directory, Err(DirectoryFault::NotUtf8));
         assert_eq!(context.project, None);
@@ -244,6 +343,7 @@ mod tests {
             Some(unmanaged("/p")),
             managed("/q"),
             folders(),
+            Ok(None),
         );
         assert_eq!(context.project, None);
         assert_eq!(context.checkout, Some("/q".into()));
@@ -257,6 +357,7 @@ mod tests {
             Some(managed("/p")),
             unmanaged("/q"),
             folders(),
+            Ok(None),
         );
         assert_eq!(context.project, bound("/p"));
         assert_eq!(context.checkout, Some("/q".into()));
@@ -274,6 +375,7 @@ mod tests {
             Some(managed("/p")),
             managed("/q"),
             Err(FolderRefusal::UserHomeUnset),
+            Ok(None),
         );
         assert_eq!(
             context,
@@ -281,7 +383,7 @@ mod tests {
                 project_directory: Ok(Some("/p".into())),
                 project: bound("/p"),
                 checkout: Some("/q".into()),
-                protected: Err(FolderRefusal::UserHomeUnset),
+                protected: Err(Refusal::Folders(FolderRefusal::UserHomeUnset)),
             }
         );
     }

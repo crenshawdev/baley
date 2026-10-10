@@ -1,11 +1,10 @@
 //! The two update events and their payloads (design 0012 section 6).
 //!
 //! `update.checked` and `update.failed` go to the per-user `user` project on
-//! stream `install`, at version 1. There is no `install` view and no
-//! projector: a new view would raise the view set and fence every older
-//! running server, so these events are read by their stream and nothing keeps
-//! a document for them. The builders here are pure; recording them is the
-//! caller's.
+//! stream `install`, at version 1. The `install` view keeps only
+//! `install.recorded`, so these events are read by their stream and nothing
+//! keeps a document for them. The builders here are pure; recording them is
+//! the caller's.
 
 use baley_core::{Registry, RegistryError};
 use baley_store::{NewEvent, RequestId, StreamName};

@@ -110,6 +110,17 @@ pub struct Program {
     pub found: Option<PathBuf>,
 }
 
+/// The sentence for a required program that no `PATH` entry holds: the
+/// program, its package, the two install commands and that the lookup used
+/// this command's own `PATH`. The doctor and `baley install` both use it, so
+/// neither words the fix differently.
+pub fn missing_sentence(program: &Program) -> String {
+    format!(
+        "{} is missing from PATH, so the sandbox cannot run; install {} with `apt-get install bubblewrap socat` or `dnf install bubblewrap socat` (this lookup used this command's PATH, which may differ from the one Claude Code runs with)",
+        program.name, program.package
+    )
+}
+
 /// What the platform is to Claude Code's sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

@@ -292,10 +292,9 @@ impl PlacementMap {
     /// registration, the hook and the settings in first-seen order, each
     /// file once, then the executable.
     ///
-    /// This is the list T15 appends to `ProtectedPaths.files` at
-    /// `guard_hook::context::judge`. Until then, production keeps that list
-    /// to the session project's `baley.toml` and the cwd checkout's
-    /// `baley.toml` (D-08). Those files are never in this list: the guard
+    /// `guard_hook::context::judge` appends this list to
+    /// `ProtectedPaths.files`, after the session project's `baley.toml` and
+    /// the cwd checkout's `baley.toml` (D-08). Those files are never in this list: the guard
     /// finds them at runtime, and the map takes no settings-file input, so
     /// the exact-list test on a full map is what keeps them out.
     ///
