@@ -1404,15 +1404,25 @@ mod tests {
             })
         );
 
-        for refusal in ["\n", "y\n"] {
+        // Each warning needs its own yes, so a yes to the first never covers the
+        // second, and input ending at the second declines too.
+        for answers in [
+            "openai\n\n",
+            "openai\ny\n",
+            "openai,deepseek\nyes\nno\n",
+            "openai,deepseek\nyes\n",
+        ] {
+            let mut process = Recorded::new();
             let (outcome, output) = converse_with(
-                &after_thirteen(&format!("openai\n{refusal}")),
+                &after_thirteen(answers),
                 None,
                 &Selection::none(),
-                &mut Recorded::new(),
+                &mut process,
             );
-            assert_eq!(outcome, Outcome::Declined, "{refusal:?}");
+            assert_eq!(outcome, Outcome::Declined, "{answers:?}");
+            assert_eq!(acknowledgement_of(&outcome), None, "{answers:?}");
             assert!(!output.contains("Write these values?"), "{output}");
+            assert!(process.launches().is_empty(), "{answers:?}");
         }
     }
 
