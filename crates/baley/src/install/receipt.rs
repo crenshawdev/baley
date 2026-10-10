@@ -39,7 +39,8 @@ impl ArtifactOutcome {
 pub struct Notes {
     /// Each gap with its fix. Any gap makes the install partial.
     pub gaps: Vec<String>,
-    /// Owner values Baley's secure values replaced.
+    /// Owner values Baley's secure values replace when the settings write
+    /// places them. The receipt reports them only then.
     pub replaced: Vec<Replaced>,
     /// Why the sandbox block was left out of the settings file, if it was.
     pub sandbox_held_back: Option<String>,
@@ -137,7 +138,11 @@ pub(crate) fn render(
         ),
     });
     let settings_path = settings_path.unwrap_or_default();
-    for replaced in &notes.replaced {
+    // A replacement is only planned until the settings write places it.
+    let settings_placed = outcomes
+        .iter()
+        .any(|(artifact, outcome)| *artifact == Artifact::Settings && outcome.is_owned());
+    for replaced in notes.replaced.iter().filter(|_| settings_placed) {
         lines.push(format!(
             "replaced {} in {settings_path}: it held {}, and Baley's secure value {} is now there",
             replaced.key,
@@ -584,6 +589,50 @@ mod tests {
                 .iter()
                 .any(|line| precedence.iter().all(|part| line.contains(part)))
         );
+    }
+
+    #[test]
+    fn a_secure_value_reported_as_placed_after_a_failed_settings_write_is_caught() {
+        let installed = installed();
+        let notes = || Notes {
+            replaced: vec![Replaced {
+                key: "sandbox.enabled".into(),
+                was: serde_json::json!(false),
+            }],
+            ..Notes::default()
+        };
+        let says_placed = |receipt: &Render| {
+            receipt
+                .lines
+                .iter()
+                .any(|line| line.starts_with("replaced ") || line.contains("is now there"))
+        };
+
+        for outcome in [
+            ArtifactOutcome::Failed("Permission denied".into()),
+            ArtifactOutcome::NotWritten,
+        ] {
+            let receipt = render(
+                "0.2.0",
+                installed.layout.stable_path(),
+                &installed.placements,
+                &outcomes(outcome),
+                &notes(),
+                &Ok(true),
+            );
+            assert!(!says_placed(&receipt), "{:#?}", receipt.lines);
+            assert_eq!(receipt.lines[0], "install outcome: partial");
+        }
+
+        let receipt = render(
+            "0.2.0",
+            installed.layout.stable_path(),
+            &installed.placements,
+            &outcomes(ArtifactOutcome::Written),
+            &notes(),
+            &Ok(true),
+        );
+        assert!(says_placed(&receipt), "{:#?}", receipt.lines);
     }
     #[test]
     fn a_registration_failure_without_the_command_to_run_is_caught() {
