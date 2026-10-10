@@ -356,8 +356,23 @@ fn still_held(document: &Value, latest: Option<&Value>, pointer: &str, key: &str
 /// refused with every line. A setting that leaves protection off is kept and
 /// becomes a gap, and Baley's own secure value replacing an owner's is
 /// written and reported. A settings path that is a link is refused only when
-/// a write is needed.
+/// a write is needed. A Baley folder that is not valid UTF-8 is refused first,
+/// since the record and the deny rules hold paths as text.
 pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
+    let not_utf8: Vec<String> = [&input.folders.home, &input.folders.config]
+        .into_iter()
+        .filter(|folder| folder.to_str().is_none())
+        .map(|folder| {
+            format!(
+                "install-settings-conflict: Baley's folder {} is not valid UTF-8, so its deny rules cannot be written to {}; move it to a UTF-8 path, then run baley install again",
+                folder.display(),
+                input.path.display()
+            )
+        })
+        .collect();
+    if !not_utf8.is_empty() {
+        return Err(not_utf8);
+    }
     let ours = ours(input.placements, input.folders);
     let held = held_back(input.prerequisites, input.path);
     let mut document = input.current.document.clone();
@@ -432,7 +447,11 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
             &ours.deny_write,
         ),
     };
-    let text = |path: &Path| path.to_str().expect("placements are UTF-8").to_owned();
+    let text = |path: &Path| {
+        path.to_str()
+            .expect("placements and Baley's folders are UTF-8")
+            .to_owned()
+    };
     let base = event::Sandbox {
         settings_path: text(input.path),
         sha256: String::new(),
@@ -992,6 +1011,38 @@ mod tests {
             !written.contains("b[1]") && !written.contains("c?"),
             "{written}"
         );
+    }
+
+    #[test]
+    fn a_baley_folder_that_is_not_utf8_panicking_instead_of_refusing_is_caught() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let raw = |bytes: &[u8]| PathBuf::from(OsString::from_vec(bytes.to_vec()));
+        let owner = read(json!({"model": "opus"}));
+
+        let bad_home = Folders {
+            home: raw(b"/home/o/\xffdata"),
+            ..folders()
+        };
+        let refusal = decide_in(&owner, None, &bad_home)
+            .expect_err("a folder that is not UTF-8 cannot be written as a rule");
+        assert_eq!(refusal.len(), 1, "{refusal:?}");
+        assert!(
+            refusal[0].starts_with("install-settings-conflict: "),
+            "{refusal:?}"
+        );
+        assert!(refusal[0].contains("/home/o/"), "{refusal:?}");
+        assert!(refusal[0].contains("UTF-8"), "{refusal:?}");
+
+        let bad_both = Folders {
+            config: raw(b"/home/o/\xfeconfig"),
+            ..bad_home
+        };
+        let refusal = decide_in(&owner, None, &bad_both).expect_err("both folders are refused");
+        assert_eq!(refusal.len(), 2, "{refusal:?}");
+        assert!(refusal[0].contains("data"), "{refusal:?}");
+        assert!(refusal[1].contains("config"), "{refusal:?}");
     }
     fn deny_rules() -> Value {
         json!([
