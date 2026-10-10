@@ -28,6 +28,8 @@ pub struct Allowance {
     /// SHA-256 of the bytes the document was read from, or none when the file
     /// was absent.
     pub read_digest: Option<String>,
+    /// The hosts this write adds, in the order they are appended.
+    pub added: Vec<&'static str>,
 }
 
 /// The key that holds the list of allowed hosts.
@@ -51,9 +53,12 @@ fn object<'a>(
 }
 
 /// Appends the wanted hosts the list does not hold, making `sandbox`,
-/// `sandbox.network` and the list when they are missing. Whether it added any,
+/// `sandbox.network` and the list when they are missing. The hosts it added,
 /// or the key that holds the wrong kind of value.
-fn add_hosts(document: &mut Value, wanted: &[&str]) -> Result<bool, &'static str> {
+fn add_hosts(
+    document: &mut Value,
+    wanted: &[&'static str],
+) -> Result<Vec<&'static str>, &'static str> {
     let empty = || Value::Object(Map::new());
     let root = object(document, "sandbox")?;
     let sandbox = object(root.entry("sandbox").or_insert_with(empty), "sandbox")?;
@@ -67,13 +72,13 @@ fn add_hosts(document: &mut Value, wanted: &[&str]) -> Result<bool, &'static str
     else {
         return Err("sandbox.network.allowedDomains");
     };
-    let missing: Vec<&str> = wanted
+    let missing: Vec<&'static str> = wanted
         .iter()
         .copied()
         .filter(|host| !list.iter().any(|held| held.as_str() == Some(host)))
         .collect();
     list.extend(missing.iter().map(|host| Value::String((*host).to_owned())));
-    Ok(!missing.is_empty())
+    Ok(missing)
 }
 
 /// Decides what to write so each chosen provider's API host is allowed. Hosts
@@ -88,7 +93,7 @@ pub fn judge(
     current: &Current,
     chosen: &[Provider],
 ) -> Result<Option<Allowance>, String> {
-    let wanted: Vec<&str> = Provider::ALL
+    let wanted: Vec<&'static str> = Provider::ALL
         .into_iter()
         .filter(|provider| chosen.contains(provider))
         .map(Provider::api_host)
@@ -97,7 +102,8 @@ pub fn judge(
         return Ok(None);
     }
     let mut document = current.document.clone();
-    if !add_hosts(&mut document, &wanted).map_err(|key| not_composable(path, key))? {
+    let added = add_hosts(&mut document, &wanted).map_err(|key| not_composable(path, key))?;
+    if added.is_empty() {
         return Ok(None);
     }
     if current.symbolic_link {
@@ -110,6 +116,7 @@ pub fn judge(
         document,
         bytes,
         read_digest: current.read_digest.clone(),
+        added,
     }))
 }
 

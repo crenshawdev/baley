@@ -17,6 +17,14 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 mod providers;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the interview runs the plan once the ordered writes are wired"
+    )
+)]
+mod writes;
 
 use self::providers::{Acknowledge, Refusal, Staged};
 use super::reviewers::{self, Selection};
