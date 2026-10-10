@@ -12,17 +12,19 @@ use baley_core::policy::recorded::{PolicyProjector, register_policy_events};
 use baley_core::{Registry, register_anchor_events, register_project_events};
 use baley_store_sqlite::Options;
 
+use crate::install::event::register_install_events;
+use crate::install::view::InstallProjector;
 use crate::update::events::register_update_events;
 
 /// Registers exactly the anchor types, `project.initialized`, the four
 /// `models.*` types, `policy.effective`, `checkout.seen`, `capture.recorded`,
-/// `guard.answered`, `guard.policy_recorded`, `update.checked` and
-/// `update.failed` understood by the CLI, and declares view set version 7,
-/// `capture checkout claim_scope guard guard_policy model_catalog policy request`.
-/// The update events have no view: a view would raise the set version and
-/// fence every older running server.
-/// The startup `quick_check` is off, so every command-line caller opens as
-/// before.
+/// `guard.answered`, `guard.policy_recorded`, `install.recorded`,
+/// `update.checked` and `update.failed` understood by the CLI, and declares
+/// view set version 8: `capture checkout claim_scope guard guard_policy
+/// install model_catalog policy request`. The install view holds only install
+/// records. Update outcomes are read from their stream and have no projector.
+/// A project brought to view set 8 is read-only for older binaries.
+/// The startup `quick_check` is off for command-line callers.
 pub(crate) fn options() -> Options {
     let mut registry = Registry::new();
     register_anchor_events(&mut registry).expect("unique anchor types");
@@ -32,6 +34,7 @@ pub(crate) fn options() -> Options {
     register_checkout_events(&mut registry).expect("unique checkout types");
     register_capture_events(&mut registry).expect("unique capture types");
     register_guard_events(&mut registry).expect("unique guard types");
+    register_install_events(&mut registry).expect("unique install types");
     register_update_events(&mut registry).expect("unique update types");
     Options {
         schema: Box::new(registry),
@@ -42,8 +45,9 @@ pub(crate) fn options() -> Options {
             Box::new(CaptureProjector::new()),
             Box::new(GuardProjector::new()),
             Box::new(GuardPolicyProjector::new()),
+            Box::new(InstallProjector::new()),
         ],
-        view_set_version: NonZeroU32::new(7).expect("nonzero"),
+        view_set_version: NonZeroU32::new(8).expect("nonzero"),
         ..Options::default()
     }
 }
@@ -169,8 +173,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// The options as they stood at view set 7, before the update events
-    /// were registered. The newer binary must stay compatible with them.
+    /// The options at view set 7 before update events were registered.
+    /// A project stays writable here until a newer binary brings it forward.
     fn view_set_7() -> Options {
         let mut registry = Registry::new();
         register_anchor_events(&mut registry).unwrap();
@@ -455,8 +459,19 @@ pub(crate) mod tests {
         assert!(reopened.is_ok(), "{:?}", reopened.err());
     }
 
-    // Catches update events a binary cannot read back, which would fence
-    // `user` for itself, or an `install` view that raises the view set.
+    #[test]
+    fn an_install_record_unreadable_by_the_server_or_the_guard_is_caught() {
+        for opened in [
+            options(),
+            server_options(),
+            guard_options(Duration::from_millis(1_500)),
+        ] {
+            assert!(opened.schema.reads("install.recorded", 1));
+            assert!(!opened.schema.reads("install.recorded", 2));
+        }
+    }
+
+    // Update outcomes stay on their stream, outside the install view.
     #[test]
     fn the_update_events_left_unregistered_or_given_a_view_is_caught() {
         use crate::update::events::{UPDATE_CHECKED, UPDATE_EVENT_VERSION, UPDATE_FAILED};
@@ -473,7 +488,7 @@ pub(crate) mod tests {
                     "{name}"
                 );
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(7).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(8).unwrap());
             let mut names = view_names(&opened);
             names.sort();
             assert_eq!(
@@ -483,6 +498,7 @@ pub(crate) mod tests {
                     "checkout",
                     "guard",
                     "guard_policy",
+                    "install",
                     "model_catalog",
                     "policy"
                 ]
@@ -580,24 +596,21 @@ pub(crate) mod tests {
             .unwrap();
     }
 
-    // Catches a newer binary that fences the session's project for the older
-    // one: an `install` view that raises the view set so the newer write
-    // rebuilds and the older read is refused, or an update event appended to
-    // the session's project instead of `user`.
+    // A newer view set fences only the project brought forward to it.
     #[test]
     fn an_older_baley_fenced_out_of_the_session_project_by_the_newer_binary_is_caught() {
         use crate::models;
         use crate::update::events::{CheckOutcome, ClaimRef, Facts, checked_event};
         use crate::update::version::Version;
         use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW};
-        use baley_core::catalog::HINT_VERSION;
+        use baley_core::catalog::USER_PROJECT;
         use baley_core::guard::{
             Answer, AnsweredFacts, GUARD_ANSWERED, GUARD_ANSWERED_VERSION, GUARD_STREAM,
             SettingsFact, answered_payload,
         };
         use baley_store::{
-            Admin, IndexQuery, KeyValue, NewEvent, PageRequest, ProjectId, Recorded, RequestId,
-            StreamName, Views,
+            Admin, IndexQuery, KeyValue, NewEvent, PageRequest, ProjectId, Recorded, Refusal,
+            RequestId, StoreError, StreamName, Views,
         };
 
         const T2: &str = "2026-10-01T10:00:02Z";
@@ -689,10 +702,17 @@ pub(crate) mod tests {
         );
         drop(guarded);
 
-        // The older binary reopens: `user`'s catalog reads, and the project
-        // still takes and finds a capture.
+        // Only `user` was brought forward, so the session project stays writable.
         let older = store(&home, T2, view_set_7()).unwrap();
-        assert_eq!(models::observe_hint_version(&older), Ok(Some(HINT_VERSION)));
+        let catalog = models::observe_hint_version(&older);
+        assert!(
+            matches!(
+                &catalog,
+                Err(StoreError::Refused(Refusal::ProjectReadOnly { project, .. }))
+                    if *project == ProjectId(USER_PROJECT.into())
+            ),
+            "{catalog:?}"
+        );
         let second = record_capture(
             &older,
             &project,
