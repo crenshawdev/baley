@@ -157,7 +157,7 @@ pub(crate) fn render(
         && notes.sandbox_held_back.is_none();
     if sandbox_written {
         lines.push(format!(
-            "the sandbox settings in {settings_path} apply to every Claude Code session on this machine, including projects Baley does not manage"
+            "the sandbox settings in {settings_path} apply to the Claude Code sessions that read that file, including projects Baley does not manage, but not to another user's sessions or to sessions run with a different CLAUDE_CONFIG_DIR"
         ));
         lines.push(format!(
             "managed settings, command-line settings and a project's own .claude/settings.json and .claude/settings.local.json take precedence over {settings_path} for single values such as sandbox.enabled"
@@ -524,7 +524,7 @@ mod tests {
         };
         let line_with =
             |receipt: &Render, text: &str| receipt.lines.iter().any(|line| line.contains(text));
-        let every_session = "apply to every Claude Code session on this machine, including projects Baley does not manage";
+        let reach = "apply to the Claude Code sessions that read that file, including projects Baley does not manage, but not to another user's sessions or to sessions run with a different CLAUDE_CONFIG_DIR";
         let precedence = [
             "managed settings",
             "command-line settings",
@@ -557,7 +557,7 @@ mod tests {
                 && line.contains("false")
                 && line.contains("/home/o/.claude/settings.json")
         }));
-        assert!(line_with(&written, every_session));
+        assert!(line_with(&written, reach));
         assert!(
             written
                 .lines
@@ -574,7 +574,7 @@ mod tests {
             settings_line(&held).unwrap(),
             "settings at /home/o/.claude/settings.json: written without the sandbox block"
         );
-        assert!(!line_with(&held, "every Claude Code session"));
+        assert!(!line_with(&held, "the sandbox settings in"));
         assert!(!line_with(&held, "take precedence"));
 
         let unchanged = render_with(ArtifactOutcome::Unchanged, Notes::default());
@@ -582,7 +582,7 @@ mod tests {
             settings_line(&unchanged).unwrap(),
             "settings at /home/o/.claude/settings.json: unchanged"
         );
-        assert!(line_with(&unchanged, every_session));
+        assert!(line_with(&unchanged, reach));
         assert!(
             unchanged
                 .lines
