@@ -8,10 +8,11 @@
 //! nothing: every path is a supplied value, and a path that cannot be written
 //! as a rule is reported beside the content instead of rendered.
 //!
-//! It holds no `sandbox.network` key. Allowing the owner's chosen providers'
-//! API hosts is T16's: once the key ADR and the delivery ADR record the host
-//! list, T16 adds it to [`propose`]'s inputs and renders it as
-//! `sandbox.network.allowedDomains`.
+//! It holds no `sandbox.network` key and install renders none. The owner's
+//! chosen providers' API hosts are added to `sandbox.network.allowedDomains`
+//! by the interview's host step (`install::hosts`), which keeps every other
+//! key and host in the file, and install keeps those hosts as an unrelated
+//! key.
 //!
 //! Host facts the keys and spellings depend on, confirmed on 2026-10-06
 //! against Claude Code's published settings reference, sandboxing and
