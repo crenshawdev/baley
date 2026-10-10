@@ -5,7 +5,8 @@
 //! own home from reading the latest record to recording the result.
 //! The stubs and the settings file (the hook, the deny rules and the sandbox
 //! block) are written and the registration is requested from Claude Code, all
-//! from one plan and recorded with the same ownership facts.
+//! from one plan and recorded with the same ownership facts. Nothing that runs
+//! the stable path is written unless something runnable sits there.
 
 /// Planned file writes, then the registration launches, applied in order.
 pub mod apply;

@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::folders::Folders;
 use crate::host_artifacts::compose::same_server;
 use crate::host_artifacts::placement::{Artifact, PlacementMap};
-use crate::host_doctor::placed::{Fault, FileState};
+use crate::host_doctor::placed::{ExecutableGap, Fault, FileState};
 use crate::host_doctor::prerequisites::Judged;
 use crate::ledger::display::Render;
 use crate::replace::Failure;
@@ -46,6 +46,10 @@ pub struct Gathered<'a> {
     pub observations: &'a BTreeMap<PathBuf, Observation>,
     /// The sandbox programs the platform needs, judged by the doctor's check.
     pub prerequisites: &'a Judged,
+    /// What is wrong at the stable path, or none when a runnable file sits
+    /// there. While something is wrong, the hook and the registration that
+    /// run it are not written.
+    pub executable: Option<&'a ExecutableGap>,
 }
 
 /// A file write permitted by the ownership decision.
@@ -78,6 +82,18 @@ pub struct Plan {
     /// The `mcpServers.baley` entry the first read of the registration file
     /// held, which the record keeps if no launch changes it.
     pub registration_seen: Option<Value>,
+    /// Why the hook and the registration were held back, when nothing
+    /// runnable sits at the stable path.
+    pub wiring: Option<Wiring>,
+}
+
+/// The hook and the registration held back from an empty stable path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wiring {
+    /// The stable path and what is wrong there, as the artifact lines say it.
+    pub cause: String,
+    /// The gap with its fix.
+    pub gap: String,
 }
 
 fn unobserved() -> Observation {
@@ -150,6 +166,7 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
             placements,
             folders: gathered.folders,
             prerequisites: gathered.prerequisites,
+            wire: gathered.executable.is_none(),
         }) {
             Err(lines) => {
                 conflicts.extend(lines);
@@ -184,10 +201,23 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         return Err(refusal);
     };
 
+    let wiring = gathered.executable.map(|gap| {
+        let path = placements.executable().as_str();
+        Wiring {
+            cause: format!("the stable path {path} {gap}"),
+            gap: format!(
+                "nothing runnable is at {path}: it {gap}, so the hook and the registration that run it were not written; run install.sh, or place the baley binary or a link to it at that path, then run baley install again"
+            ),
+        }
+    });
     let mut writes = Vec::new();
     match &decision.bytes {
         Some(bytes) => writes.push(Write {
-            artifacts: vec![Artifact::Hook, Artifact::Settings],
+            artifacts: if wiring.is_some() {
+                vec![Artifact::Settings]
+            } else {
+                vec![Artifact::Hook, Artifact::Settings]
+            },
             path: settings_path,
             bytes: bytes.clone(),
             read_digest: decision.read_digest.clone(),
@@ -208,12 +238,20 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
             }
         }
     }
+    if let Some(wiring) = &wiring {
+        for (artifact, outcome) in &mut outcomes {
+            if matches!(artifact, Artifact::Hook | Artifact::Registration) {
+                *outcome = ArtifactOutcome::Failed(wiring.cause.clone());
+            }
+        }
+    }
     Ok(Plan {
         writes,
         outcomes,
         settings: decision,
         registration,
         registration_seen: registration::held(&registration_read),
+        wiring,
     })
 }
 
@@ -240,7 +278,10 @@ pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>], attempt: &At
     let mut applied = Applied {
         outcomes: plan.outcomes.clone(),
         failure: None,
-        notes: Notes::from_settings(&plan.settings),
+        notes: Notes::from_settings(
+            &plan.settings,
+            plan.wiring.as_ref().map(|wiring| wiring.gap.as_str()),
+        ),
         registration_seen: attempt.seen.clone(),
         registration_removed: attempt.removed,
     };
@@ -293,6 +334,7 @@ pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>], attempt: &At
             applied.notes.registration_by_hand = true;
             ArtifactOutcome::Failed(cause.clone())
         }
+        Registered::Withheld(cause) => ArtifactOutcome::Failed(cause.clone()),
         Registered::NotReached(cause) => ArtifactOutcome::Failed(match &applied.failure {
             Some(failure) => format!("{cause}: {failure}"),
             None => cause.clone(),
@@ -436,7 +478,6 @@ mod tests {
     use super::*;
     use crate::host_artifacts::installed::Installed;
     use crate::host_artifacts::stubs;
-    use crate::host_doctor::prerequisites::Judged;
     use crate::install::fixtures::{
         complete_settings, folders, four_spaces, hook_item, installed, linux,
     };
@@ -466,6 +507,7 @@ mod tests {
             placements: &installed.placements,
             folders: &folders(),
             prerequisites: &linux(),
+            wire: true,
         })
         .expect("composes")
     }
@@ -565,6 +607,7 @@ mod tests {
                 latest: None,
                 observations,
                 prerequisites: &linux(),
+                executable: None,
             })
         };
 
@@ -745,6 +788,7 @@ mod tests {
                 latest: None,
                 observations: &observations,
                 prerequisites: &linux(),
+                executable: None,
             })
             .expect_err("content under Baley's name without evidence is refused");
 
@@ -770,6 +814,7 @@ mod tests {
             latest,
             observations,
             prerequisites,
+            executable: None,
         }
     }
 
@@ -987,5 +1032,79 @@ mod tests {
         );
         assert_eq!(facts.registration, None);
         assert!(!facts.complete);
+    }
+    #[test]
+    fn a_hook_or_registration_wired_to_an_empty_stable_path_is_caught() {
+        let installed = installed();
+        let observations = all_absent(&installed);
+        let (folders, prerequisites) = (folders(), linux());
+        let plan_for = |gap: Option<&ExecutableGap>| {
+            judge(&Gathered {
+                placements: &installed.placements,
+                folders: &folders,
+                latest: None,
+                observations: &observations,
+                prerequisites: &prerequisites,
+                executable: gap,
+            })
+            .expect("an empty machine plans")
+        };
+        let stable = "/home/o/.local/bin/baley";
+
+        for (gap, text) in [
+            (ExecutableGap::Missing, "does not exist"),
+            (ExecutableGap::DanglingLink, "is a link to a missing file"),
+        ] {
+            let plan = plan_for(Some(&gap));
+
+            assert!(matches!(plan.registration, Step::Run(_)));
+            let document = &plan.settings.document;
+            assert!(document.get("hooks").is_none(), "{document}");
+            assert_eq!(document["sandbox"]["enabled"], true);
+            assert_eq!(
+                document["permissions"]["deny"].as_array().unwrap().len(),
+                10
+            );
+            let stubs = plan
+                .writes
+                .iter()
+                .filter(|write| matches!(write.artifacts[0], Artifact::Stub(_)))
+                .count();
+            assert_eq!(stubs, 2);
+            assert_eq!(plan.writes[0].artifacts, [Artifact::Settings]);
+            let wiring = plan.wiring.as_ref().expect("the wiring is held back");
+            assert!(wiring.gap.contains(stable), "{}", wiring.gap);
+            assert!(wiring.gap.contains(text), "{}", wiring.gap);
+            assert!(wiring.gap.contains("install.sh"), "{}", wiring.gap);
+            assert_eq!(plan.settings.entries.hook, None);
+            for artifact in [Artifact::Hook, Artifact::Registration] {
+                let outcome = plan
+                    .outcomes
+                    .iter()
+                    .find(|(placed, _)| *placed == artifact)
+                    .map(|(_, outcome)| outcome)
+                    .unwrap();
+                let ArtifactOutcome::Failed(cause) = outcome else {
+                    panic!("{artifact} must be held back, not {outcome:?}");
+                };
+                assert!(cause.contains(stable) && cause.contains(text), "{cause}");
+            }
+        }
+
+        let plan = plan_for(None);
+        let Step::Run(launches) = &plan.registration else {
+            panic!("the registration is requested");
+        };
+        assert_eq!(launches.len(), 1);
+        assert_eq!(
+            plan.settings.document["hooks"]["PreToolUse"],
+            json!([hook_item()])
+        );
+        assert!(plan.wiring.is_none());
+        assert!(
+            plan.settings.gaps.iter().all(|gap| !gap.contains(stable)),
+            "{:?}",
+            plan.settings.gaps
+        );
     }
 }

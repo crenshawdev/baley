@@ -138,6 +138,8 @@ pub enum Registered {
     Refused(String),
     /// A `claude` command failed, as a `not-writable` line naming the file.
     Failed(String),
+    /// Nothing runnable sits at the stable path, so the step was held back.
+    Withheld(String),
     /// The step was not reached, for the cause.
     NotReached(String),
 }

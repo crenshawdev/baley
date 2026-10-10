@@ -148,12 +148,15 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
         std::env::var_os("PATH").as_deref(),
         std::env::consts::OS,
     ));
+    let stable_gap =
+        placed::observe_executable(Path::new(installed.placements.executable().as_str()));
     let plan = plan::judge(&plan::Gathered {
         placements: &installed.placements,
         folders: &folders,
         latest: latest_payload,
         observations: &observations,
         prerequisites: &prerequisites,
+        executable: stable_gap.as_ref(),
     })?;
     let applying = apply::run(
         &plan,

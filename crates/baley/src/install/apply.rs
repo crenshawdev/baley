@@ -78,6 +78,10 @@ fn register(
         removed: false,
         result: Registered::Unchanged,
     };
+    if let Some(wiring) = &plan.wiring {
+        attempt.result = Registered::Withheld(wiring.cause.clone());
+        return attempt;
+    }
     let Step::Run(launches) = &plan.registration else {
         return attempt;
     };

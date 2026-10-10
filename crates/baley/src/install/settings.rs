@@ -193,6 +193,9 @@ pub struct Input<'a> {
     pub folders: &'a Folders,
     /// The sandbox programs the platform needs, judged by the doctor's check.
     pub prerequisites: &'a Judged,
+    /// Whether this binary's hook item is composed in. It is not while
+    /// nothing runnable sits at the stable path the hook would run.
+    pub wire: bool,
 }
 
 /// Baley's entries in the composed document, for the install record.
@@ -367,12 +370,9 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
     {
         settings.shift_remove("sandbox");
     }
-    let composed = compose(
-        Some(&document),
-        &[proposal, hook],
-        input.folders,
-        executable,
-    );
+    let mut ours_to_compose = vec![proposal];
+    ours_to_compose.extend(input.wire.then_some(hook));
+    let composed = compose(Some(&document), &ours_to_compose, input.folders, executable);
     let (mut refusals, mut replaced, mut gaps) = (Vec::new(), Vec::new(), Vec::new());
     for conflict in &composed.conflicts {
         if let Some(line) = refusal(input.path, conflict) {
@@ -702,6 +702,7 @@ mod tests {
             placements: &installed.placements,
             folders,
             prerequisites,
+            wire: true,
         })
     }
 

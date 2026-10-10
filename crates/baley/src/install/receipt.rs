@@ -50,9 +50,14 @@ pub struct Notes {
 
 impl Notes {
     /// The notes a settings decision gives the receipt.
-    pub fn from_settings(decision: &settings::Decision) -> Self {
+    pub fn from_settings(decision: &settings::Decision, wiring_gap: Option<&str>) -> Self {
         Self {
-            gaps: decision.gaps.clone(),
+            gaps: decision
+                .gaps
+                .iter()
+                .cloned()
+                .chain(wiring_gap.map(str::to_owned))
+                .collect(),
             replaced: decision.replaced.clone(),
             sandbox_held_back: decision.held_back.clone(),
             registration_by_hand: false,
@@ -437,6 +442,7 @@ mod tests {
             latest: None,
             observations: &observations,
             prerequisites: &no_socat,
+            executable: None,
         })
         .expect("a gap is not a refusal");
         let written: Vec<Result<(), crate::replace::Failure>> =
