@@ -18,6 +18,8 @@ pub mod plan;
 pub mod receipt;
 /// Recording and reading installation ownership evidence in the ledger.
 pub mod record;
+/// Claude Code's user settings file read, composed into and judged.
+pub mod settings;
 /// Stub ownership judged from observed bytes and the latest install record.
 pub mod stubs;
 /// The latest installation ownership record for each host.
