@@ -42,10 +42,10 @@ use unrecordable::{not_recorded, store_failure};
 /// answer recorded under its call id, on a short store open of its own,
 /// and a replay is answered with no git or policy read. Only a bound commit
 /// then reads a branch and a policy, in that order. Any answer selected for
-/// recording takes a second short open for the audit transaction. Without
-/// Baley's home folder or the call's identity, after a call id clash, or on
-/// any store failure the decision is unrecordable, which a loud line says:
-/// an ask becomes a deny.
+/// recording takes a second short open for the audit transaction. When
+/// Baley's folders or installed paths cannot be resolved, without the call's
+/// identity, after a call id clash, or on any store failure the decision is
+/// unrecordable, which a loud line says: an ask becomes a deny.
 pub fn run() -> ExitCode {
     let mut budget = Budget::start();
     let mut bytes = Vec::new();
@@ -73,7 +73,7 @@ pub fn run() -> ExitCode {
     // Who records, and where, or why nothing can be.
     let recorder = match (envelope, &context.protected) {
         (_, Err(refusal)) => Err(not_recorded(&format!(
-            "Baley's home folder cannot be found ({refusal})"
+            "the protected paths cannot be resolved ({refusal})"
         ))),
         (None, Ok(_)) => Err(not_recorded("the call carries no envelope")),
         (Some(envelope), Ok(paths)) => unrecordable::caller(envelope, &context.project_directory)
