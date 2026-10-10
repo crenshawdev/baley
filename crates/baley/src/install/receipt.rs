@@ -9,6 +9,8 @@ use baley_store::StoreError;
 use crate::host_artifacts::placement::{Artifact, PlacementMap};
 use crate::ledger::display::{self, Render};
 
+use super::settings::{self, Replaced};
+
 /// What the run left at an artifact's placed path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactOutcome {
@@ -31,25 +33,57 @@ impl ArtifactOutcome {
     }
 }
 
+/// What the settings step adds to the receipt beyond the artifact lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Notes {
+    /// Each gap with its fix. Any gap makes the install partial.
+    pub gaps: Vec<String>,
+    /// Owner values Baley's secure values replaced.
+    pub replaced: Vec<Replaced>,
+    /// Why the sandbox block was left out of the settings file, if it was.
+    pub sandbox_held_back: Option<String>,
+}
+
+impl Notes {
+    /// The notes a settings decision gives the receipt.
+    pub fn from_settings(decision: &settings::Decision) -> Self {
+        Self {
+            gaps: decision.gaps.clone(),
+            replaced: decision.replaced.clone(),
+            sandbox_held_back: decision.held_back.clone(),
+        }
+    }
+}
+
 /// Renders every placed artifact in map order. A missing outcome counts as
 /// not written. Completion requires every placement to be known, every
-/// artifact to be Baley's and the catalog seed to be recorded.
+/// artifact to be Baley's, no gap and the catalog seed to be recorded.
 pub(crate) fn render(
     version: &str,
     stable_path: &Path,
     placements: &PlacementMap,
     outcomes: &[(Artifact, ArtifactOutcome)],
+    notes: &Notes,
     seed: &Result<bool, StoreError>,
 ) -> Render {
-    let complete = super::plan::complete(placements, outcomes, seed);
+    let complete = super::plan::complete(placements, outcomes, notes, seed);
     let mut artifacts = Vec::new();
+    let mut settings_path = None;
     for file in placements.expected_files() {
+        if file.artifact == Artifact::Settings {
+            settings_path = Some(file.path.display().to_string());
+        }
         let outcome = outcomes
             .iter()
             .find(|(artifact, _)| *artifact == file.artifact)
             .map_or(&ArtifactOutcome::NotWritten, |(_, outcome)| outcome);
         let text = match outcome {
             ArtifactOutcome::NotWritten => "not written".into(),
+            ArtifactOutcome::Written
+                if file.artifact == Artifact::Settings && notes.sandbox_held_back.is_some() =>
+            {
+                "written without the sandbox block".into()
+            }
             ArtifactOutcome::Written => "written".into(),
             ArtifactOutcome::Replaced => "replaced".into(),
             ArtifactOutcome::Unchanged => "unchanged".into(),
@@ -81,6 +115,28 @@ pub(crate) fn render(
                 .join("; ")
         ),
     });
+    let settings_path = settings_path.unwrap_or_default();
+    for replaced in &notes.replaced {
+        lines.push(format!(
+            "replaced {} in {settings_path}: it held {}, and Baley's secure value {} is now there",
+            replaced.key,
+            replaced.was,
+            settings::secure_value(&replaced.key)
+        ));
+    }
+    lines.extend(notes.gaps.iter().map(|gap| format!("gap: {gap}")));
+    let sandbox_written = outcomes
+        .iter()
+        .any(|(artifact, outcome)| *artifact == Artifact::Settings && outcome.is_owned())
+        && notes.sandbox_held_back.is_none();
+    if sandbox_written {
+        lines.push(format!(
+            "the sandbox settings in {settings_path} apply to every Claude Code session on this machine, including projects Baley does not manage"
+        ));
+        lines.push(format!(
+            "managed settings, command-line settings and a project's own .claude/settings.json and .claude/settings.local.json take precedence over {settings_path} for single values such as sandbox.enabled"
+        ));
+    }
     lines.extend([
         "start a new Claude Code session to load the wiring".into(),
         "run baley init in each checkout Baley should manage".into(),
@@ -106,7 +162,14 @@ pub(crate) fn render_applied(
     seed: &Result<bool, StoreError>,
     recorded: &Result<bool, StoreError>,
 ) -> Render {
-    let mut receipt = render(version, stable_path, placements, &applied.outcomes, seed);
+    let mut receipt = render(
+        version,
+        stable_path,
+        placements,
+        &applied.outcomes,
+        &applied.notes,
+        seed,
+    );
     let mut failures = Vec::new();
     if let Some(failure) = &applied.failure {
         failures.push(failure.clone());
@@ -168,6 +231,7 @@ mod tests {
                 ),
             ],
             failure: None,
+            notes: Notes::default(),
         };
         let receipt = render_applied(
             "0.2.0",
@@ -218,6 +282,7 @@ mod tests {
             installed.layout.stable_path(),
             &installed.placements,
             &outcomes(ArtifactOutcome::NotWritten),
+            &Notes::default(),
             &Ok(true),
         );
         assert_eq!(receipt.lines[0], "install outcome: partial");
@@ -249,6 +314,7 @@ mod tests {
             installed.layout.stable_path(),
             &installed.placements,
             &outcomes(ArtifactOutcome::NotWritten),
+            &Notes::default(),
             &Ok(true),
         );
         assert_eq!(receipt.lines[1], "baley 0.2.0 at /home/o/.local/bin/baley");
@@ -274,6 +340,7 @@ mod tests {
             installed.layout.stable_path(),
             &installed.placements,
             &outcomes,
+            &Notes::default(),
             &Err(StoreError::Busy),
         );
         assert_eq!(
@@ -290,6 +357,7 @@ mod tests {
                 installed.layout.stable_path(),
                 &installed.placements,
                 &outcomes,
+                &Notes::default(),
                 &Ok(recorded),
             );
             assert_eq!(receipt.lines[0], "install outcome: complete");
@@ -304,5 +372,186 @@ mod tests {
             };
             assert_eq!(receipt.lines[7], expected);
         }
+    }
+    #[test]
+    fn a_gap_left_unnamed_or_an_install_with_a_gap_called_complete_is_caught() {
+        use std::collections::BTreeMap;
+
+        use serde_json::json;
+
+        use crate::host_doctor::placed::FileState;
+        use crate::install::fixtures::{folders, prerequisites};
+        use crate::install::plan::{self, Gathered, Observation};
+
+        let installed = installed();
+        let owner = json!({"sandbox": {
+            "excludedCommands": ["docker"],
+            "filesystem": {
+                "disabled": true,
+                "allowRead": ["/home/o/.local/share/crenshawdev/baley"],
+                "allowWrite": ["~/scratch"],
+            },
+        }});
+        let seen = |state| Observation {
+            state,
+            symbolic_link: false,
+        };
+        let observations = BTreeMap::from([
+            (
+                installed.settings_file.clone(),
+                seen(FileState::Bytes(serde_json::to_vec(&owner).unwrap())),
+            ),
+            (
+                "/home/o/.claude/skills/bal-capture/SKILL.md".into(),
+                seen(FileState::Absent),
+            ),
+            (
+                "/home/o/.claude/skills/bal-help/SKILL.md".into(),
+                seen(FileState::Absent),
+            ),
+        ]);
+        let no_socat = prerequisites("linux", &["bwrap"]);
+        let plan = plan::judge(&Gathered {
+            placements: &installed.placements,
+            folders: &folders(),
+            latest: None,
+            observations: &observations,
+            prerequisites: &no_socat,
+        })
+        .expect("a gap is not a refusal");
+        let written: Vec<Result<(), crate::replace::Failure>> =
+            plan.writes.iter().map(|_| Ok(())).collect();
+        let applied = plan::applied(&plan, &written);
+
+        let receipt = render_applied(
+            "0.2.0",
+            installed.layout.stable_path(),
+            &installed.placements,
+            &applied,
+            &Ok(true),
+            &Ok(true),
+        );
+
+        assert_eq!(receipt.lines[0], "install outcome: partial");
+        assert!(
+            !receipt
+                .lines
+                .iter()
+                .any(|line| line == "install outcome: complete")
+        );
+        let gap = |parts: &[&str]| {
+            receipt
+                .lines
+                .iter()
+                .find(|line| line.starts_with("gap: ") && parts.iter().all(|p| line.contains(p)))
+                .unwrap_or_else(|| panic!("no gap line holds {parts:?}: {:#?}", receipt.lines))
+        };
+        gap(&["docker", "sandbox.excludedCommands", "remove it"]);
+        gap(&[
+            "sandbox.filesystem.disabled",
+            "remove it or set it to false",
+        ]);
+        gap(&[
+            "/home/o/.local/share/crenshawdev/baley",
+            "sandbox.filesystem.allowRead",
+            "remove it",
+        ]);
+        gap(&[
+            "~/scratch",
+            "sandbox.filesystem.allowWrite",
+            "write it as an absolute path outside Baley's folders or remove it",
+        ]);
+        gap(&["socat", "apt-get install bubblewrap socat"]);
+        assert_eq!(
+            receipt
+                .lines
+                .iter()
+                .filter(|line| line.starts_with("gap: "))
+                .count(),
+            5
+        );
+        assert_eq!(receipt.code, 1);
+        assert!(!receipt.error);
+    }
+    #[test]
+    fn a_settings_change_or_its_reach_hidden_from_the_receipt_is_caught() {
+        let installed = installed();
+        let render_with = |outcome: ArtifactOutcome, notes: Notes| {
+            render(
+                "0.2.0",
+                installed.layout.stable_path(),
+                &installed.placements,
+                &outcomes(outcome),
+                &notes,
+                &Ok(true),
+            )
+        };
+        let line_with =
+            |receipt: &Render, text: &str| receipt.lines.iter().any(|line| line.contains(text));
+        let every_session = "apply to every Claude Code session on this machine, including projects Baley does not manage";
+        let precedence = [
+            "managed settings",
+            "command-line settings",
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            "take precedence",
+        ];
+        let settings_line = |receipt: &Render| {
+            receipt
+                .lines
+                .iter()
+                .find(|line| line.starts_with("settings at "))
+                .cloned()
+        };
+
+        let replaced = Notes {
+            replaced: vec![Replaced {
+                key: "sandbox.enabled".into(),
+                was: serde_json::json!(false),
+            }],
+            ..Notes::default()
+        };
+        let written = render_with(ArtifactOutcome::Written, replaced);
+        assert_eq!(
+            settings_line(&written).unwrap(),
+            "settings at /home/o/.claude/settings.json: written"
+        );
+        assert!(written.lines.iter().any(|line| {
+            line.contains("sandbox.enabled")
+                && line.contains("false")
+                && line.contains("/home/o/.claude/settings.json")
+        }));
+        assert!(line_with(&written, every_session));
+        assert!(
+            written
+                .lines
+                .iter()
+                .any(|line| precedence.iter().all(|part| line.contains(part)))
+        );
+
+        let held_back = Notes {
+            sandbox_held_back: Some("socat missing from PATH".into()),
+            ..Notes::default()
+        };
+        let held = render_with(ArtifactOutcome::Written, held_back);
+        assert_eq!(
+            settings_line(&held).unwrap(),
+            "settings at /home/o/.claude/settings.json: written without the sandbox block"
+        );
+        assert!(!line_with(&held, "every Claude Code session"));
+        assert!(!line_with(&held, "take precedence"));
+
+        let unchanged = render_with(ArtifactOutcome::Unchanged, Notes::default());
+        assert_eq!(
+            settings_line(&unchanged).unwrap(),
+            "settings at /home/o/.claude/settings.json: unchanged"
+        );
+        assert!(line_with(&unchanged, every_session));
+        assert!(
+            unchanged
+                .lines
+                .iter()
+                .any(|line| precedence.iter().all(|part| line.contains(part)))
+        );
     }
 }

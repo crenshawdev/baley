@@ -17,6 +17,7 @@ use crate::host_doctor::prerequisites::{Judged, missing_sentence};
 use crate::replace;
 use crate::store::model::digest;
 
+use super::event;
 use super::plan::Observation;
 
 /// The settings file as a read found it, ready to compose into.
@@ -169,7 +170,7 @@ pub fn remove_recorded(
 }
 
 /// An owner value that Baley's own secure value replaced.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replaced {
     /// The setting's dotted key.
     pub key: String,
@@ -230,6 +231,12 @@ pub struct Decision {
     pub entries: Entries,
     /// Why the sandbox block was left out, or none when it is composed in.
     pub held_back: Option<String>,
+    /// This binary's hook item, whether or not the document holds it.
+    pub hook_item: Value,
+    /// The record's sandbox facts that do not depend on the run: the file,
+    /// Baley's folders and the write-only paths. Its digest and lists are
+    /// empty until [`recorded`] fills them.
+    pub base: event::Sandbox,
 }
 
 /// The refusal text for a replacement that was refused, under install's
@@ -242,7 +249,8 @@ pub fn replace_refusal(conflict: &replace::Conflict) -> String {
     format!("install-settings-conflict: {text}")
 }
 
-fn secure(setting: &str) -> bool {
+/// The secure value of one of the three sandbox switches Baley sets.
+pub fn secure_value(setting: &str) -> bool {
     setting != "sandbox.allowUnsandboxedCommands"
 }
 
@@ -257,7 +265,7 @@ fn gap(file: &Path, conflict: &Conflict) -> Option<String> {
         ),
         Conflict::Disabled(setting) => format!(
             "{setting} in {file} is not its secure value; set it to {}",
-            secure(setting)
+            secure_value(setting)
         ),
         Conflict::Reopened { list, entry } => format!(
             "`{entry}` is listed in sandbox.filesystem.{list} in {file}, which re-opens a Baley folder; remove it"
@@ -424,6 +432,29 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
             &ours.deny_write,
         ),
     };
+    let text = |path: &Path| path.to_str().expect("placements are UTF-8").to_owned();
+    let base = event::Sandbox {
+        settings_path: text(input.path),
+        sha256: String::new(),
+        home: text(&input.folders.home),
+        config: text(&input.folders.config),
+        write_only_files: input
+            .placements
+            .protected_paths()
+            .iter()
+            .map(|path| text(path))
+            .collect(),
+        write_only_folders: input
+            .placements
+            .write_only_folders()
+            .iter()
+            .map(|path| text(path))
+            .collect(),
+        permissions_deny: Vec::new(),
+        deny_read: Vec::new(),
+        deny_write: Vec::new(),
+        held_back: None,
+    };
     Ok(Decision {
         bytes,
         read_digest: input.current.read_digest.clone(),
@@ -433,7 +464,73 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
         gaps,
         entries,
         held_back: held.map(|(why, _)| why),
+        hook_item: ours.hook_item,
+        base,
     })
+}
+
+/// The hook and the sandbox facts to record after the run. With the settings
+/// file Baley's after the run (`owned`), they are what the composed document
+/// holds. Otherwise the file still holds the bytes read, so the hook is this
+/// binary's item or the latest record's while that document holds it, and the
+/// sandbox facts are the latest record's lists narrowed to what that document
+/// still holds, or none when it holds none. Dropping them would make the next
+/// install refuse Baley's own older entries as foreign.
+pub fn recorded(
+    decision: &Decision,
+    owned: bool,
+    latest: Option<&Value>,
+) -> (Option<event::Hook>, Option<event::Sandbox>) {
+    let path = decision.base.settings_path.clone();
+    if owned {
+        let hook = decision.entries.hook.clone().map(|item| event::Hook {
+            path: path.clone(),
+            item,
+        });
+        let sha256 = decision
+            .bytes
+            .as_deref()
+            .map(digest)
+            .or_else(|| decision.read_digest.clone());
+        let sandbox = sha256.map(|sha256| event::Sandbox {
+            sha256,
+            permissions_deny: decision.entries.permissions_deny.clone(),
+            deny_read: decision.entries.deny_read.clone(),
+            deny_write: decision.entries.deny_write.clone(),
+            held_back: decision.held_back.clone(),
+            ..decision.base.clone()
+        });
+        return (hook, sandbox);
+    }
+    let read = &decision.read;
+    let holds = |item: &Value| {
+        read.pointer(&format!("/hooks/{}", hook::EVENT))
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.contains(item))
+    };
+    let older = latest.and_then(|latest| latest.pointer("/registered/hook/item"));
+    let item = [Some(&decision.hook_item), older]
+        .into_iter()
+        .flatten()
+        .find(|item| holds(item))
+        .cloned();
+    let narrowed = |pointer: &str, key: &str| still_held(read, latest, pointer, key);
+    let permissions_deny = narrowed("/permissions/deny", "permissions_deny");
+    let deny_read = narrowed("/sandbox/filesystem/denyRead", "deny_read");
+    let deny_write = narrowed("/sandbox/filesystem/denyWrite", "deny_write");
+    let none = permissions_deny.is_empty() && deny_read.is_empty() && deny_write.is_empty();
+    let sandbox = decision
+        .read_digest
+        .clone()
+        .filter(|_| !none)
+        .map(|sha256| event::Sandbox {
+            sha256,
+            permissions_deny,
+            deny_read,
+            deny_write,
+            ..decision.base.clone()
+        });
+    (item.map(|item| event::Hook { path, item }), sandbox)
 }
 
 #[cfg(test)]

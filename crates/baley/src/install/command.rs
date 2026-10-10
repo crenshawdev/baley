@@ -12,8 +12,9 @@ use baley_core::policy::{FileLayer, Host, Schema, Value, merge, parse_layer};
 use clap::Args;
 
 use crate::folders::{self, Environment, Folders, Platform};
+use crate::host_artifacts::placement::Artifact;
 use crate::host_artifacts::{installed, stubs};
-use crate::host_doctor::placed;
+use crate::host_doctor::{placed, prerequisites};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
@@ -131,7 +132,7 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let latest_payload = latest.as_ref().map(|latest| &latest.payload);
     let mut observations = BTreeMap::new();
     for file in installed.placements.expected_files() {
-        if file.stub.is_some() {
+        if file.stub.is_some() || file.artifact == Artifact::Settings {
             observations
                 .entry(file.path.to_path_buf())
                 .or_insert_with(|| plan::Observation {
@@ -141,7 +142,17 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
                 });
         }
     }
-    let plan = plan::judge(&installed.placements, latest_payload, &observations)?;
+    let prerequisites = prerequisites::judge(&prerequisites::gather(
+        std::env::var_os("PATH").as_deref(),
+        std::env::consts::OS,
+    ));
+    let plan = plan::judge(&plan::Gathered {
+        placements: &installed.placements,
+        folders: &folders,
+        latest: latest_payload,
+        observations: &observations,
+        prerequisites: &prerequisites,
+    })?;
     let applied = plan::applied(&plan, &apply::run(&plan));
     let seed = models::seed(&store, new_request_id(), &SystemClock::now());
 
@@ -170,6 +181,7 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
         env!("CARGO_PKG_VERSION"),
         &installed.placements,
         latest_payload,
+        &plan.settings,
         &applied,
         &seed,
         event::Updates {
