@@ -29,6 +29,8 @@ pub mod view;
 /// `HOME` `/home/o`, Baley's folders and the sandbox programs found or not.
 #[cfg(test)]
 pub(crate) mod fixtures {
+    use serde_json::{Value, json};
+
     use crate::folders::{Environment, Folders};
     use crate::host_artifacts::installed::{self, Installed};
     use crate::host_artifacts::stubs;
@@ -49,5 +51,74 @@ pub(crate) mod fixtures {
             home: "/home/o/.local/share/crenshawdev/baley".into(),
             config: "/home/o/.config/crenshawdev/baley".into(),
         }
+    }
+    /// The matcher design 0012 gives the guard hook.
+    pub const MATCHER: &str = "Bash|Monitor|PowerShell|Read|Grep|Glob|Write|Edit|NotebookEdit";
+
+    /// Baley's `PreToolUse` item for the stable path, written out by hand.
+    pub fn hook_item() -> Value {
+        json!({
+            "matcher": MATCHER,
+            "hooks": [{
+                "type": "command",
+                "command": "'/home/o/.local/bin/baley' guard",
+                "timeout": 10,
+            }],
+        })
+    }
+
+    /// A settings document of a completed install, written by hand from
+    /// design 0012: the owner's `model`, every Baley entry, and the deny
+    /// rules in an order the renderer does not use.
+    pub fn complete_settings() -> Value {
+        json!({
+            "model": "opus",
+            "permissions": {"deny": [
+                "Edit(//home/o/.local/bin/baley)",
+                "Edit(//home/o/.claude/settings.json)",
+                "Edit(//home/o/.claude.json)",
+                "Edit(//home/o/.claude/skills/bal-help/SKILL.md)",
+                "Edit(//home/o/.claude/skills/bal-capture/SKILL.md)",
+                "Edit(//home/o/.local/lib/crenshawdev/baley/versions/**)",
+                "Edit(//home/o/.config/crenshawdev/baley/**)",
+                "Read(//home/o/.config/crenshawdev/baley/**)",
+                "Edit(//home/o/.local/share/crenshawdev/baley/**)",
+                "Read(//home/o/.local/share/crenshawdev/baley/**)",
+            ]},
+            "sandbox": {
+                "enabled": true,
+                "failIfUnavailable": true,
+                "allowUnsandboxedCommands": false,
+                "filesystem": {
+                    "denyRead": [
+                        "/home/o/.config/crenshawdev/baley",
+                        "/home/o/.local/share/crenshawdev/baley",
+                    ],
+                    "denyWrite": [
+                        "/home/o/.local/bin/baley",
+                        "/home/o/.claude/settings.json",
+                        "/home/o/.claude.json",
+                        "/home/o/.claude/skills/bal-help/SKILL.md",
+                        "/home/o/.claude/skills/bal-capture/SKILL.md",
+                        "/home/o/.local/lib/crenshawdev/baley/versions",
+                        "/home/o/.config/crenshawdev/baley",
+                        "/home/o/.local/share/crenshawdev/baley",
+                    ],
+                },
+            },
+            "hooks": {"PreToolUse": [hook_item()]},
+        })
+    }
+
+    /// The document pretty-printed with four-space indentation, the way an
+    /// owner's editor might have left it.
+    pub fn four_spaces(document: &Value) -> Vec<u8> {
+        use serde::Serialize;
+        let mut bytes = Vec::new();
+        let format = serde_json::ser::PrettyFormatter::with_indent(b"    ");
+        let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, format);
+        document.serialize(&mut serializer).unwrap();
+        bytes.push(b'\n');
+        bytes
     }
 }
