@@ -91,8 +91,9 @@ pub fn write(
         let stored = tx.get(INSTALL_VIEW, &key)?;
         appended =
             stored.as_ref().map(|document| &document.body["payload"]) != Some(&event.payload);
-        // The facts carry hashes from the record this run read. If another run
-        // recorded since, appending them would roll its hashes back.
+        // The install lock keeps two runs from overlapping, and this stays as a
+        // second guard. The facts carry hashes from the record this run read, so
+        // if another run recorded since, appending them would roll its hashes back.
         let now = stored.as_ref().map(|document| document.produced_seq);
         if appended && now != seen {
             return Err(StoreError::Stale(StaleInput::Document {

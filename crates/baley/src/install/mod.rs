@@ -1,6 +1,8 @@
 //! `baley install`: Claude Code's wiring at the stable path, from the content
 //! `host_artifacts` renders, with ownership evidence in the ledger before
 //! any replacement. Gathering is kept apart from judging.
+//! One install runs at a time: the command holds an exclusive lock in Baley's
+//! own home from reading the latest record to recording the result.
 //! Stubs are applied and recorded here. Phase 15 plan 2 adds the registration,
 //! hook and settings writes through the same plan and ownership facts.
 

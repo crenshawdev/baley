@@ -1,14 +1,17 @@
 //! Host selection and gathering for `baley install`.
 
 use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
 use std::process::ExitCode;
-use std::{fs, io};
 
 use baley_core::catalog::USER_PROJECT;
 use baley_core::policy::{FileLayer, Host, Schema, Value, merge, parse_layer};
 use clap::Args;
 
-use crate::folders::{Environment, Folders, Platform};
+use crate::folders::{self, Environment, Folders, Platform};
 use crate::host_artifacts::{installed, stubs};
 use crate::host_doctor::placed;
 use crate::ledger::clock::SystemClock;
@@ -47,6 +50,68 @@ fn select_host(name: &str) -> Result<Host, Render> {
     })
 }
 
+/// The file in Baley's home that the one running install holds.
+const LOCK_FILE: &str = "install.lock";
+
+/// What trying to take the install lock found, when it was not taken.
+#[derive(Debug)]
+enum Observed {
+    /// Another install holds the lock.
+    Held,
+    /// The lock file could not be created, opened or locked.
+    Unusable(String),
+}
+
+/// The install lock, held for as long as this value lives. Closing the file
+/// releases it, so an install that crashes never leaves the lock behind.
+#[derive(Debug)]
+struct InstallLock {
+    _file: File,
+}
+
+/// Judges one attempt to lock the file: a held lock is another install
+/// running, anything else is a lock that cannot be used.
+fn observe(attempt: Result<(), TryLockError>) -> Result<(), Observed> {
+    match attempt {
+        Ok(()) => Ok(()),
+        Err(TryLockError::WouldBlock) => Err(Observed::Held),
+        Err(TryLockError::Error(error)) => Err(Observed::Unusable(error.to_string())),
+    }
+}
+
+/// The refusal for a lock that was not taken.
+fn refusal(observed: &Observed, path: &Path) -> Render {
+    match observed {
+        Observed::Held => Render::refusal(
+            "install-running: another baley install is running; try again when it has finished",
+        ),
+        Observed::Unusable(cause) => Render::refusal(format!(
+            "install-lock-unavailable: cannot take the install lock at {}: {cause}",
+            path.display()
+        )),
+    }
+}
+
+/// Takes the install lock without waiting. Two installs overlapping would
+/// each plan from the same record and could leave the record naming hashes
+/// the files no longer hold, so the second one is refused before it reads
+/// anything. The lock sits in Baley's own home, never in Claude's folder.
+fn acquire(home: &Path) -> Result<InstallLock, Render> {
+    let path = home.join(LOCK_FILE);
+    let unusable = |cause: io::Error| refusal(&Observed::Unusable(cause.to_string()), &path);
+    folders::create_private(home).map_err(unusable)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(unusable)?;
+    observe(file.try_lock()).map_err(|observed| refusal(&observed, &path))?;
+    Ok(InstallLock { _file: file })
+}
+
 fn install(args: InstallArgs) -> Result<Render, Render> {
     let Host::ClaudeCode = select_host(&args.host)?;
     let env = Environment::read();
@@ -56,6 +121,8 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
     let installed = installed::resolve(&env, claude_config_dir, &manifest)
         .map_err(|error| Render::refusal(error.to_string()))?;
+    // Held to the end of the run, record included.
+    let _lock = acquire(&folders.home)?;
     let at = SystemClock::now();
     let store = open::store(&folders.home, &at, open::options())
         .map_err(|error| display::store_error(&error, None))?;
@@ -129,9 +196,13 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::TryLockError;
+    use std::io;
+    use std::path::Path;
+
     use baley_core::policy::Host;
 
-    use super::select_host;
+    use super::{Observed, acquire, observe, refusal, select_host};
 
     #[test]
     fn an_install_for_another_host_not_refused_unknown_host_is_caught() {
@@ -147,5 +218,42 @@ mod tests {
             assert!(refused.error);
         }
         assert_eq!(select_host("claude-code").unwrap(), Host::ClaudeCode);
+    }
+
+    #[test]
+    fn a_second_install_started_while_one_holds_the_lock_not_refused_is_caught() {
+        let home = tempfile::tempdir().unwrap();
+        let first = acquire(home.path()).expect("the first install takes the lock");
+
+        let refused = acquire(home.path()).expect_err("a second install while the first runs");
+        assert_eq!(
+            refused.lines,
+            ["install-running: another baley install is running; try again when it has finished"]
+        );
+        assert_eq!(refused.code, 2);
+        assert!(refused.error);
+
+        drop(first);
+        acquire(home.path()).expect("the lock is free once the first install ends");
+    }
+
+    #[test]
+    fn a_lock_that_cannot_be_taken_reported_as_a_running_install_is_caught() {
+        assert!(observe(Ok(())).is_ok());
+        assert!(matches!(
+            observe(Err(TryLockError::WouldBlock)),
+            Err(Observed::Held)
+        ));
+        let failed = io::Error::from(io::ErrorKind::PermissionDenied);
+        let observed = observe(Err(TryLockError::Error(failed))).expect_err("an io failure");
+
+        let refused = refusal(&observed, Path::new("/h/install.lock"));
+        assert_eq!(refused.lines.len(), 1);
+        let line = &refused.lines[0];
+        assert!(line.contains("/h/install.lock"), "{line}");
+        assert!(line.contains("permission denied"), "{line}");
+        assert!(!line.contains("another baley install is running"), "{line}");
+        assert_eq!(refused.code, 2);
+        assert!(refused.error);
     }
 }
