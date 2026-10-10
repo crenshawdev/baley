@@ -143,6 +143,7 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->2
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->2
+    2-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
     14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
     2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
@@ -153,7 +154,7 @@ graph LR
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context from the shared C4 model. The host reaches Baley over MCP and its pre-tool hook. The session makes review and model-list API calls with the owner's environment keys; Baley receives their results. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
+*Figure 1. System context from the shared C4 model. The host reaches Baley over MCP and its pre-tool hook. `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs. The session makes review and model-list API calls with the owner's environment keys; Baley receives their results. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 ```mermaid
 flowchart TB
@@ -163,7 +164,7 @@ flowchart TB
     direction TB
     server["MCP server<br/><small>one per Claude Code session, over stdio; Hardin decides the next step</small>"]
     guard["Guard hook<br/><small>one per tool call; refuses unsafe actions</small>"]
-    cli["CLI<br/><small>verify, doctor, export, purge, anchor,<br/>acknowledge-restore, rebuild, scrub,<br/>update, update resolve<br/>show in Build 9</small>"]
+    cli["CLI<br/><small>verify, doctor, export, purge, anchor,<br/>acknowledge-restore, rebuild, scrub,<br/>init, config, models, update,<br/>update resolve, install<br/>show in Build 9</small>"]
     updater["Detached updater<br/><small>at most one claimed check<br/>per installation per UTC day</small>"]
     db[("Ledger database<br/><small>SQLite, one per user</small>")]
   end
@@ -178,6 +179,7 @@ flowchart TB
   server -.->|starts update detached at startup if updates.auto is on, without waiting| updater
   updater -->|claims and records update outcomes in user| db
   cli -.->|baley update fetches development artifacts and waits for its receipt| releases
+  cli -.->|baley install writes the registration, hook, sandbox and deny settings and stubs| host
   updater -.->|fetches development artifacts after a new claim| releases
   server -.->|finds project file from CLAUDE_PROJECT_DIR, runs git for a write| checkout
   guard -.->|finds project file from CLAUDE_PROJECT_DIR, runs bounded git for the commit target's branch and the session project's baley.toml at HEAD| checkout
@@ -189,7 +191,7 @@ flowchart TB
   class host,checkout,releases external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Each Claude Code session starts its own MCP server, so several can run beside the guard hook, the command line and the detached updater. The updater opens the per-user store itself and claims and records opted-in checks as events. Manual `baley update` runs in the CLI, waiting for the network and its receipt under the same installation scope without the detached check's daily refusal. Both paths fetch unsigned development artifacts from the configured HTTPS `updates.source`, which has no default. They check SHA-256 at `verify_download`, stage under `~/.local/lib/crenshawdev/baley/versions/<version>/baley` and activate through the stable link `~/.local/bin/baley`, keeping every old version. #14 supplies release verification before any release. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database. The server finds the project file from its session's `CLAUDE_PROJECT_DIR` and runs git only to prepare a write, as Baley with the call's caller. The guard finds the project file the same way, and runs git only for the branch at the commit's target, resolved from the working directory, and for HEAD's copy of the session project's `baley.toml`, within its time budget ([0010](0010-guard.md), GRD-R14). It records its answers in the per-user project `user`, never in the session's project, so a guard record needs no project in this machine's ledger.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Each Claude Code session starts its own MCP server, so several can run beside the guard hook, the command line and the detached updater. The updater opens the per-user store itself and claims and records opted-in checks as events. Manual `baley update` runs in the CLI, waiting for the network and its receipt under the same installation scope without the detached check's daily refusal. `baley install` also runs in the CLI: it writes the host's wiring under the Claude Code folder and through `claude mcp add-json`, seeds the catalog and records `install.recorded` in the per-user project `user`. Both paths fetch unsigned development artifacts from the configured HTTPS `updates.source`, which has no default. They check SHA-256 at `verify_download`, stage under `~/.local/lib/crenshawdev/baley/versions/<version>/baley` and activate through the stable link `~/.local/bin/baley`, keeping every old version. #14 supplies release verification before any release. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database. The server finds the project file from its session's `CLAUDE_PROJECT_DIR` and runs git only to prepare a write, as Baley with the call's caller. The guard finds the project file the same way, and runs git only for the branch at the commit's target, resolved from the working directory, and for HEAD's copy of the session project's `baley.toml`, within its time budget ([0010](0010-guard.md), GRD-R14). It records its answers in the per-user project `user`, never in the session's project, so a guard record needs no project in this machine's ledger.*
 
 ### Terms
 

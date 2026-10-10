@@ -68,6 +68,7 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->4
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->4
+    4-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
@@ -83,7 +84,7 @@ graph LR
 ```
 <!-- /c4:configuration -->
 
-*Figure 1. Policy and the model catalog inside Baley. The host session calls providers with environment credentials and hands list responses to Baley for parsing.*
+*Figure 1. Policy and the model catalog inside Baley. The host session calls providers with environment credentials and hands list responses to Baley for parsing. The host interface also runs `baley install`, which writes Claude Code's wiring and seeds the catalog without a list call.*
 
 ## 2. Terms
 
