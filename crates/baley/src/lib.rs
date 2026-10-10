@@ -85,6 +85,8 @@ pub mod models;
 pub mod policy_step;
 /// Which paths the guard protects, and the decisions that judge a tool call's paths against them.
 pub mod protected_paths;
+/// Outside review providers: the compiled risk warning, the owner's recorded acknowledgement of it and the owner identity it names.
+pub mod providers;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
 /// The two settings files as bytes: the global file's path, one reader and its capped form for the guard.
