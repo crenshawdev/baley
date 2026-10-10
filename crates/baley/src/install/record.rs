@@ -4,7 +4,7 @@
 use baley_core::catalog::USER_PROJECT;
 use baley_store::{
     Actor, Admin, Command, CommandKind, Decision, Ledger, Observed, OutcomeKind, ProjectId,
-    Refusal, RequestId, StoreError, Views, request_digest,
+    Refusal, RequestId, StaleInput, StoreError, Views, request_digest,
 };
 use serde_json::{Value, json};
 
@@ -16,23 +16,45 @@ use super::view::{INSTALL_VIEW, install_key};
 /// The command kind used to record installation ownership facts.
 pub const RECORD_COMMAND: &str = "install.record";
 
-/// Reads the latest payload for `host`, or none when `user` or its record is absent.
-pub fn read(store: &(impl Admin + Views), host: &str) -> Result<Option<Value>, StoreError> {
+/// The latest record of a host: the sequence of the event that wrote it and its
+/// payload. A later run names the sequence to show which record it planned from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Latest {
+    /// The sequence of the `install.recorded` event behind the payload.
+    pub seq: u64,
+    /// The recorded payload.
+    pub payload: Value,
+}
+
+/// Reads the latest record for `host`, or none when `user` or its record is absent.
+pub fn latest(store: &(impl Admin + Views), host: &str) -> Result<Option<Latest>, StoreError> {
     let project = ProjectId(USER_PROJECT.into());
     if !store.projects()?.iter().any(|(known, _)| *known == project) {
         return Ok(None);
     }
     let stored = store.get(&project, INSTALL_VIEW, &install_key(host))?;
-    Ok(stored.map(|document| document.body["payload"].clone()))
+    Ok(stored.map(|document| Latest {
+        seq: document.produced_seq,
+        payload: document.body["payload"].clone(),
+    }))
+}
+
+/// Reads the latest payload for `host`, or none when `user` or its record is absent.
+pub fn read(store: &(impl Admin + Views), host: &str) -> Result<Option<Value>, StoreError> {
+    Ok(latest(store, host)?.map(|latest| latest.payload))
 }
 
 /// Records supplied facts as the owner, creating `user` when absent. The request
 /// id must be fresh. Returns true only when this call appended `install.recorded`.
 /// An unchanged record skips the command. The comparison runs again inside the
 /// transaction, so a racing match records only `command.completed`.
+/// `seen` is the sequence of the record the facts were planned from, or none when
+/// the run saw no record. The facts keep ownership hashes from that record, so a
+/// newer record in the store means they may be stale, and nothing is recorded.
 pub fn write(
     store: &(impl Admin + Views + Ledger),
     facts: &Facts,
+    seen: Option<u64>,
     request_id: RequestId,
     at: &str,
 ) -> Result<bool, StoreError> {
@@ -65,9 +87,21 @@ pub fn write(
     };
     let mut appended = false;
     store.transact(&command, &mut |tx| {
-        let stored = tx.get(INSTALL_VIEW, &install_key(facts.host.name()))?;
+        let key = install_key(facts.host.name());
+        let stored = tx.get(INSTALL_VIEW, &key)?;
         appended =
             stored.as_ref().map(|document| &document.body["payload"]) != Some(&event.payload);
+        // The facts carry hashes from the record this run read. If another run
+        // recorded since, appending them would roll its hashes back.
+        let now = stored.as_ref().map(|document| document.produced_seq);
+        if appended && now != seen {
+            return Err(StoreError::Stale(StaleInput::Document {
+                view: INSTALL_VIEW.into(),
+                key,
+                seen,
+                now,
+            }));
+        }
         if appended {
             tx.append(event.clone())?;
         }
@@ -197,6 +231,17 @@ mod tests {
         })
     }
 
+    /// Plans from the stored record the way a sequential run does, then records.
+    fn write_from_latest(
+        store: &SqliteStore,
+        facts: &Facts,
+        request_id: RequestId,
+        at: &str,
+    ) -> Result<bool, StoreError> {
+        let seen = latest(store, facts.host.name())?.map(|latest| latest.seq);
+        write(store, facts, seen, request_id, at)
+    }
+
     fn events(store: &impl Ledger) -> Vec<Event> {
         store
             .stream(
@@ -219,7 +264,7 @@ mod tests {
         let facts = facts();
         let expected = expected(&facts.stubs[0].sha256, &facts.stubs[1].sha256);
 
-        assert_eq!(write(&store, &facts, request(1), AT), Ok(true));
+        assert_eq!(write_from_latest(&store, &facts, request(1), AT), Ok(true));
 
         let events = events(&store);
         assert_eq!(events.len(), 1);
@@ -243,11 +288,11 @@ mod tests {
         let store = store(&dir);
         let mut facts = facts();
         let mut expected = expected(&facts.stubs[0].sha256, &facts.stubs[1].sha256);
-        assert_eq!(write(&store, &facts, request(1), AT), Ok(true));
+        assert_eq!(write_from_latest(&store, &facts, request(1), AT), Ok(true));
         let head = store.head(&ProjectId("user".into())).unwrap();
 
         assert_eq!(
-            write(&store, &facts, request(2), "2026-10-10T09:05:00Z"),
+            write_from_latest(&store, &facts, request(2), "2026-10-10T09:05:00Z"),
             Ok(false)
         );
         assert_eq!(events(&store).len(), 1);
@@ -256,7 +301,7 @@ mod tests {
         facts.stubs[1].sha256 = "d".repeat(64);
         expected["stubs"][1]["sha256"] = json!("d".repeat(64));
         assert_eq!(
-            write(&store, &facts, request(3), "2026-10-10T09:10:00Z"),
+            write_from_latest(&store, &facts, request(3), "2026-10-10T09:10:00Z"),
             Ok(true)
         );
         assert_eq!(events(&store).len(), 2);
@@ -264,7 +309,7 @@ mod tests {
         facts.hook.as_mut().unwrap().item["hooks"][0]["timeout"] = json!(10);
         expected["registered"]["hook"]["item"]["hooks"][0]["timeout"] = json!(10);
         assert_eq!(
-            write(&store, &facts, request(4), "2026-10-10T09:15:00Z"),
+            write_from_latest(&store, &facts, request(4), "2026-10-10T09:15:00Z"),
             Ok(true)
         );
         assert_eq!(events(&store).len(), 3);
@@ -272,13 +317,60 @@ mod tests {
         facts.complete = false;
         expected["complete"] = json!(false);
         assert_eq!(
-            write(&store, &facts, request(5), "2026-10-10T09:20:00Z"),
+            write_from_latest(&store, &facts, request(5), "2026-10-10T09:20:00Z"),
             Ok(true)
         );
         let events = events(&store);
         assert_eq!(events.len(), 4);
         assert_eq!(events[3].payload, expected);
         assert_eq!(read(&store, "claude-code"), Ok(Some(expected)));
+    }
+
+    #[test]
+    fn a_stale_install_run_overwriting_a_newer_record_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        let mut facts = facts();
+        assert_eq!(write_from_latest(&store, &facts, request(1), AT), Ok(true));
+        let planned_from = latest(&store, "claude-code").unwrap().unwrap();
+
+        // A newer run records different stub hashes after both read the record above.
+        let mut newer = facts.clone();
+        newer.stubs[0].sha256 = "e".repeat(64);
+        assert_eq!(
+            write(
+                &store,
+                &newer,
+                Some(planned_from.seq),
+                request(2),
+                "2026-10-10T09:05:00Z"
+            ),
+            Ok(true)
+        );
+        let newest = latest(&store, "claude-code").unwrap().unwrap();
+        let head = store.head(&ProjectId("user".into())).unwrap();
+
+        facts.stubs[1].sha256 = "d".repeat(64);
+        let stale = write(
+            &store,
+            &facts,
+            Some(planned_from.seq),
+            request(3),
+            "2026-10-10T09:10:00Z",
+        );
+
+        assert_eq!(
+            stale,
+            Err(StoreError::Stale(StaleInput::Document {
+                view: "install".into(),
+                key: install_key("claude-code"),
+                seen: Some(planned_from.seq),
+                now: Some(newest.seq),
+            }))
+        );
+        assert_eq!(latest(&store, "claude-code"), Ok(Some(newest)));
+        assert_eq!(events(&store).len(), 2);
+        assert_eq!(store.head(&ProjectId("user".into())).unwrap(), head);
     }
 
     #[test]
@@ -295,7 +387,7 @@ mod tests {
         expected["registered"] = json!({"registration": null, "hook": null});
         expected["sandbox"] = Value::Null;
 
-        assert_eq!(write(&store, &facts, request(1), AT), Ok(true));
+        assert_eq!(write_from_latest(&store, &facts, request(1), AT), Ok(true));
 
         let events = events(&store);
         assert_eq!(events.len(), 1);
@@ -311,7 +403,7 @@ mod tests {
         let expected = expected(&facts.stubs[0].sha256, &facts.stubs[1].sha256);
 
         assert_eq!(read(&store, "claude-code"), Ok(None));
-        assert_eq!(write(&store, &facts, request(1), AT), Ok(true));
+        assert_eq!(write_from_latest(&store, &facts, request(1), AT), Ok(true));
         assert_eq!(read(&store, "claude-code"), Ok(Some(expected)));
     }
 }

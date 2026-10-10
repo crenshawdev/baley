@@ -59,8 +59,9 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let at = SystemClock::now();
     let store = open::store(&folders.home, &at, open::options())
         .map_err(|error| display::store_error(&error, None))?;
-    let latest = record::read(&store, args.host.as_str())
+    let latest = record::latest(&store, args.host.as_str())
         .map_err(|error| display::store_error(&error, Some(USER_PROJECT)))?;
+    let latest_payload = latest.as_ref().map(|latest| &latest.payload);
     let mut observations = BTreeMap::new();
     for file in installed.placements.expected_files() {
         if file.stub.is_some() {
@@ -73,7 +74,7 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
                 });
         }
     }
-    let plan = plan::judge(&installed.placements, latest.as_ref(), &observations)?;
+    let plan = plan::judge(&installed.placements, latest_payload, &observations)?;
     let applied = plan::applied(&plan, &apply::run(&plan));
     let seed = models::seed(&store, new_request_id(), &SystemClock::now());
 
@@ -101,7 +102,7 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let facts = plan::facts(
         env!("CARGO_PKG_VERSION"),
         &installed.placements,
-        latest.as_ref(),
+        latest_payload,
         &applied,
         &seed,
         event::Updates {
@@ -109,7 +110,13 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
             staged_version,
         },
     );
-    let recorded = record::write(&store, &facts, new_request_id(), &SystemClock::now());
+    let recorded = record::write(
+        &store,
+        &facts,
+        latest.as_ref().map(|latest| latest.seq),
+        new_request_id(),
+        &SystemClock::now(),
+    );
     Ok(receipt::render_applied(
         env!("CARGO_PKG_VERSION"),
         installed.layout.stable_path(),
