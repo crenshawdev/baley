@@ -843,3 +843,9 @@ fn removing_a_hosts_owner_entry_is_allowed() {
     assert_eq!(judge_alias_removal(catalog, "o-own"), Ok(()));
     assert_eq!(judge_held_removal(catalog, "o-own", Some(&claude)), Ok(()));
 }
+
+#[test]
+fn a_provider_api_host_other_than_its_documented_one_is_caught() {
+    assert_eq!(Provider::OpenAi.api_host(), "api.openai.com");
+    assert_eq!(Provider::DeepSeek.api_host(), "api.deepseek.com");
+}
