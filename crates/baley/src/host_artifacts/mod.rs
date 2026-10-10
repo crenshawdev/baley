@@ -3,7 +3,7 @@
 //! the environment, reads or writes a file, or asks a clock, so the same
 //! binary with the same inputs always renders the same bytes.
 //!
-//! After Build 3 T11 the module holds:
+//! The module holds:
 //! - `stubs`: one skill stub per served front door and the manifest that
 //!   lists them with host, identity, bytes and digest;
 //! - `executable`: the supplied absolute executable the hook and the
@@ -11,6 +11,9 @@
 //! - `registration`: the `mcpServers` entry for `baley serve`;
 //! - `hook`: the `PreToolUse` hook for `baley guard`, with GRD-R1's
 //!   nine-tool matcher and the guard's host timeout;
+//! - `installed`: the installed paths derived from supplied HOME and
+//!   CLAUDE_CONFIG_DIR values and the stub manifest, shared by install,
+//!   the guard and the doctor;
 //! - `placement`: an explicit placement map that turns supplied paths into
 //!   the expected files and the protected-path list the guard and the doctor
 //!   take;
@@ -26,9 +29,9 @@
 //!   registration, the hook and the settings to standard output and writes
 //!   no file.
 //!
-//! Delivery is `baley install`'s (Build 3 T15): where each artifact goes, who
-//! owns the file and how it is written or removed are decided there, with
-//! this module's content as the input.
+//! Delivery is `baley install`'s (Build 3 T15): who owns each file and how it
+//! is written or removed are decided there, with this module's content and
+//! installed paths as the input.
 //!
 //! Build 4 adds the agent and rung definition renderer here. Its definitions
 //! reference the session's `baley` MCP entry by the key `registration`
@@ -55,6 +58,8 @@ pub mod compose;
 pub mod coverage;
 pub mod executable;
 pub mod hook;
+/// Shared paths for installed Claude Code artifacts.
+pub mod installed;
 pub mod placement;
 pub mod registration;
 pub mod security;
