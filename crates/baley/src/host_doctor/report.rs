@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use super::guard_records::Judged as GuardRecords;
-use super::prerequisites::{Judged as Prerequisites, Kind};
+use super::prerequisites::{Judged as Prerequisites, Kind, missing_sentence};
 use super::protection::{Judged, NotJudged};
 use super::store_health::{Compatibility, Judged as Store};
 use super::{ArtifactState, Findings, MapFault, server_context};
@@ -248,10 +248,7 @@ fn prerequisite_lines(judged: &Prerequisites, lines: &mut Vec<String>) -> bool {
             for program in &judged.required {
                 lines.push(match &program.found {
                     Some(path) => format!("sandbox: {} found at {}", program.name, path.display()),
-                    None => format!(
-                        "sandbox: {} is missing from PATH, so the sandbox cannot run; install {} with `apt-get install bubblewrap socat` or `dnf install bubblewrap socat` (this lookup used this command's PATH, which may differ from the one Claude Code runs with)",
-                        program.name, program.package
-                    ),
+                    None => format!("sandbox: {}", missing_sentence(program)),
                 });
             }
         }

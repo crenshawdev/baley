@@ -13,6 +13,7 @@ use crate::host_artifacts::hook;
 use crate::host_artifacts::placement::PlacementMap;
 use crate::host_artifacts::security::{Proposal, Unrendered, propose};
 use crate::host_doctor::placed::{self, FileState};
+use crate::host_doctor::prerequisites::{Judged, missing_sentence};
 use crate::replace;
 use crate::store::model::digest;
 
@@ -189,6 +190,24 @@ pub struct Input<'a> {
     pub placements: &'a PlacementMap,
     /// Baley's data and configuration folders.
     pub folders: &'a Folders,
+    /// The sandbox programs the platform needs, judged by the doctor's check.
+    pub prerequisites: &'a Judged,
+}
+
+/// Baley's entries in the composed document, for the install record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entries {
+    /// Baley's `PreToolUse` item, when the composed document holds it.
+    pub hook: Option<Value>,
+    /// The `permissions.deny` rules Baley owns.
+    pub permissions_deny: Vec<String>,
+    /// The `sandbox.filesystem.denyRead` entries Baley owns. While the
+    /// sandbox is held back, the latest record's entries the kept block
+    /// still holds.
+    pub deny_read: Vec<String>,
+    /// The `sandbox.filesystem.denyWrite` entries Baley owns, as for
+    /// `deny_read`.
+    pub deny_write: Vec<String>,
 }
 
 /// What install does with the settings file.
@@ -207,8 +226,10 @@ pub struct Decision {
     pub replaced: Vec<Replaced>,
     /// Each setting that leaves protection off, with its fix.
     pub gaps: Vec<String>,
-    /// This binary's entries, for the install record.
-    pub ours: Ours,
+    /// Baley's entries in the composed document, for the install record.
+    pub entries: Entries,
+    /// Why the sandbox block was left out, or none when it is composed in.
+    pub held_back: Option<String>,
 }
 
 /// The refusal text for a replacement that was refused, under install's
@@ -278,6 +299,45 @@ fn refusal(file: &Path, conflict: &Conflict) -> Option<String> {
     })
 }
 
+/// Why the sandbox block is left out, with a gap for each cause, when the
+/// platform cannot run the sandbox or a program it needs is missing.
+fn held_back(prerequisites: &Judged, file: &Path) -> Option<(String, Vec<String>)> {
+    if prerequisites.unsupported().is_empty() {
+        return None;
+    }
+    let file = file.display();
+    let missing = prerequisites.missing();
+    if missing.is_empty() {
+        let why = format!(
+            "{} is a platform where Claude Code's sandbox does not run",
+            prerequisites.os
+        );
+        let gap = format!("{why}, so the sandbox block was left out of {file}");
+        return Some((why, vec![gap]));
+    }
+    let names: Vec<&str> = missing.iter().map(|program| program.name).collect();
+    let gaps = missing
+        .iter()
+        .map(|program| {
+            format!(
+                "{}; the sandbox block was left out of {file}, so run baley install again once it is installed",
+                missing_sentence(program)
+            )
+        })
+        .collect();
+    Some((format!("{} missing from PATH", names.join(" and ")), gaps))
+}
+
+/// The entries the latest record lists under `key` that the document's list
+/// at `pointer` still holds.
+fn still_held(document: &Value, latest: Option<&Value>, pointer: &str, key: &str) -> Vec<String> {
+    let held = strings(document.pointer(pointer));
+    strings(latest.and_then(|latest| latest.pointer(&format!("/sandbox/{key}"))))
+        .into_iter()
+        .filter(|entry| held.contains(entry))
+        .collect()
+}
+
 /// Decides what happens to the settings file: removes older Baley entries
 /// the record shows, composes this binary's hook and proposal in once, and
 /// sorts what composition found. A document that cannot be merged, or holds
@@ -288,13 +348,20 @@ fn refusal(file: &Path, conflict: &Conflict) -> Option<String> {
 /// a write is needed.
 pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
     let ours = ours(input.placements, input.folders);
+    let held = held_back(input.prerequisites, input.path);
     let mut document = input.current.document.clone();
-    remove_recorded(&mut document, input.latest, &ours, false);
+    remove_recorded(&mut document, input.latest, &ours, held.is_some());
     let executable = input.placements.executable();
     let hook = hook::render(executable);
+    let mut proposal = ours.proposal.settings.clone();
+    if held.is_some()
+        && let Some(settings) = proposal.as_object_mut()
+    {
+        settings.shift_remove("sandbox");
+    }
     let composed = compose(
         Some(&document),
-        &[ours.proposal.settings.clone(), hook],
+        &[proposal, hook],
         input.folders,
         executable,
     );
@@ -317,6 +384,9 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
             .iter()
             .map(|unrendered| unrendered_gap(input.path, unrendered)),
     );
+    if let Some((_, lines)) = &held {
+        gaps.extend(lines.iter().cloned());
+    }
     if !refusals.is_empty() {
         return Err(refusals);
     }
@@ -332,6 +402,28 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
         };
         return Err(vec![replace_refusal(&link)]);
     }
+    let document = &composed.document;
+    let hook_held = document
+        .pointer(&format!("/hooks/{}", hook::EVENT))
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.contains(&ours.hook_item));
+    let sandbox = |pointer: &str, key: &str, ours: &[String]| {
+        if held.is_some() {
+            still_held(document, input.latest, pointer, key)
+        } else {
+            ours.to_vec()
+        }
+    };
+    let entries = Entries {
+        hook: hook_held.then(|| ours.hook_item.clone()),
+        permissions_deny: ours.permissions_deny.clone(),
+        deny_read: sandbox("/sandbox/filesystem/denyRead", "deny_read", &ours.deny_read),
+        deny_write: sandbox(
+            "/sandbox/filesystem/denyWrite",
+            "deny_write",
+            &ours.deny_write,
+        ),
+    };
     Ok(Decision {
         bytes,
         read_digest: input.current.read_digest.clone(),
@@ -339,7 +431,8 @@ pub fn judge(input: &Input<'_>) -> Result<Decision, Vec<String>> {
         document: composed.document,
         replaced,
         gaps,
-        ours,
+        entries,
+        held_back: held.map(|(why, _)| why),
     })
 }
 
@@ -351,7 +444,10 @@ mod tests {
 
     use super::*;
     use crate::host_doctor::placed::Fault;
-    use crate::install::fixtures::{complete_settings, folders, four_spaces, hook_item, installed};
+    use crate::host_doctor::prerequisites::Judged;
+    use crate::install::fixtures::{
+        complete_settings, folders, four_spaces, hook_item, installed, linux, prerequisites,
+    };
 
     const PATH: &str = "/home/o/.claude/settings.json";
 
@@ -495,10 +591,11 @@ mod tests {
         }
     }
 
-    fn decide_in(
+    fn decide_with(
         current: &Current,
         latest: Option<&Value>,
         folders: &Folders,
+        prerequisites: &Judged,
     ) -> Result<Decision, Vec<String>> {
         let installed = installed();
         judge(&Input {
@@ -507,7 +604,16 @@ mod tests {
             latest,
             placements: &installed.placements,
             folders,
+            prerequisites,
         })
+    }
+
+    fn decide_in(
+        current: &Current,
+        latest: Option<&Value>,
+        folders: &Folders,
+    ) -> Result<Decision, Vec<String>> {
+        decide_with(current, latest, folders, &linux())
     }
 
     fn decide(current: &Current, latest: Option<&Value>) -> Result<Decision, Vec<String>> {
@@ -787,6 +893,97 @@ mod tests {
         assert!(
             !written.contains("b[1]") && !written.contains("c?"),
             "{written}"
+        );
+    }
+    fn deny_rules() -> Value {
+        json!([
+            "Read(//home/o/.local/share/crenshawdev/baley/**)",
+            "Edit(//home/o/.local/share/crenshawdev/baley/**)",
+            "Read(//home/o/.config/crenshawdev/baley/**)",
+            "Edit(//home/o/.config/crenshawdev/baley/**)",
+            "Edit(//home/o/.local/lib/crenshawdev/baley/versions/**)",
+            "Edit(//home/o/.claude/skills/bal-capture/SKILL.md)",
+            "Edit(//home/o/.claude/skills/bal-help/SKILL.md)",
+            "Edit(//home/o/.claude.json)",
+            "Edit(//home/o/.claude/settings.json)",
+            "Edit(//home/o/.local/bin/baley)",
+        ])
+    }
+
+    #[test]
+    fn a_sandbox_written_without_its_linux_programs_is_caught() {
+        let owner = read(json!({"model": "opus"}));
+        let no_socat = prerequisites("linux", &["bwrap"]);
+
+        let decision =
+            decide_with(&owner, None, &folders(), &no_socat).expect("the rest still composes");
+
+        let document = &decision.document;
+        assert_eq!(document["model"], "opus");
+        assert_eq!(document["hooks"]["PreToolUse"], json!([hook_item()]));
+        assert_eq!(document["permissions"]["deny"], deny_rules());
+        assert!(document.get("sandbox").is_none(), "{document}");
+        assert_eq!(decision.gaps.len(), 1, "{:?}", decision.gaps);
+        let gap = &decision.gaps[0];
+        assert!(gap.contains("socat"), "{gap}");
+        assert!(
+            gap.contains("install socat with `apt-get install bubblewrap socat`"),
+            "{gap}"
+        );
+    }
+
+    #[test]
+    fn a_held_back_sandbox_that_rewrites_the_owners_sandbox_is_caught() {
+        let sandbox = json!({
+            "enabled": true,
+            "network": {"allowedDomains": ["example.com"]},
+            "filesystem": {"denyWrite": ["/home/o/old"]},
+        });
+        let record = json!({"sandbox": {
+            "permissions_deny": [],
+            "deny_read": [],
+            "deny_write": ["/home/o/old"],
+        }});
+        let no_socat = prerequisites("linux", &["bwrap"]);
+
+        let decision = decide_with(
+            &read(json!({"sandbox": sandbox.clone()})),
+            Some(&record),
+            &folders(),
+            &no_socat,
+        )
+        .expect("composes");
+
+        assert_eq!(decision.document["sandbox"], sandbox);
+        assert_eq!(
+            decision.document["hooks"]["PreToolUse"],
+            json!([hook_item()])
+        );
+        assert_eq!(decision.document["permissions"]["deny"], deny_rules());
+        assert_eq!(decision.gaps.len(), 1, "{:?}", decision.gaps);
+        assert!(decision.gaps[0].contains("socat"));
+        assert_eq!(decision.entries.deny_write, ["/home/o/old"]);
+        assert!(decision.entries.deny_read.is_empty());
+    }
+
+    #[test]
+    fn a_platform_without_a_sandbox_given_one_is_caught() {
+        let freebsd = prerequisites("freebsd", &[]);
+
+        let decision = decide_with(&read(json!({})), None, &folders(), &freebsd).expect("composes");
+
+        assert!(decision.document.get("sandbox").is_none());
+        assert_eq!(
+            decision.document["hooks"]["PreToolUse"],
+            json!([hook_item()])
+        );
+        assert_eq!(decision.document["permissions"]["deny"], deny_rules());
+        assert_eq!(decision.gaps.len(), 1, "{:?}", decision.gaps);
+        let gap = &decision.gaps[0];
+        assert!(gap.contains("freebsd"), "{gap}");
+        assert!(
+            gap.contains("a platform where Claude Code's sandbox does not run"),
+            "{gap}"
         );
     }
 }

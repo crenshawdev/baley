@@ -29,11 +29,14 @@ pub mod view;
 /// `HOME` `/home/o`, Baley's folders and the sandbox programs found or not.
 #[cfg(test)]
 pub(crate) mod fixtures {
+    use std::path::PathBuf;
+
     use serde_json::{Value, json};
 
     use crate::folders::{Environment, Folders};
     use crate::host_artifacts::installed::{self, Installed};
     use crate::host_artifacts::stubs;
+    use crate::host_doctor::prerequisites::{self, Candidate, Judged, Observed, Search};
 
     /// The placements for `HOME` `/home/o` with `CLAUDE_CONFIG_DIR` unset.
     pub fn installed() -> Installed {
@@ -43,6 +46,28 @@ pub(crate) mod fixtures {
             ..Environment::default()
         };
         installed::resolve(&env, None, &manifest).unwrap()
+    }
+
+    /// Linux with `bwrap` and `socat` both found.
+    pub fn linux() -> Judged {
+        prerequisites("linux", &["bwrap", "socat"])
+    }
+
+    /// The prerequisites judged from an observation for `os` in which each
+    /// named program is a regular file with mode `0o755` in `/usr/bin`.
+    pub fn prerequisites(os: &str, found: &[&str]) -> Judged {
+        let search = |program: &str| Search {
+            program: program.into(),
+            candidates: vec![Candidate {
+                folder: PathBuf::from("/usr/bin"),
+                regular_file: found.contains(&program),
+                mode: if found.contains(&program) { 0o755 } else { 0 },
+            }],
+        };
+        prerequisites::judge(&Observed {
+            os: os.into(),
+            searches: vec![search("bwrap"), search("socat")],
+        })
     }
 
     /// Baley's data and configuration folders under `/home/o`.
