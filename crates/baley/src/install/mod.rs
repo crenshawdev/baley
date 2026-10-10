@@ -8,5 +8,7 @@ pub mod command;
 pub mod event;
 /// The install outcome and the owner's next steps, rendered from supplied facts.
 pub mod receipt;
+/// Recording and reading installation ownership evidence in the ledger.
+pub mod record;
 /// The latest installation ownership record for each host.
 pub mod view;
