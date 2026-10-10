@@ -174,14 +174,21 @@ fn merge(target: &mut Value, ours: &Value, key: &str, conflicts: &mut Vec<Confli
     }
 }
 
-/// Whether an existing `mcpServers` entry runs the same command with the
-/// same arguments as ours and sets no environment entry. `env` must be absent
-/// or an empty object, since an entry that sets one can point Baley at
-/// another ledger and gains no ownership from its command alone. `alwaysLoad`
-/// and every other key are ignored, so the doctor, `baley install` and
-/// composition judge a registration by this one rule.
+/// Whether an existing `mcpServers` entry is a stdio server that runs the
+/// same command with the same arguments as ours and sets no environment
+/// entry. Claude Code writes a stdio entry with `type` set to `stdio` or
+/// leaves it out, so any other `type` (`http`, `sse` and the like) is not
+/// launched through `command`, whatever command and arguments it still
+/// holds. `env` must be absent or an empty object, since an entry that sets
+/// one can point Baley at another ledger and gains no ownership from its
+/// command alone. `alwaysLoad` and every other key are ignored, so the
+/// doctor, `baley install` and composition judge a registration by this one
+/// rule.
 pub(crate) fn same_server(existing: &Value, ours: &Value) -> bool {
-    existing.get("command") == ours.get("command")
+    existing
+        .get("type")
+        .is_none_or(|transport| transport == "stdio")
+        && existing.get("command") == ours.get("command")
         && existing.get("args") == ours.get("args")
         && existing
             .get("env")

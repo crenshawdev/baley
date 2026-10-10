@@ -71,7 +71,9 @@ fn unusable(path: &Path, cause: &str) -> String {
 /// unchanged, since Claude Code stores keys of its own such as `type`. An
 /// entry equal by that rule to the one the record holds is Baley's older
 /// registration and is removed and added again. Any other entry is not
-/// Baley's and is refused as an ownership conflict.
+/// Baley's and is refused as an ownership conflict, including a server of
+/// another transport (`http`, `sse`) that still holds Baley's command and
+/// arguments.
 pub fn judge(
     path: &Path,
     state: &FileState,
@@ -356,6 +358,35 @@ mod tests {
         assert!(refusal.contains(PATH), "{refusal}");
     }
 
+    #[test]
+    fn a_non_stdio_server_with_baleys_command_taken_as_baleys_registration_is_caught() {
+        let recorded = record(&older());
+        for transport in ["http", "sse", "ws"] {
+            let leftover = |args: Value| {
+                file(json!({"mcpServers": {"baley": {
+                    "type": transport,
+                    "url": "https://example.test/mcp",
+                    "command": EXECUTABLE,
+                    "args": args,
+                }}}))
+            };
+
+            let current = decide(&leftover(json!(["serve"])), None)
+                .expect_err("a remote server is not this binary's registration");
+            assert!(
+                current.starts_with("install-ownership-conflict: "),
+                "{transport}: {current}"
+            );
+            assert!(current.contains(PATH), "{transport}: {current}");
+
+            let older = decide(&leftover(json!(["serve", "--old"])), Some(&recorded))
+                .expect_err("a remote server is not an older entry Baley may remove");
+            assert!(
+                older.starts_with("install-ownership-conflict: "),
+                "{transport}: {older}"
+            );
+        }
+    }
     #[test]
     fn a_claude_json_that_cannot_be_read_taken_as_no_registration_is_caught() {
         for state in [
