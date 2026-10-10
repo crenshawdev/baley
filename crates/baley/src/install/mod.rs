@@ -24,3 +24,30 @@ pub mod settings;
 pub mod stubs;
 /// The latest installation ownership record for each host.
 pub mod view;
+
+/// Shared inputs for the install tests: the placements derived from
+/// `HOME` `/home/o`, Baley's folders and the sandbox programs found or not.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use crate::folders::{Environment, Folders};
+    use crate::host_artifacts::installed::{self, Installed};
+    use crate::host_artifacts::stubs;
+
+    /// The placements for `HOME` `/home/o` with `CLAUDE_CONFIG_DIR` unset.
+    pub fn installed() -> Installed {
+        let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+        let env = Environment {
+            home: Some("/home/o".into()),
+            ..Environment::default()
+        };
+        installed::resolve(&env, None, &manifest).unwrap()
+    }
+
+    /// Baley's data and configuration folders under `/home/o`.
+    pub fn folders() -> Folders {
+        Folders {
+            home: "/home/o/.local/share/crenshawdev/baley".into(),
+            config: "/home/o/.config/crenshawdev/baley".into(),
+        }
+    }
+}
