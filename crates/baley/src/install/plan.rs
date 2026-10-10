@@ -20,6 +20,7 @@ use crate::replace::Failure;
 
 use super::event;
 use super::receipt::{ArtifactOutcome, Notes};
+use super::registration::{self, Step};
 use super::settings::{self, Input};
 use super::stubs::{self, Decision};
 
@@ -71,6 +72,9 @@ pub struct Plan {
     pub outcomes: Vec<(Artifact, ArtifactOutcome)>,
     /// The settings decision, kept for the receipt and the record.
     pub settings: settings::Decision,
+    /// The registration decision: the `claude` commands to run after every
+    /// file is written, or that the entry is Baley's already.
+    pub registration: Step,
 }
 
 fn unobserved() -> Observation {
@@ -151,7 +155,26 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
             Ok(decision) => Some(decision),
         },
     };
-    let Some(decision) = decision.filter(|_| conflicts.is_empty()) else {
+    let registration_path = placements
+        .expected_files()
+        .into_iter()
+        .find(|file| file.artifact == Artifact::Registration)
+        .map(|file| file.path.to_path_buf())
+        .expect("install places the registration file");
+    let registration = match registration::judge(
+        &registration_path,
+        &observed(&registration_path).state,
+        gathered.latest,
+        placements.executable(),
+    ) {
+        Ok(step) => Some(step),
+        Err(line) => {
+            conflicts.push(line);
+            None
+        }
+    };
+    let (Some(decision), Some(registration), true) = (decision, registration, conflicts.is_empty())
+    else {
         let mut refusal = Render::refusal("");
         refusal.lines = conflicts;
         return Err(refusal);
@@ -174,10 +197,18 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         }
     }
     writes.extend(stub_writes);
+    if registration == Step::Unchanged {
+        for (artifact, outcome) in &mut outcomes {
+            if *artifact == Artifact::Registration {
+                *outcome = ArtifactOutcome::Unchanged;
+            }
+        }
+    }
     Ok(Plan {
         writes,
         outcomes,
         settings: decision,
+        registration,
     })
 }
 
@@ -325,6 +356,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::host_artifacts::installed::Installed;
     use crate::host_artifacts::stubs;
     use crate::install::fixtures::{
         complete_settings, folders, four_spaces, hook_item, installed, linux,
@@ -436,6 +468,10 @@ mod tests {
         };
         let mut observations = BTreeMap::from([
             (PathBuf::from(SETTINGS), seen(FileState::Absent)),
+            (
+                PathBuf::from("/home/o/.claude.json"),
+                seen(FileState::Absent),
+            ),
             (capture.clone(), seen(FileState::Absent)),
             (help.clone(), seen(FileState::Bytes(b"mine".to_vec()))),
         ]);
@@ -569,5 +605,73 @@ mod tests {
         assert_eq!(sandbox.deny_write, ["/home/o/old"]);
         assert!(sandbox.deny_read.is_empty());
         assert!(!facts.complete);
+    }
+    /// Every judged path absent, as on a machine install never ran on.
+    fn all_absent(installed: &Installed) -> BTreeMap<PathBuf, Observation> {
+        let absent = Observation {
+            state: FileState::Absent,
+            symbolic_link: false,
+        };
+        let stubs = installed
+            .placements
+            .expected_files()
+            .into_iter()
+            .filter(|file| file.stub.is_some())
+            .map(|file| file.path.to_path_buf());
+        stubs
+            .chain([
+                installed.settings_file.clone(),
+                installed.registration_file.clone(),
+            ])
+            .map(|path| (path, absent.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn an_artifact_under_baleys_name_replaced_without_record_evidence_is_caught() {
+        let installed = installed();
+        for (path, bytes, artifact) in [
+            (
+                "/home/o/.claude/skills/bal-help/SKILL.md",
+                &b"my own notes"[..],
+                "stub `bal-help`",
+            ),
+            (
+                "/home/o/.claude.json",
+                &br#"{"mcpServers":{"baley":{"command":"/opt/other/baley","args":["serve"]}}}"#[..],
+                "mcpServers.baley",
+            ),
+            (
+                SETTINGS,
+                &br#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/opt/other/baley guard"}]}]}}"#[..],
+                "guard hook",
+            ),
+        ] {
+            let mut observations = all_absent(&installed);
+            observations.insert(
+                PathBuf::from(path),
+                Observation {
+                    state: FileState::Bytes(bytes.to_vec()),
+                    symbolic_link: false,
+                },
+            );
+
+            let refusal = judge(&Gathered {
+                placements: &installed.placements,
+                folders: &folders(),
+                latest: None,
+                observations: &observations,
+                prerequisites: &linux(),
+            })
+            .expect_err("content under Baley's name without evidence is refused");
+
+            assert_eq!(refusal.lines.len(), 1, "{:?}", refusal.lines);
+            let line = &refusal.lines[0];
+            assert!(line.starts_with("install-ownership-conflict: "), "{line}");
+            assert!(line.contains(artifact), "{line}");
+            assert!(line.contains(path), "{line}");
+            assert_eq!(refusal.code, 2);
+            assert!(refusal.error);
+        }
     }
 }

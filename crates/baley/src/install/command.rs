@@ -132,7 +132,9 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let latest_payload = latest.as_ref().map(|latest| &latest.payload);
     let mut observations = BTreeMap::new();
     for file in installed.placements.expected_files() {
-        if file.stub.is_some() || file.artifact == Artifact::Settings {
+        if file.stub.is_some()
+            || matches!(file.artifact, Artifact::Settings | Artifact::Registration)
+        {
             observations
                 .entry(file.path.to_path_buf())
                 .or_insert_with(|| plan::Observation {

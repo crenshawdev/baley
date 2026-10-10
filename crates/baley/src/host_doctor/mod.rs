@@ -233,7 +233,8 @@ pub enum ArtifactState {
         /// The place.
         path: PathBuf,
     },
-    /// The registration document's entry runs another command or arguments.
+    /// The registration document's entry runs another command or arguments,
+    /// or sets environment entries.
     RegistrationDiffers {
         /// The place.
         path: PathBuf,

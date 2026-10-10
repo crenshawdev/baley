@@ -401,6 +401,7 @@ mod tests {
                 installed.settings_file.clone(),
                 seen(FileState::Bytes(serde_json::to_vec(&owner).unwrap())),
             ),
+            (installed.registration_file.clone(), seen(FileState::Absent)),
             (
                 "/home/o/.claude/skills/bal-capture/SKILL.md".into(),
                 seen(FileState::Absent),

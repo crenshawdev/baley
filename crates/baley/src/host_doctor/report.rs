@@ -81,7 +81,7 @@ impl Report {
                     crate::host_artifacts::registration::KEY
                 ),
                 ArtifactState::RegistrationDiffers { path, found } => format!(
-                    "{artifact}: {} runs another command or arguments than Baley renders: {found}",
+                    "{artifact}: {} differs from the entry Baley renders (another command, other arguments or environment entries): {found}",
                     path.display()
                 ),
             });

@@ -196,16 +196,18 @@ pub fn stub(entry: &Entry, found: &[u8]) -> StubJudgement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegistrationJudgement {
     /// The `mcpServers` entry under Baley's key runs the same command with
-    /// the same arguments.
+    /// the same arguments and sets no environment entry.
     Matches,
     /// The document has no entry under Baley's key.
     Missing,
-    /// The entry runs another command or other arguments; the entry found.
+    /// The entry runs another command or other arguments, or sets
+    /// environment entries; the entry found.
     Differs(Value),
 }
 
-/// Judges the entry under `mcpServers.baley` by composition's rule: equal
-/// `command` and `args`, with `alwaysLoad` and any other key ignored.
+/// Judges the entry under `mcpServers.baley` by the rule `baley install` and
+/// composition use: equal `command` and `args` and no environment entry, with
+/// `alwaysLoad` and any other key ignored.
 pub fn registration(document: &Value, executable: &Executable) -> RegistrationJudgement {
     let key = registration::KEY;
     let Some(found) = document.pointer(&format!("/mcpServers/{key}")) else {
@@ -391,6 +393,28 @@ mod tests {
         assert_eq!(
             registration(&serde_json::json!({}), &exe),
             RegistrationJudgement::Missing
+        );
+    }
+    #[test]
+    fn a_registration_install_would_refuse_called_matching_by_the_doctor_is_caught() {
+        let executable = Executable::new("/home/o/.local/bin/baley").unwrap();
+        let stored = |env: Value| {
+            serde_json::json!({"mcpServers": {"baley": {
+                "type": "stdio",
+                "command": "/home/o/.local/bin/baley",
+                "args": ["serve"],
+                "env": env,
+            }}})
+        };
+
+        let elsewhere = stored(serde_json::json!({"BALEY_HOME": "/elsewhere"}));
+        assert_eq!(
+            registration(&elsewhere, &executable),
+            RegistrationJudgement::Differs(elsewhere["mcpServers"]["baley"].clone())
+        );
+        assert_eq!(
+            registration(&stored(serde_json::json!({})), &executable),
+            RegistrationJudgement::Matches
         );
     }
 }
