@@ -34,6 +34,8 @@ enum Command {
     Models(baley::models::ModelsArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),
+    /// Install Claude Code's user-level wiring and seed the model catalog.
+    Install(baley::install::command::InstallArgs),
     /// Owner operations on the evidence ledger.
     #[command(flatten)]
     Ledger(baley::ledger::LedgerCommand),
@@ -115,6 +117,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::Config(args) => return baley::config_command::run(args),
         Command::Models(args) => return baley::models::run(args),
         Command::Update(args) => return baley::update::command::run(args),
+        Command::Install(args) => return baley::install::command::run(args),
         other => other,
     };
     let arguments: Vec<&str> = match &command {
@@ -124,6 +127,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         | Command::Init(_)
         | Command::Config(_)
         | Command::Models(_)
+        | Command::Install(_)
         | Command::Update(_) => {
             unreachable!("dispatched above")
         }
@@ -236,6 +240,31 @@ mod serve_argument_tests {
             runtime.handle().runtime_flavor(),
             tokio::runtime::RuntimeFlavor::CurrentThread
         );
+    }
+}
+
+#[cfg(test)]
+mod install_argument_tests {
+    use super::*;
+
+    #[test]
+    fn an_install_host_argument_lost_or_defaulted_wrongly_is_caught() {
+        for (input, expected) in [
+            (vec!["baley", "install"], "claude-code"),
+            (vec!["baley", "install", "--host", "codex"], "codex"),
+        ] {
+            let Command::Install(args) = Cli::try_parse_from(input).unwrap().command else {
+                panic!("install command lost");
+            };
+            assert_eq!(args.host, expected);
+        }
+        for input in [
+            vec!["baley", "install", "extra"],
+            vec!["baley", "install", "--host"],
+        ] {
+            let error = Cli::try_parse_from(input).err().expect("usage refusal");
+            assert_eq!(error.exit_code(), 2);
+        }
     }
 }
 

@@ -69,6 +69,8 @@ pub mod host_artifacts;
 pub mod host_doctor;
 /// `baley init`: ties a repository to a ledger project.
 pub mod init;
+/// `baley install`: Claude Code's wiring and the catalog seed at the stable path.
+pub mod install;
 /// The compiled instruction registry: every instruction served to a model, by identity, with no disk loader and no override.
 pub mod instruction;
 /// The owner's provider keys, read from `keys.env`.
