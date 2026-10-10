@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn a_coverage_judged_without_the_settings_or_hook_document_is_caught() {
         let exe = executable();
-        let proposal = security::propose(&folders(), &exe, &[SETTINGS.into()]).settings;
+        let proposal = security::propose(&folders(), &exe, &[SETTINGS.into()], &[]).settings;
         let hook_only = map(None, None, None, Some(HOOKS), None);
         let hook_doc = document(HOOKS, &[Artifact::Hook], hook::render(&exe));
         assert_eq!(
@@ -211,7 +211,7 @@ mod tests {
             .into_iter()
             .map(PathBuf::from)
             .collect();
-        let proposal = security::propose(&folders(), &exe, &write_only).settings;
+        let proposal = security::propose(&folders(), &exe, &write_only, &[]).settings;
         let composed = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
         let documents = [document(
             SETTINGS,

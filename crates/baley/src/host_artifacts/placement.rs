@@ -60,6 +60,12 @@ pub enum PlacementRefusal {
         /// What is wrong with the path.
         fault: PathFault,
     },
+    /// The path supplied for the versions folder fails the same rule, so it
+    /// cannot reach the protected folders as a deny-everything entry.
+    VersionsFolder {
+        /// What is wrong with the path.
+        fault: PathFault,
+    },
     /// A stub's file would hold something else too. The doctor checks a
     /// stub byte for byte, so its file holds only that stub.
     StubFileShared {
@@ -87,6 +93,9 @@ impl fmt::Display for PlacementRefusal {
         match self {
             PlacementRefusal::Path { artifact, fault } => {
                 write!(f, "the path supplied for the {artifact} {fault}")
+            }
+            PlacementRefusal::VersionsFolder { fault } => {
+                write!(f, "the path supplied for the versions folder {fault}")
             }
             PlacementRefusal::StubFileShared { stub, with, path } => write!(
                 f,
@@ -116,6 +125,7 @@ pub struct PlacementMap {
     registration: Placement,
     hook: Placement,
     settings: Placement,
+    versions: Placement,
 }
 
 /// A file the doctor expects on disk: the artifact, its path and, for a
@@ -142,9 +152,11 @@ pub struct Document<'a> {
 }
 
 impl PlacementMap {
-    /// Builds the map, judging every supplied path by the executable's rule
-    /// and refusing a stub whose identity is placed twice or whose file is
-    /// another artifact's file or the executable.
+    /// Builds the map, judging every supplied path, the versions folder's
+    /// included, by the executable's rule and refusing a stub whose identity
+    /// is placed twice or whose file is another artifact's file or the
+    /// executable. The versions folder is not an artifact: it adds no expected
+    /// file and no protected path, only [`PlacementMap::write_only_folders`].
     ///
     /// Files are compared by spelling with `.` and `..` resolved and nothing
     /// read, so two spellings joined by a symbolic link are not seen here.
@@ -154,6 +166,7 @@ impl PlacementMap {
         registration: Placement,
         hook: Placement,
         settings: Placement,
+        versions: Placement,
     ) -> Result<Self, PlacementRefusal> {
         let map = Self {
             executable,
@@ -161,7 +174,13 @@ impl PlacementMap {
             registration,
             hook,
             settings,
+            versions,
         };
+        if let Placement::At(path) = &map.versions
+            && let Err(fault) = judge(path.as_os_str())
+        {
+            return Err(PlacementRefusal::VersionsFolder { fault });
+        }
         for (artifact, placement, _) in map.all() {
             if let Placement::At(path) = placement
                 && let Err(fault) = judge(path.as_os_str())
@@ -279,6 +298,11 @@ impl PlacementMap {
     /// `baley.toml` (D-08). Those files are never in this list: the guard
     /// finds them at runtime, and the map takes no settings-file input, so
     /// the exact-list test on a full map is what keeps them out.
+    ///
+    /// The versions folder is not in this list, because a file entry would
+    /// protect only the folder's own name and leave the binaries inside it
+    /// writable. T15 passes [`PlacementMap::write_only_folders`] beside this
+    /// list, to the proposal and to the guard's protected paths.
     pub fn protected_paths(&self) -> Vec<PathBuf> {
         let mut paths: Vec<PathBuf> = Vec::new();
         let mut add = |path: PathBuf| {
@@ -293,6 +317,16 @@ impl PlacementMap {
         }
         add(PathBuf::from(self.executable.as_str()));
         paths
+    }
+
+    /// The folders the guard and the sandbox deny writes into, and never
+    /// reads: the versions folder when it is placed, and nothing when it is
+    /// unknown, so an unknown place never reads as protection installed.
+    pub fn write_only_folders(&self) -> Vec<PathBuf> {
+        match &self.versions {
+            Placement::At(path) => vec![path.clone()],
+            Placement::Unknown => Vec::new(),
+        }
     }
 
     /// Every artifact whose place is unknown, by name.
@@ -359,6 +393,18 @@ mod tests {
             registration,
             hook,
             settings,
+            Placement::Unknown,
+        )
+    }
+
+    fn build_with_versions(versions: Placement) -> Result<PlacementMap, PlacementRefusal> {
+        PlacementMap::new(
+            Executable::new(EXECUTABLE).unwrap(),
+            stubs(Placement::Unknown, Placement::Unknown),
+            Placement::Unknown,
+            Placement::Unknown,
+            Placement::Unknown,
+            versions,
         )
     }
 
@@ -573,6 +619,7 @@ mod tests {
                 at(REGISTRATION),
                 at(HOOK),
                 at(SETTINGS),
+                Placement::Unknown,
             );
             assert_eq!(
                 map,
@@ -582,6 +629,100 @@ mod tests {
                 }),
                 "{executable} {help}"
             );
+        }
+    }
+
+    #[test]
+    fn an_unknown_versions_folder_projected_as_protection_or_a_relative_one_accepted_is_caught() {
+        const VERSIONS: &str = "/home/o/.local/lib/crenshawdev/baley/versions";
+        let unknown = build_with_versions(Placement::Unknown).unwrap();
+        assert_eq!(unknown.write_only_folders(), Vec::<PathBuf>::new());
+        assert_eq!(unknown.protected_paths(), [PathBuf::from(EXECUTABLE)]);
+
+        let placed = build_with_versions(at(VERSIONS)).unwrap();
+        assert_eq!(placed.write_only_folders(), [PathBuf::from(VERSIONS)]);
+        assert_eq!(placed.protected_paths(), [PathBuf::from(EXECUTABLE)]);
+        assert_eq!(placed.not_installed().len(), 5);
+        assert_eq!(placed.not_installed(), unknown.not_installed());
+
+        let relative = build_with_versions(at("lib/versions")).expect_err("a relative folder");
+        assert_eq!(
+            relative,
+            PlacementRefusal::VersionsFolder {
+                fault: PathFault::Relative
+            }
+        );
+        let text = relative.to_string();
+        assert!(text.contains("versions folder"), "{text}");
+        assert!(text.contains("not absolute"), "{text}");
+    }
+
+    #[test]
+    fn a_versions_folder_left_writable_by_the_settings_or_the_guard_is_caught() {
+        use crate::folders::Folders;
+        use crate::host_artifacts::security;
+        use crate::protected_paths::tests::tree;
+        use crate::protected_paths::{Lease, ProtectedPaths, write_answer};
+        use baley_core::guard::Answer;
+
+        const VERSIONS: &str = "/home/o/.local/lib/crenshawdev/baley/versions";
+        const STAGED: &str = "/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley";
+        const NOT_YET: &str = "/home/o/.local/lib/crenshawdev/baley/versions/0.3.0/baley";
+        let folders = Folders {
+            home: "/home/o/.local/share/crenshawdev/baley".into(),
+            config: "/home/o/.config/crenshawdev/baley".into(),
+        };
+        let map = PlacementMap::new(
+            Executable::new("/home/o/.local/bin/baley").unwrap(),
+            stubs(Placement::Unknown, Placement::Unknown),
+            Placement::Unknown,
+            Placement::Unknown,
+            Placement::Unknown,
+            at(VERSIONS),
+        )
+        .unwrap();
+
+        let ours = security::propose(
+            &folders,
+            map.executable(),
+            &map.protected_paths(),
+            &map.write_only_folders(),
+        );
+        let filesystem = &ours.settings["sandbox"]["filesystem"];
+        let listed = |list: &serde_json::Value| -> Vec<String> {
+            list.as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert!(listed(&filesystem["denyWrite"]).contains(&VERSIONS.to_owned()));
+        assert!(!listed(&filesystem["denyRead"]).contains(&VERSIONS.to_owned()));
+        let rules = listed(&ours.settings["permissions"]["deny"]);
+        assert!(
+            rules.contains(&format!("Edit(/{VERSIONS}/**)")),
+            "{rules:?}"
+        );
+        assert!(
+            !rules
+                .iter()
+                .any(|rule| rule.starts_with("Read(") && rule.contains("/versions")),
+            "{rules:?}"
+        );
+
+        let protected = ProtectedPaths {
+            home: folders.home.clone(),
+            config: folders.config.clone(),
+            files: Vec::new(),
+            write_only_folders: map.write_only_folders(),
+        };
+        let fs = tree().dir("/work").file(STAGED);
+        for target in [STAGED, NOT_YET] {
+            let answer = write_answer("/work", target, &protected, &Lease::NoActiveDispatch, &fs);
+            match answer {
+                Answer::Deny(reason) => assert!(reason.contains(VERSIONS), "{target}: {reason}"),
+                other => panic!("{target} was not denied: {other:?}"),
+            }
         }
     }
 }

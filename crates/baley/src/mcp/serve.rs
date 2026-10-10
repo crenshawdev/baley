@@ -26,9 +26,12 @@ use super::handler::{SessionHandler, SessionLedger};
 use super::lifecycle::{Action, Event, State, step};
 use super::transport::{InputEnd, StdioTransport};
 use super::worker::Worker;
-use crate::folders::{Environment, Folders, Platform};
+use crate::folders::{Environment, FolderRefusal, Folders, Platform};
 use crate::ledger::{clock::SystemClock, open};
+use crate::process::System;
+use crate::settings;
 use crate::store::writer::SERVER_DRAIN_BOUND;
+use crate::update::{detached, installation::Layout};
 
 /// The line for the one checkpoint attempt. `None` means the ledger was never
 /// opened, so there was nothing to attempt. No line says the log was
@@ -67,13 +70,13 @@ pub fn abandoned_line() -> String {
     )
 }
 
-/// Opens the per-user ledger for the server and returns it with the config
-/// folder found on the way. A failure leaves the server running without one:
+/// Opens the per-user ledger using the folders gathered at startup.
+/// A failure leaves the server running without one:
 /// a project call then answers `failed` `ledger-unavailable`, the calls that
 /// need no project keep answering, and Claude Code does not restart a stdio
 /// server that exits.
-fn open_store() -> Option<SessionLedger> {
-    let folders = match Folders::resolve(Platform::current(), &Environment::read()) {
+fn open_store(folders: Result<Folders, FolderRefusal>) -> Option<SessionLedger> {
+    let folders = match folders {
         Ok(folders) => folders,
         Err(refusal) => {
             eprintln!("baley: the ledger home cannot be found: {refusal}");
@@ -157,7 +160,22 @@ pub async fn run() -> bool {
     for note in &session.notes {
         eprintln!("baley: {note}");
     }
-    let ledger = open_store().map(Arc::new);
+    let env = Environment::read();
+    let folders = Folders::resolve(Platform::current(), &env);
+    let update_note = match &folders {
+        Ok(folders) => detached::start(
+            settings::read(&settings::global_path(folders)),
+            Layout::resolve(&env),
+            &mut System,
+        ),
+        Err(error) => Some(format!(
+            "baley: update check skipped: cannot find global settings: {error}"
+        )),
+    };
+    if let Some(note) = update_note {
+        eprintln!("{note}");
+    }
+    let ledger = open_store(folders).map(Arc::new);
     let worker = match Worker::start() {
         Ok(worker) => Arc::new(worker),
         Err(error) => {

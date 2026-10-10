@@ -637,7 +637,7 @@ mod tests {
 
     /// Baley's own proposal with the settings file write-only.
     fn ours() -> Value {
-        propose(&folders(), &executable(), &[SETTINGS.into()]).settings
+        propose(&folders(), &executable(), &[SETTINGS.into()], &[]).settings
     }
 
     fn guard_hook() -> Value {
@@ -1074,7 +1074,7 @@ mod tests {
     fn read_protection_required_of_a_write_only_file_or_an_unlisted_file_judged_is_caught() {
         let checkout = "/work/a/baley.toml";
         let write_only: Vec<PathBuf> = vec![SETTINGS.into(), checkout.into()];
-        let settings = propose(&folders(), &executable(), &write_only).settings;
+        let settings = propose(&folders(), &executable(), &write_only, &[]).settings;
         let coverage = judge(&Inputs {
             settings: &settings,
             hook: &guard_hook(),

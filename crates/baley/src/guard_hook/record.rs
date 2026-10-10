@@ -1229,6 +1229,7 @@ mod tests {
                 home: "/h".into(),
                 config: "/c".into(),
                 files: vec![],
+                write_only_folders: Vec::new(),
             }),
         };
         let ask = Answer::Ask("approve?".into());

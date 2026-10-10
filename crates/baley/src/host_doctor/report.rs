@@ -571,7 +571,7 @@ mod tests {
     fn composed_value(write_only: &[&str]) -> serde_json::Value {
         let exe = executable();
         let write_only: Vec<PathBuf> = write_only.iter().map(PathBuf::from).collect();
-        let proposal = security::propose(&folders(), &exe, &write_only).settings;
+        let proposal = security::propose(&folders(), &exe, &write_only, &[]).settings;
         compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document
     }
 
@@ -650,6 +650,7 @@ mod tests {
                                 &folders(),
                                 &executable(),
                                 &[SETTINGS.into(), HOOKS.into()],
+                                &[],
                             )
                             .settings,
                         )

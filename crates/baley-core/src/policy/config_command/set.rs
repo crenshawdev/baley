@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use super::{INVALID_VALUE, LIST_NOT_SETTABLE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
+use crate::policy::schema::is_https_address;
 use crate::policy::{
     AcceptedNames, FileLayer, Host, Kind, OnProtected, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
 };
@@ -124,6 +125,9 @@ impl fmt::Display for SetRefusal {
                         format!("one of {}", names.join(", "))
                     }
                     Kind::BranchList => "a list of branch names".to_owned(),
+                    Kind::HttpsAddress => {
+                        "an https:// address with no spaces, query or fragment".to_owned()
+                    }
                 };
                 write!(
                     f,
@@ -185,6 +189,7 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
         // A list is edited in `baley.toml`, so no command-line text is one.
         Kind::BranchList => None,
+        Kind::HttpsAddress => is_https_address(text).then(|| Value::HttpsAddress(text.to_owned())),
     }
 }
 

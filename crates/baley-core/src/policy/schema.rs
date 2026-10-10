@@ -179,6 +179,20 @@ pub enum Kind {
     OnProtected,
     /// A list of branch names, possibly empty. Each is a non-blank string.
     BranchList,
+    /// An `https://` address: the scheme, then at least one character, with no
+    /// whitespace, control character, query or fragment (`?` or `#`). Whether
+    /// anything answers there is the fetcher's question, not the schema's.
+    HttpsAddress,
+}
+
+/// Whether `text` is an `https://` address the schema accepts (design 0012
+/// section 9): the scheme, at least one more character, and no whitespace,
+/// control character, query or fragment (`?` or `#`) anywhere.
+pub(super) fn is_https_address(text: &str) -> bool {
+    text.strip_prefix("https://")
+        .is_some_and(|rest| !rest.is_empty())
+        && !text.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !text.contains(['?', '#'])
 }
 
 /// A setting's built-in value.
@@ -253,7 +267,8 @@ impl Schema {
     }
 
     /// The schema: each role's model and effort, `escalate_on_failure`,
-    /// `git.remote` and the guard's settings under `git`.
+    /// `git.remote`, the guard's settings under `git` and the two `updates`
+    /// settings.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -313,6 +328,21 @@ impl Schema {
                 default: Default::Bool(false),
                 scope: Scope::Project,
                 owner: "0010",
+            });
+            entries.push(Entry {
+                name: "updates.auto".into(),
+                kind: Kind::Bool,
+                default: Default::Bool(false),
+                scope: Scope::Global,
+                owner: "0012",
+            });
+            // No default: nothing here implies a published release.
+            entries.push(Entry {
+                name: "updates.source".into(),
+                kind: Kind::HttpsAddress,
+                default: Default::Absent,
+                scope: Scope::Global,
+                owner: "0012",
             });
             Schema::new(entries)
         })

@@ -61,7 +61,7 @@ graph LR
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Development artifacts: a<br />plain executable and an<br />unsigned two-line manifest of<br />version and SHA-256. #14<br />supplies signed checksum<br />manifests and release<br />verification.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
@@ -84,15 +84,15 @@ graph LR
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. The planned foreground `baley update` command and the detached opt-in updater contact the release source; T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
+*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. The session sends review and model-list requests to providers. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 | Actor | What it is | Its part |
 |---|---|---|
 | Owner | The person responsible for the work | Approves, rules and sets policy |
 | Baley | One Rust binary, started by each Claude Code session as its own MCP server over stdio, and by the host's pre-tool hook once per tool call | Decides, orchestrates, validates and keeps the record |
-| Detached updater (planned, T14) | A separate process of the same binary | Opens the per-user store to claim and record daily update checks; no updater is built yet |
+| Detached updater | A separate process of the same binary, started by `baley serve` only when `updates.auto` is on | Opens the per-user store to claim and record at most one check per UTC day per installation. Foreground `baley update` shares its installation scope and daily intent but has no daily refusal. Both check unsigned development artifacts only until #14 supplies release verification |
 | Host | Claude Code | Its main session relays and adjudicates, and the subagents it starts each do one piece of engineering judgment |
-| Release source | Signed checksum manifests and platform archives | Supplies installation and update downloads; automatic update checks require opt-in |
+| Release source | Development artifacts: a plain executable and an unsigned two-line manifest of version and SHA-256 | Supplies installation and update downloads; automatic update checks require opt-in. #14 supplies signed checksum manifests and release verification |
 | Outside reviewers | OpenAI and DeepSeek | Review plans and diffs through their APIs, called by the host session. The session also fetches model lists with the owner's environment keys and returns the raw answers to Baley ([0003](0003-configuration-and-routing.md), CFG-R20) |
 | Repository | The project's git checkout | Holds the source; Baley reads git facts and runs tests and git there |
 | Forge | GitHub | Holds chain anchors, pull requests and issues |
@@ -165,7 +165,7 @@ graph LR
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Development artifacts: a<br />plain executable and an<br />unsigned two-line manifest of<br />version and SHA-256. #14<br />supplies signed checksum<br />manifests and release<br />verification.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
@@ -175,7 +175,7 @@ graph LR
     subgraph 2 ["Baley"]
       style 2 fill:none,stroke:#0b4884,color:#0b4884
 
-      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Opted-in<br />checks run at most daily.<br />Foreground manual checks<br />share its installation scope<br />and daily intent but never<br />refuse as not due; no updater<br />is built yet.</div>"]
+      11["<div style='font-weight: bold'>Detached updater</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary, started by baley<br />serve only when updates.auto<br />is on. Opens the per-user<br />store to claim and record at<br />most one check per UTC day<br />per installation. Foreground<br />manual checks share its<br />installation scope and daily<br />intent but never refuse as<br />not due.</div>"]
       style 11 fill:#438dd5,stroke:#2e6295,color:#ffffff
       12[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
@@ -195,16 +195,16 @@ graph LR
     3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
     3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
     3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
-    3-. "<div>Starts opted-in checks at<br />server start without waiting<br />for network (planned T14)</div><div style='font-size: 70%'></div>" .->11
-    11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks<br />(planned T14)</div><div style='font-size: 70%'></div>" .->12
-    3-. "<div>Runs baley update in the<br />foreground, waits for<br />releases and receipt (planned<br />T14, verification by #14)</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
+    3-. "<div>Starts opted-in checks at<br />server start without waiting<br />for network</div><div style='font-size: 70%'></div>" .->11
+    11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks</div><div style='font-size: 70%'></div>" .->12
+    3-. "<div>Runs baley update in the<br />foreground, waits for<br />releases and receipt</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
     11-. "<div>Fetches releases verified by<br />#14, unsigned development<br />artifacts only in T14 and T17</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
 
   end
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus T14's planned detached updater. The updater opens the same per-user store through the store port to claim and record checks. Provider calls and credentials stay with the host session. The planned manual `baley update` waits for its releases and receipt in the foreground; only opted-in checks at server start run in the detached updater. Both use the binary's HTTP client. T14 and T17 use unsigned development artifacts; #14 supplies release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
+*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus the detached updater. The updater opens the same per-user store through the store port to claim and record at most one check per UTC day per installation. Provider calls and credentials stay with the host session. Manual `baley update` waits for its downloads and receipt in the foreground; only checks started by `baley serve` when `updates.auto` is on run in the detached updater. Both update paths are built and use the binary's HTTP client. T14 and T17 use unsigned development artifacts only; #14 supplies signed checksum manifests and release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)).*
 
 <!-- c4:components -->
 ```mermaid
@@ -221,7 +221,7 @@ graph LR
     style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Signed checksum manifests and<br />platform archives for<br />installation and manual or<br />opt-in updates.</div>"]
+    16["<div style='font-weight: bold'>Release source</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Development artifacts: a<br />plain executable and an<br />unsigned two-line manifest of<br />version and SHA-256. #14<br />supplies signed checksum<br />manifests and release<br />verification.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
@@ -248,7 +248,7 @@ graph LR
         style 9 fill:#85bbf0,stroke:#5d82a8,color:#000000
       end
 
-      11["<div style='font-weight: bold'>Detached updater (planned T14)</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary. Opens the per-user<br />store to claim and record<br />update checks. Opted-in<br />checks run at most daily.<br />Foreground manual checks<br />share its installation scope<br />and daily intent but never<br />refuse as not due; no updater<br />is built yet.</div>"]
+      11["<div style='font-weight: bold'>Detached updater</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>A separate process of the<br />binary, started by baley<br />serve only when updates.auto<br />is on. Opens the per-user<br />store to claim and record at<br />most one check per UTC day<br />per installation. Foreground<br />manual checks share its<br />installation scope and daily<br />intent but never refuse as<br />not due.</div>"]
       style 11 fill:#438dd5,stroke:#2e6295,color:#ffffff
       12[("<div style='font-weight: bold'>Ledger</div><div style='font-size: 70%; margin-top: 0px'>[Container: SQLite]</div><div style='font-size: 80%; margin-top:10px'>One append-only, hash-chained<br />record per user, outside any<br />checkout.</div>")]
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
@@ -276,16 +276,16 @@ graph LR
     10-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
     10-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
     10-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
-    4-. "<div>Starts opted-in checks at<br />server start without waiting<br />for network (planned T14)</div><div style='font-size: 70%'></div>" .->11
-    11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks<br />(planned T14)</div><div style='font-size: 70%'></div>" .->12
-    4-. "<div>Runs baley update in the<br />foreground, waits for<br />releases and receipt (planned<br />T14, verification by #14)</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
+    4-. "<div>Starts opted-in checks at<br />server start without waiting<br />for network</div><div style='font-size: 70%'></div>" .->11
+    11-. "<div>Opens the per-user store<br />through the store port,<br />claims and records checks</div><div style='font-size: 70%'></div>" .->12
+    4-. "<div>Runs baley update in the<br />foreground, waits for<br />releases and receipt</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
     11-. "<div>Fetches releases verified by<br />#14, unsigned development<br />artifacts only in T14 and T17</div><div style='font-size: 70%'>[HTTPS, reqwest]</div>" .->16
 
   end
 ```
 <!-- /c4:components -->
 
-*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts T14's planned detached updater for opted-in checks at server start without waiting for the network. The updater opens the same per-user ledger through the store port. The host interface also runs manual `baley update` in the foreground, waiting for the release source and its receipt. Figure 3 shows the updater's download path.*
+*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts the detached updater at `baley serve` startup only when `updates.auto` is on, without waiting for the child or the network. The updater opens the same per-user ledger through the store port to claim and record at most one check per UTC day per installation. The host interface also runs manual `baley update` in the foreground, waiting for the release source and its receipt. Both update paths are built for unsigned development artifacts only until #14 supplies signed checksum manifests and release verification. Figure 3 shows the updater's download path.*
 
 | Component | Responsibility |
 |---|---|
@@ -319,7 +319,7 @@ The one contract between Baley and every worker, including the outside reviews t
 | SYS-R3 | Withdrawn. There is no install-time choice of start route and no service or launcher: Claude Code starts the server for each session ([ADR 0034](../adr/0034-one-server-per-session.md)). | |
 | SYS-R4 | Withdrawn. There is no single shared server to join and no idle exit; a server's lifetime is its session's (SYS-R1, SYS-R5). | |
 | SYS-R5 | A session's calls are handled asynchronously at the edge and decided one at a time on the server's own worker, as synchronous code. A failure in one call never takes the server down. One bounded queue serves the session and every subagent: one call running and four waiting, with at most 16 MiB of raw frames among them, and a call beyond either bound gets a retryable overload answer. Memory stays bounded however large the ledger grows. When its input ends or it gets SIGINT or SIGTERM, the server stops taking calls, lets accepted work run for at most ten seconds and makes one `PASSIVE` checkpoint attempt. | Subagents share their session's connection, so one queue keeps them from starving each other, and the bounds are what a session may cost. |
-| SYS-R6 | Writes use optimistic concurrency across processes: each session's server, the guard hook and the command line open the per-user store. T14's planned detached updater also opens it, recording `update.check` claims and `update.checked` or `update.failed` outcomes in the per-user project `user` through the same port. Every write takes the writer queue, `BEGIN IMMEDIATE` and the epoch check, and each command's decision is made inside its transaction from inputs read there. Events are appended, never overwritten, and a command whose inputs changed is refused as stale, never merged. No record is locked while an agent works. | Several sessions' servers, the guard hook, the command line and the planned updater write the one per-user ledger from separate processes; contention within a project is low because only one dispatch per phase is active. Builds on 0001 EVD-R6, EVD-R7, EVD-R8 and EVD-R26. |
+| SYS-R6 | Writes use optimistic concurrency across processes: each session's server, the guard hook and the command line open the per-user store. The foreground `baley update` command and the detached opt-in updater record `update.check` claims and `update.checked` or `update.failed` outcomes in the per-user project `user` through the same port. Both check unsigned development artifacts only until #14 supplies release verification. Every write takes the writer queue, `BEGIN IMMEDIATE` and the epoch check, and each command's decision is made inside its transaction from inputs read there. Events are appended, never overwritten, and a command whose inputs changed is refused as stale, never merged. No record is locked while an agent works. | Several sessions' servers, the guard hook, the command line and the detached updater write the one per-user ledger from separate processes; contention within a project is low because only one dispatch per phase is active. Builds on 0001 EVD-R6, EVD-R7, EVD-R8 and EVD-R26. |
 | SYS-R7 | Long work (test runs, git and forge steps) is claimed and started, then recorded when it ends. Where the host supports being notified when a call finishes, Baley keeps the call open; everywhere else the session waits in steps, each call returning on completion or after a timeout with "still running". The host adapter chooses. | Hosts limit how long a tool call may run. |
 | SYS-R8 | Baley runs the test suite and each check's command itself. It judges results by exit code, with an optional standard report (such as JUnit XML) for which tests failed. | Evidence is first-hand, and every language works. |
 | SYS-R9 | Outside models are called by the host session, never by Baley. Baley decides whether an outside review runs and with which providers, builds the complete prompt and request as a work order, and parses and validates the raw response returned through `review return`. | Responsibility stays with the party that acts. |
@@ -331,7 +331,7 @@ The one contract between Baley and every worker, including the outside reviews t
 
 ## 10. Cross-cutting concerns
 
-- **Trust.** The installer and updater contact the release source to fetch signed manifests and release archives; automatic checks require opt-in, and these requests send no project content or provider credentials. T14's updater opens the per-user store to claim and record those checks. The release design #14 owns both verifiers, their signature format and trust root; T14 and T17 qualify unsigned development artifacts only, and no release exists before #14. Baley never reads API keys. Keys in the session's environment are visible to every program Claude Code starts, agents and subagents included. Nothing scrubs a key a command prints. Code sent for review goes to the chosen provider under its terms. Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
+- **Trust.** The development install script `install.sh`, foreground `baley update` and detached updater fetch a plain executable and an unsigned two-line manifest naming its version and SHA-256. Both delivery paths check the binary's SHA-256 in `verify_download` before staging. Automatic checks are off by default: `baley serve` reads `updates.auto` once at startup and starts the detached check only when it is on, without waiting for it. These requests send no project content or provider credentials. The foreground command and detached updater open the per-user store to claim and record checks. The release design #14 owns signed checksum manifests, the signature format, trust root and both signature verifiers. T14 and T17 use unsigned development artifacts only, and no release exists before #14 supplies and qualifies verification. `baley install`, which will write the host wiring, belongs to Build 3 T15 and is not called by the script. Baley never reads API keys. Keys in the session's environment are visible to every program Claude Code starts, agents and subagents included. Nothing scrubs a key a command prints. Code sent for review goes to the chosen provider under its terms. Agents run as the owner's user. The design guards against accidental exposure, not a determined agent. The ledger is protected by the host sandbox, and tampering is detected through the hash chain and forge anchors.
 - **Failure and recovery.** Claim, act, record (SYS-P7). A killed process is never taken as success. The log is good enough to diagnose a live failure.
 - **Resources.** Memory use and read cost are defects a user sees: no loading the whole store, bounded reads, streaming.
 - **Concurrency.** One user, one machine, one server process per session; several processes write the one per-user ledger through the store, with no single writer, and optimistic concurrency keeps them from overwriting each other (SYS-R6). No parallel or worktree execution.

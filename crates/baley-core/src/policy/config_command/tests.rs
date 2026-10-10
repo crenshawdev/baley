@@ -1800,3 +1800,67 @@ fn a_branch_list_set_outside_a_project_not_refused_as_not_a_project_first_is_cau
     .expect_err("refused");
     assert_eq!(refusal, SetRefusal::NotAProject);
 }
+
+#[test]
+fn a_config_set_source_the_file_parser_would_refuse_is_caught() {
+    let typed = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        false,
+        None,
+        &[
+            ("updates.source", "https://dl.example/baley"),
+            ("updates.auto", "true"),
+        ],
+    )
+    .expect("an https source and a boolean are accepted");
+    let bytes = render_file(Schema::standard(), FileLayer::Global, None, &typed).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[updates]\nauto = true\nsource = \"https://dl.example/baley\"\n"
+    );
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        false,
+        None,
+        &[("updates.source", "http://dl.example/baley")],
+    )
+    .expect_err("a plain http source is refused");
+    assert_eq!(refusal.code(), "invalid-value");
+    assert!(refusal.to_string().contains("https://"), "{refusal}");
+}
+
+#[test]
+fn a_config_set_source_with_a_query_or_fragment_the_parser_would_refuse_is_caught() {
+    for source in [
+        "https://dl.example/dev?x=1",
+        "https://dl.example/dev#stable",
+    ] {
+        let refusal = judge_pairs(
+            Schema::standard(),
+            FileLayer::Global,
+            false,
+            None,
+            &[("updates.source", source)],
+        )
+        .expect_err("a query or fragment is refused before any pairs can be written");
+        assert_eq!(refusal.code(), "invalid-value");
+        let message = refusal.to_string();
+        assert!(message.contains("https://"), "{message}");
+        assert!(message.contains("query or fragment"), "{message}");
+    }
+    let typed = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        false,
+        None,
+        &[("updates.source", "https://dl.example/dev")],
+    )
+    .expect("a source without a query or fragment is accepted");
+    let bytes = render_file(Schema::standard(), FileLayer::Global, None, &typed).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[updates]\nsource = \"https://dl.example/dev\"\n"
+    );
+}

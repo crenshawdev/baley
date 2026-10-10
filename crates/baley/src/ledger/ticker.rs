@@ -48,12 +48,12 @@ impl Pace for DeadlinePace {
     }
 }
 /// Schedules lease renewals on one thread.
-pub(super) struct ThreadTicker {
+pub(crate) struct ThreadTicker {
     clock: Arc<dyn Fn() -> String + Send + Sync>,
 }
 impl ThreadTicker {
     /// Builds the edge adapter from its supplied dependencies.
-    pub(super) fn new(clock: Arc<dyn Fn() -> String + Send + Sync>) -> Self {
+    pub(crate) fn new(clock: Arc<dyn Fn() -> String + Send + Sync>) -> Self {
         Self { clock }
     }
 }

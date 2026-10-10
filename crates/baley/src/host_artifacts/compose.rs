@@ -307,7 +307,7 @@ mod tests {
     /// The proposal and the hook, as one settings document receives them.
     fn settings() -> Vec<Value> {
         vec![
-            propose(&folders(), &executable(), &[]).settings,
+            propose(&folders(), &executable(), &[], &[]).settings,
             hook::render(&executable()),
         ]
     }

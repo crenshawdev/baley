@@ -24,6 +24,11 @@ pub struct ProtectedPaths {
     /// `baley.toml` of the checkout the hook's cwd is in, and the instruction
     /// stubs. Any other file named `baley.toml` is not on the list.
     pub files: Vec<PathBuf>,
+    /// Folders protected against writes only, such as the folder of staged
+    /// versions: a write inside one is denied, a read is not, because the
+    /// binaries inside must stay readable and runnable. Build 3 T15 fills it
+    /// from the placement map's write-only folders, beside `files`.
+    pub write_only_folders: Vec<PathBuf>,
 }
 
 /// What the write decision knows about the dispatch that is running.
@@ -39,13 +44,14 @@ pub enum Lease {
 
 /// Judges one write target: a `file_path` or a `notebook_path`.
 ///
-/// It denies a target inside or equal to the home or config folder, and a
-/// target that is the same destination as a protected file by path or by
-/// identity. While a protected file does not exist, a spelling that would
-/// create it on a case-insensitive volume is that destination too. It
-/// resolves both the spelling as given and the spelling with each backslash
-/// read as a slash, and denies when either lands on a protected path or when
-/// a path cannot be resolved.
+/// It denies a target inside or equal to the home or config folder or to a
+/// write-only folder (the staged versions), and a target that is the same
+/// destination as a protected file by path or by identity. Reads are not
+/// judged here, so a write-only folder stays readable. While a protected file
+/// does not exist, a spelling that would create it on a case-insensitive
+/// volume is that destination too. It resolves both the spelling as given
+/// and the spelling with each backslash read as a slash, and denies when
+/// either lands on a protected path or when a path cannot be resolved.
 pub fn write_answer(
     cwd: &str,
     target: &str,
@@ -81,6 +87,16 @@ fn protected_by(
             if is_inside(&resolved, &folder, fs)? {
                 return Ok(Some(format!(
                     "Baley protects its {name} folder ({}), and {} is inside it, so it is not changed through a tool call",
+                    folder.display(),
+                    resolved.display()
+                )));
+            }
+        }
+        for folder in &protected.write_only_folders {
+            let folder = resolve_entry(folder, fs)?;
+            if is_inside(&resolved, &folder, fs)? {
+                return Ok(Some(format!(
+                    "Baley keeps its staged versions in {}, and {} is inside it, so they are not changed through a tool call",
                     folder.display(),
                     resolved.display()
                 )));

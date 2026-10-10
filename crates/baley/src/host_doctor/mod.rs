@@ -84,6 +84,7 @@ pub fn all_unknown(running: std::io::Result<PathBuf>) -> Result<PlacementMap, Ma
         Placement::Unknown,
         Placement::Unknown,
         Placement::Unknown,
+        Placement::Unknown,
     )
     .map_err(|refusal| MapFault::Refused(refusal.to_string()))
 }
@@ -503,6 +504,7 @@ pub(crate) mod fixtures {
             place(registration),
             place(hook),
             place(settings),
+            Placement::Unknown,
         )
         .unwrap()
     }
@@ -679,7 +681,7 @@ mod tests {
     #[test]
     fn a_missing_program_left_out_of_the_coverage_verdicts_is_caught() {
         let exe = executable();
-        let proposal = security::propose(&folders(), &exe, &[SETTINGS.into()]).settings;
+        let proposal = security::propose(&folders(), &exe, &[SETTINGS.into()], &[]).settings;
         let document = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
         let bytes = serde_json::to_vec(&document).unwrap();
         for present in [["bwrap"], ["socat"]] {
@@ -842,7 +844,7 @@ mod integration {
         let registration = place.join("claude.json");
         std::fs::create_dir_all(help.parent().unwrap()).unwrap();
         let exe = executable();
-        let proposal = security::propose(&folders(), &exe, &[]).settings;
+        let proposal = security::propose(&folders(), &exe, &[], &[]).settings;
         let document = compose(None, &[proposal, hook::render(&exe)], &folders(), &exe).document;
         std::fs::write(&settings, serde_json::to_vec(&document).unwrap()).unwrap();
         std::fs::write(&registration, b"{}").unwrap();

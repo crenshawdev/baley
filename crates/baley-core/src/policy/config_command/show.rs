@@ -156,6 +156,7 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::RemoteName => "remote name",
         Kind::OnProtected => "one of ask, refuse or allow",
         Kind::BranchList => "list of branch names",
+        Kind::HttpsAddress => "https:// address",
     }
 }
 

@@ -316,6 +316,25 @@ fn stdio_plan_inherits_stdin_only_for_owner_commands() {
 }
 
 #[test]
+fn an_output_sent_to_null_still_piped_is_caught() {
+    use super::{StdioPlan, Stream::*, stdio_plan};
+    for (launch, stdin, output) in [
+        (Launch::new("baley").null_output(), Null, Null),
+        (Launch::new("baley").null_output().stdin(b"x"), Piped, Null),
+        (Launch::new("baley"), Null, Piped),
+    ] {
+        assert_eq!(
+            stdio_plan(&launch),
+            StdioPlan {
+                stdin,
+                stdout: output,
+                stderr: output,
+            }
+        );
+    }
+}
+
+#[test]
 fn launch_debug_never_prints_an_environment_value() {
     use super::{Process, Recorded};
     let launch = Launch::new("sh").env("A", "SENTINEL-7c1e").unset("B");

@@ -10,7 +10,7 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::merge::FileRef;
 use super::project::ProjectProblem;
-use super::schema::{Entry, Host, Kind, OnProtected, Rung, Schema, Scope};
+use super::schema::{Entry, Host, Kind, OnProtected, Rung, Schema, Scope, is_https_address};
 
 /// The code of every refusal that leaves the policy unbuilt.
 pub const CONFIG_UNAVAILABLE: &str = "config-unavailable";
@@ -50,6 +50,8 @@ pub enum Value {
     OnProtected(OnProtected),
     /// Branch names as written, in file order. May be empty.
     BranchList(Vec<String>),
+    /// An `https://` address.
+    HttpsAddress(String),
 }
 
 /// One setting a file writes, typed and within its scope.
@@ -216,6 +218,8 @@ pub enum Expected {
     OnProtected,
     /// A list of branch names.
     BranchList,
+    /// An `https://` address.
+    HttpsAddress,
 }
 impl From<Kind> for Expected {
     fn from(kind: Kind) -> Expected {
@@ -226,6 +230,7 @@ impl From<Kind> for Expected {
             Kind::RemoteName => Expected::RemoteName,
             Kind::OnProtected => Expected::OnProtected,
             Kind::BranchList => Expected::BranchList,
+            Kind::HttpsAddress => Expected::HttpsAddress,
         }
     }
 }
@@ -291,6 +296,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::RemoteName => "a remote name".to_owned(),
                 Expected::OnProtected => format!("one of {}", on_protected_names()),
                 Expected::BranchList => "a list of branch names".to_owned(),
+                Expected::HttpsAddress => "an https:// address".to_owned(),
             };
             write!(
                 f,
@@ -320,6 +326,10 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Kind::BranchList => {
                     f.write_str("holds an empty branch name; remove it or write a name")
                 }
+                Kind::HttpsAddress => write!(
+                    f,
+                    "is \"{written}\"; write an https:// address without a query or fragment (? or #) or remove the line"
+                ),
             }
         }
         Fault::Project {
@@ -573,6 +583,14 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
                 names.push(name.to_owned());
             }
             Ok(Value::BranchList(names))
+        }
+        Kind::HttpsAddress => {
+            let written = value.as_str().ok_or_else(wrong)?;
+            if is_https_address(written) {
+                Ok(Value::HttpsAddress(written.to_owned()))
+            } else {
+                Err(Mismatch::Grammar(written.to_owned(), None))
+            }
         }
     }
 }
