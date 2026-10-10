@@ -567,7 +567,7 @@ fn doctor_lines_reordered_or_reworded_by_the_host_section_are_caught() {
     expected.push("matches the remote anchor".into());
     expected.extend(chain_tail.map(String::from));
 
-    let map = crate::host_doctor::all_unknown(Ok("/usr/local/bin/baley".into())).unwrap();
+    let map = crate::host_doctor::fixtures::map(None, None, None, None, None);
     let host = crate::host_doctor::Report::new(&crate::host_doctor::judge(
         &crate::host_doctor::fixtures::observed(map, vec![]),
     ));

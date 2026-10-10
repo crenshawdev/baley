@@ -31,16 +31,12 @@ impl Report {
         if let Some(fault) = &findings.no_map {
             gap = true;
             lines.push(match fault {
-                MapFault::PathUnreadable(cause) => format!(
-                    "running binary: its path could not be read: {cause}, so no hook or registration can be rendered for it"
+                MapFault::Placements(reason) => format!(
+                    "artifact placements: {reason}, so no artifact can be checked"
                 ),
-                MapFault::Executable { path, refusal } => format!(
-                    "running binary {}: {refusal}, so no hook or registration can be rendered for it",
-                    path.display()
+                MapFault::Record(cause) => format!(
+                    "install record: it could not be read: {cause}, so an installation cannot be told from none"
                 ),
-                MapFault::Refused(reason) => {
-                    format!("running binary: the placement map was refused: {reason}")
-                }
             });
         }
         for (artifact, state) in &findings.artifacts {
@@ -392,16 +388,17 @@ mod tests {
 
     use super::super::fixtures::*;
     use super::super::placed::{Fault, FileState};
-    use super::super::{MapFault, Observation, PlacedRead, all_unknown, judge};
+    use super::super::{Observation, PlacedRead, installed_placements, judge};
     use super::*;
+    use crate::folders::Environment;
     use crate::host_artifacts::compose::compose;
-    use crate::host_artifacts::executable::{MissingPrerequisite, PathFault};
+    use crate::host_artifacts::installed::resolve;
     use crate::host_artifacts::stubs;
     use crate::host_artifacts::{hook, security};
+    use crate::install::fixtures::installed;
 
     fn unknown_observation() -> Observation {
-        let map = all_unknown(Ok(PathBuf::from(EXECUTABLE))).unwrap();
-        observed(map, vec![])
+        observed(map(None, None, None, None, None), vec![])
     }
 
     fn report_of(observation: &Observation) -> Report {
@@ -460,33 +457,46 @@ mod tests {
 
     #[test]
     fn an_unusable_binary_path_dropped_from_the_report_is_caught() {
-        let relative = unmapped(MapFault::Executable {
-            path: PathBuf::from("baley"),
-            refusal: MissingPrerequisite {
-                fault: PathFault::Relative,
-            },
-        });
-        let report = report_of(&relative);
-        let named: Vec<&String> = report
-            .lines
-            .iter()
-            .filter(|line| line.contains("baley") && line.contains("not absolute"))
-            .collect();
-        assert_eq!(named.len(), 1, "{:?}", report.lines);
-        assert_eq!(report.code, 1);
-        assert!(!report.lines.iter().any(|line| says_installed(line)));
-
-        let cause = "No such file or directory (os error 2)";
-        let unreadable = unmapped(MapFault::PathUnreadable(cause.into()));
-        let report = report_of(&unreadable);
-        let named: Vec<&String> = report
-            .lines
-            .iter()
-            .filter(|line| line.contains("could not be read") && line.contains(cause))
-            .collect();
-        assert_eq!(named.len(), 1, "{:?}", report.lines);
-        assert_eq!(report.code, 1);
-        assert!(!report.lines.iter().any(|line| says_installed(line)));
+        let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+        let home = Environment {
+            home: Some("/home/o".into()),
+            ..Environment::default()
+        };
+        let no_home = resolve(&Environment::default(), None, &manifest).unwrap_err();
+        let bad_config = resolve(&home, Some("claude".into()), &manifest).unwrap_err();
+        for (fault, text) in [
+            (
+                installed_placements(Err(no_home), Ok(None)).unwrap_err(),
+                "HOME is not set",
+            ),
+            (
+                installed_placements(Err(bad_config), Ok(None)).unwrap_err(),
+                "CLAUDE_CONFIG_DIR is not absolute",
+            ),
+            (
+                installed_placements(Ok(installed()), Err(baley_store::StoreError::Busy))
+                    .unwrap_err(),
+                "store busy, retry",
+            ),
+        ] {
+            let report = report_of(&unmapped(fault));
+            let named: Vec<&String> = report
+                .lines
+                .iter()
+                .filter(|line| line.contains(text))
+                .collect();
+            assert_eq!(named.len(), 1, "{text}: {:?}", report.lines);
+            assert_eq!(report.code, 1, "{text}");
+            assert!(
+                !report
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("running binary")),
+                "{text}: {:?}",
+                report.lines
+            );
+            assert!(!report.lines.iter().any(|line| says_installed(line)));
+        }
     }
 
     #[test]
