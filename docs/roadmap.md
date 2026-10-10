@@ -37,7 +37,7 @@ flowchart TB
     class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the twenty open Build 3 issues are listed below but have no GitHub dependency link to it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the twenty-two open Build 3 issues are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -333,7 +333,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. This work owns the signed checksum manifest's signature format and trust root, both verifier implementations (the installer's available before Baley exists and the updater's), and their qualification. It fills T14's named `verify_download` seam between download and staging in both delivery paths. T14 and T17 will have built and qualified delivery with unsigned development artifacts only; no release exists before #14 completes verification. Installation follows [ADR 0038](adr/0038-installer-and-opt-in-updates.md): one installer command, binary-written wiring at the stable path, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. Provider access follows [ADR 0039](adr/0039-session-owned-provider-credentials.md), with no Baley key file or provider call. #14 must name any new signature-verification dependency; none is selected yet. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220, #221, #227, #235 and #238 to #249.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220, #221, #227, #235, #238 to #249, #251 and #252.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -345,7 +345,7 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 ## Other open issues
 
-Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the twenty Build 3 issues to #14. "Carried by" means that build does the fix.
+Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the twenty-two Build 3 issues to #14. "Carried by" means that build does the fix.
 
 ### Upkeep and docs
 
@@ -389,10 +389,12 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 | [#247](https://github.com/crenshawdev/baley/issues/247) | `install.sh`'s final staging move can overwrite a different binary another installer placed after the existence check | None | Its text names no build |
 | [#248](https://github.com/crenshawdev/baley/issues/248) | `install.sh` checks only the staged file, so a version folder that is a symbolic link can place the binary outside the versions folder | None | Its text names no build |
 | [#249](https://github.com/crenshawdev/baley/issues/249) | `install.sh`'s temporary-link check strips trailing newlines from `readlink`, so a crafted directory link can pass it | None | Its text names no build |
+| [#251](https://github.com/crenshawdev/baley/issues/251) | Between install's recheck of `mcpServers.baley` and `claude mcp remove`, another writer can change the entry, so the removal can delete an entry install did not judge | None | Its text names no build |
+| [#252](https://github.com/crenshawdev/baley/issues/252) | With nothing runnable at the stable path, install withholds the new guard hook but still removes a recorded older hook | None | Its text names no build |
 
 ## Milestones
 
-Counts from GitHub on 2026-10-09. #238 to #249 have no milestone. Evidence shows 43 closed and 21 open issues, and Encyclopedists six closed and one open.
+Counts from GitHub on 2026-10-09. #238 to #249 have no milestone, and neither do #251 and #252 (checked 2026-10-10). Evidence shows 43 closed and 21 open issues, and Encyclopedists six closed and one open.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
