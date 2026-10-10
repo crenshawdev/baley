@@ -1,7 +1,10 @@
 //! `baley config interview` (design 0003 section 5). It gathers both settings
 //! files and HEAD's copy as `show` does, asks for each role's model and effort
-//! and for `escalate_on_failure` in the terminal, and writes the answers
-//! through one `set::apply`. It opens no store and runs no policy step itself.
+//! and for `escalate_on_failure` in the terminal, then asks which outside review
+//! providers to use and takes a typed `yes` to the warning for each one chosen.
+//! The conversation opens no store and runs no policy step itself, and its one
+//! seam is the process that reads git's `user.name`. The answers are written
+//! through one `set::apply`.
 
 use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
@@ -12,11 +15,17 @@ use baley_store::StoreError;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+mod providers;
+
+use self::providers::{Acknowledge, Refusal, Staged};
+use super::reviewers::{self, Selection};
 use super::set;
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
 use crate::ledger::display::{self, Render};
 use crate::policy_step::{self, Reads};
+use crate::process::Process;
+use crate::providers::warning;
 use crate::settings;
 
 /// Asks the questions on `input` and `output`, then writes the answers.
@@ -80,10 +89,22 @@ fn attempt(
     if let Some(note) = &start.note {
         writeln!(output, "{note}").map_err(failed)?;
     }
-    let outcome =
-        converse(&questions, &start.target, start.layer, host, input, output).map_err(failed)?;
+    let outcome = converse(
+        &questions,
+        &Destination {
+            target: &start.target,
+            layer: start.layer,
+            host,
+        },
+        &start.selection,
+        &mut crate::process::System,
+        input,
+        output,
+    )
+    .map_err(failed)?;
     Ok(match outcome {
         Outcome::Declined => Render::line("Nothing was written.", 0),
+        Outcome::Refused(Refusal(render)) => render,
         Outcome::Unchanged => {
             Render::line("Nothing changed: every answer kept the value in force.", 0)
         }
@@ -124,6 +145,9 @@ struct Start {
     /// The pending note, set when the target is the project file and the
     /// working-tree file holds changes HEAD's copy does not.
     note: Option<String>,
+    /// The outside providers the global file stores, shown before the
+    /// provider question.
+    selection: Selection,
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
@@ -178,6 +202,7 @@ fn begin(
         .map_err(|refusal| Render::refusal(refusal.to_string()))?
         .map(|file| file.digest);
     Ok(Start {
+        selection: reviewers::stored(layers.global.as_ref()),
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
         layer,
         target,
@@ -360,48 +385,66 @@ fn read_answer(input: &mut impl BufRead) -> io::Result<Option<String>> {
     Ok(Some(line.trim().to_owned()))
 }
 
-/// The one `config set` an interview sends.
+/// What an interview sends once the owner has typed the final `yes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Request {
     /// The file to write.
     layer: FileLayer,
     /// The host section to write into, `None` for the top level.
     host: Option<Host>,
-    /// The non-blank answers as name and value, in question order.
+    /// The non-blank answers as name and value, in question order. Empty when
+    /// only providers were confirmed.
     pairs: Vec<(String, String)>,
+    /// The providers to record an acknowledgement for, with the owner's name.
+    acknowledgement: Option<Acknowledge>,
 }
 
 /// What the interview does with the answers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum Outcome {
-    /// The owner stopped, so nothing is written.
+    /// The owner stopped, so nothing is written and no store is opened.
     Declined,
     /// Every answer was blank, so there is nothing to write.
     Unchanged,
-    /// Write these answers through `config set`.
+    /// The owner identity is missing, so the interview stops before its summary.
+    Refused(Refusal),
+    /// Write these answers through `config set` and record this acknowledgement.
     Send(Request),
 }
 
-fn outcome(collected: Collected, layer: FileLayer, host: Option<Host>) -> Outcome {
-    match collected {
-        Collected::Stopped => Outcome::Declined,
-        Collected::Answers(pairs) if pairs.is_empty() => Outcome::Unchanged,
-        Collected::Answers(pairs) => Outcome::Send(Request { layer, host, pairs }),
-    }
-}
-
-/// The lines that say what is about to be written and where.
-fn summary(target: &Path, host: Option<Host>, pairs: &[(String, String)]) -> Vec<String> {
-    let section = host.map_or_else(String::new, |host| format!(" [host.{}]", host.name()));
-    let mut lines = vec![format!(
-        "The interview will write to {}{section}",
-        target.display()
-    )];
-    lines.extend(
-        pairs
+/// The lines that say what is about to be written and where. Providers come
+/// first, so the settings block stays last.
+fn summary(
+    target: &Path,
+    host: Option<Host>,
+    pairs: &[(String, String)],
+    acknowledgement: Option<&Acknowledge>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(acknowledgement) = acknowledgement {
+        let names: Vec<&str> = acknowledgement
+            .providers
             .iter()
-            .map(|(name, value)| format!("  {name}={value}")),
-    );
+            .map(|provider| provider.name())
+            .collect();
+        lines.push(format!(
+            "Outside review providers confirmed: {} (warning version {})",
+            names.join(", "),
+            warning::WARNING_VERSION
+        ));
+    }
+    if !pairs.is_empty() {
+        let section = host.map_or_else(String::new, |host| format!(" [host.{}]", host.name()));
+        lines.push(format!(
+            "The interview will write to {}{section}",
+            target.display()
+        ));
+        lines.extend(
+            pairs
+                .iter()
+                .map(|(name, value)| format!("  {name}={value}")),
+        );
+    }
     lines
 }
 
@@ -411,22 +454,16 @@ fn accepts(answer: Option<&str>) -> bool {
     answer == Some("yes")
 }
 
-/// Lists what will be written and asks once. An interview with no answer has
-/// nothing to confirm, and one that is not confirmed is stopped.
+/// Lists what will be written and asks once. Whether the owner typed `yes`.
 fn confirm(
-    collected: Collected,
     target: &Path,
     host: Option<Host>,
+    pairs: &[(String, String)],
+    acknowledgement: Option<&Acknowledge>,
     input: &mut impl BufRead,
     output: &mut impl Write,
-) -> io::Result<Collected> {
-    let Collected::Answers(pairs) = collected else {
-        return Ok(collected);
-    };
-    if pairs.is_empty() {
-        return Ok(Collected::Answers(pairs));
-    }
-    for line in summary(target, host, &pairs) {
+) -> io::Result<bool> {
+    for line in summary(target, host, pairs, acknowledgement) {
         writeln!(output, "{line}")?;
     }
     write!(output, "Write these values? Type yes to write: ")?;
@@ -436,25 +473,61 @@ fn confirm(
         // The prompt holds the line, so end it before anything else prints.
         writeln!(output)?;
     }
-    Ok(if accepts(answer.as_deref()) {
-        Collected::Answers(pairs)
-    } else {
-        Collected::Stopped
-    })
+    Ok(accepts(answer.as_deref()))
 }
 
-/// Asks every question, confirms, and decides what to send.
+/// Where the answers will be written, as the owner is told.
+struct Destination<'a> {
+    /// The file's path.
+    target: &'a Path,
+    /// Which file it is.
+    layer: FileLayer,
+    /// The host section, `None` for the top level.
+    host: Option<Host>,
+}
+
+/// Asks every question, then the provider question, confirms, and decides what
+/// to send. It touches no file and no store, and its one seam is `process`.
 fn converse(
     questions: &[Question],
-    target: &Path,
-    layer: FileLayer,
-    host: Option<Host>,
+    destination: &Destination<'_>,
+    stored: &Selection,
+    process: &mut dyn Process,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> io::Result<Outcome> {
-    let collected = ask(questions, input, output)?;
-    let collected = confirm(collected, target, host, input, output)?;
-    Ok(outcome(collected, layer, host))
+    let Destination {
+        target,
+        layer,
+        host,
+    } = *destination;
+    let Collected::Answers(pairs) = ask(questions, input, output)? else {
+        return Ok(Outcome::Declined);
+    };
+    let acknowledgement = match providers::stage(stored, process, input, output)? {
+        Staged::Declined => return Ok(Outcome::Declined),
+        Staged::Refused(refusal) => return Ok(Outcome::Refused(refusal)),
+        Staged::Ready(acknowledgement) => acknowledgement,
+    };
+    if pairs.is_empty() && acknowledgement.is_none() {
+        return Ok(Outcome::Unchanged);
+    }
+    if !confirm(
+        target,
+        host,
+        &pairs,
+        acknowledgement.as_ref(),
+        input,
+        output,
+    )? {
+        return Ok(Outcome::Declined);
+    }
+    Ok(Outcome::Send(Request {
+        layer,
+        host,
+        pairs,
+        acknowledgement,
+    }))
 }
 
 #[cfg(test)]
@@ -463,6 +536,7 @@ mod tests {
     use std::path::Path;
 
     use crate::committed::{Committed, Pending};
+    use crate::process::Recorded;
     use baley_core::policy::{Fault, parse_layer};
 
     const GLOBAL: &str = "/c/config.toml";
@@ -563,15 +637,30 @@ mod tests {
         assert!(asked.iter().all(|q| q.name != "git.remote"));
     }
 
-    /// Runs the conversation over supplied input lines.
+    /// Runs the conversation over supplied input lines, with nothing stored
+    /// and a process that fails the test if git is launched.
     fn converse_over(input: &str, host: Option<Host>) -> (Outcome, String) {
+        converse_with(input, host, &Selection::none(), &mut Recorded::new())
+    }
+
+    /// Runs the conversation with a stored selection and a scripted process.
+    fn converse_with(
+        input: &str,
+        host: Option<Host>,
+        stored: &Selection,
+        process: &mut Recorded,
+    ) -> (Outcome, String) {
         let asked = questions(&policy(None, None, None));
         let mut output = Vec::new();
         let outcome = converse(
             &asked,
-            Path::new(GLOBAL),
-            FileLayer::Global,
-            host,
+            &Destination {
+                target: Path::new(GLOBAL),
+                layer: FileLayer::Global,
+                host,
+            },
+            stored,
+            process,
             &mut input.as_bytes(),
             &mut output,
         )
@@ -611,7 +700,7 @@ mod tests {
     #[test]
     fn a_blank_and_an_all_whitespace_answer_each_give_no_pair() {
         let (outcome, _) = converse_over(
-            &format!("{}yes\n", answers(&[(1, "   \t "), (2, "sonnet")])),
+            &format!("{}\nyes\n", answers(&[(1, "   \t "), (2, "sonnet")])),
             None,
         );
 
@@ -620,14 +709,15 @@ mod tests {
 
     #[test]
     fn an_answer_is_trimmed_before_it_is_sent() {
-        let (outcome, _) = converse_over(&format!("{}yes\n", answers(&[(0, "  sonnet  ")])), None);
+        let (outcome, _) =
+            converse_over(&format!("{}\nyes\n", answers(&[(0, "  sonnet  ")])), None);
 
         assert_eq!(pairs_of(&outcome), [("roles.planner.model", "sonnet")]);
     }
 
     #[test]
     fn an_answer_equal_to_the_value_in_force_is_still_sent() {
-        let (outcome, _) = converse_over(&format!("{}yes\n", answers(&[(1, "high")])), None);
+        let (outcome, _) = converse_over(&format!("{}\nyes\n", answers(&[(1, "high")])), None);
 
         assert_eq!(pairs_of(&outcome), [("roles.planner.effort", "high")]);
     }
@@ -642,7 +732,7 @@ mod tests {
 
     #[test]
     fn thirteen_blank_answers_give_nothing_to_write_not_an_empty_request() {
-        let (outcome, _) = converse_over(&blanks(13), None);
+        let (outcome, _) = converse_over(&blanks(14), None);
 
         assert_eq!(outcome, Outcome::Unchanged);
     }
@@ -650,7 +740,7 @@ mod tests {
     #[test]
     fn two_answers_give_one_request_in_question_order_with_the_layer_and_host() {
         let (outcome, output) = converse_over(
-            &format!("{}yes\n", answers(&[(12, "true"), (3, "max")])),
+            &format!("{}\nyes\n", answers(&[(12, "true"), (3, "max")])),
             Some(Host::ClaudeCode),
         );
 
@@ -663,6 +753,7 @@ mod tests {
                     ("roles.analyzer.effort".to_owned(), "max".to_owned()),
                     ("escalate_on_failure".to_owned(), "true".to_owned()),
                 ],
+                acknowledgement: None,
             })
         );
         assert!(
@@ -941,7 +1032,7 @@ mod tests {
 
     /// One answer, a model for the planner, then the confirmation line.
     fn one_answer_then(confirmation: &str) -> String {
-        format!("{}{confirmation}", answers(&[(0, "sonnet")]))
+        format!("{}\n{confirmation}", answers(&[(0, "sonnet")]))
     }
 
     #[test]
@@ -963,7 +1054,7 @@ mod tests {
 
     #[test]
     fn thirteen_blank_answers_are_not_asked_to_confirm() {
-        let (outcome, output) = converse_over(&blanks(13), None);
+        let (outcome, output) = converse_over(&blanks(14), None);
 
         assert_eq!(outcome, Outcome::Unchanged);
         assert!(!output.contains("Write these values?"), "{output}");
@@ -984,7 +1075,7 @@ mod tests {
 
     #[test]
     fn the_summary_comes_before_the_question_and_names_each_pair_and_the_file() {
-        let input = format!("{}yes\n", answers(&[(0, "sonnet"), (1, "max")]));
+        let input = format!("{}\nyes\n", answers(&[(0, "sonnet"), (1, "max")]));
 
         let (_, output) = converse_over(&input, None);
 
@@ -1042,7 +1133,7 @@ mod tests {
     #[test]
     fn a_bad_effort_is_asked_again_until_a_rung_is_given() {
         // The planner's effort is the second question.
-        let input = format!("\nHigh\nbogus\nmax\n{}yes\n", blanks(11));
+        let input = format!("\nHigh\nbogus\nmax\n{}yes\n", blanks(12));
 
         let (outcome, output) = converse_over(&input, None);
 
@@ -1065,7 +1156,7 @@ mod tests {
 
     #[test]
     fn a_bad_escalate_answer_is_asked_again_and_false_is_taken() {
-        let input = format!("{}yes\nfalse\nyes\n", blanks(12));
+        let input = format!("{}yes\nfalse\n\nyes\n", blanks(12));
 
         let (outcome, output) = converse_over(&input, None);
 
@@ -1075,7 +1166,7 @@ mod tests {
 
     #[test]
     fn a_blank_after_a_bad_answer_keeps_the_value_and_gives_no_pair() {
-        let input = format!("\nbogus\n\n{}", blanks(11));
+        let input = format!("\nbogus\n\n{}", blanks(12));
 
         let (outcome, _) = converse_over(&input, None);
 
@@ -1091,7 +1182,7 @@ mod tests {
 
     #[test]
     fn an_unknown_model_is_sent_on_not_asked_again() {
-        let input = format!("claude-unknown-x\n{}yes\n", blanks(12));
+        let input = format!("claude-unknown-x\n{}yes\n", blanks(13));
 
         let (outcome, output) = converse_over(&input, None);
 
@@ -1188,5 +1279,182 @@ mod tests {
         );
 
         assert_eq!(start.ok().unwrap().note, None);
+    }
+
+    use crate::providers::fixtures::DESIGN_WARNING;
+    use baley_core::catalog::Provider;
+
+    /// Thirteen blank settings answers, then the given lines.
+    fn after_thirteen(rest: &str) -> String {
+        format!("{}{rest}", blanks(13))
+    }
+
+    fn stored(providers: &[Provider], layer: &'static str) -> Selection {
+        Selection {
+            providers: providers.to_vec(),
+            layer,
+        }
+    }
+
+    fn ada() -> Recorded {
+        Recorded::new().out("Ada Owner\n")
+    }
+
+    fn acknowledgement_of(outcome: &Outcome) -> Option<&Acknowledge> {
+        match outcome {
+            Outcome::Send(request) => request.acknowledgement.as_ref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_provider_taken_without_the_full_warning_and_a_typed_yes_is_caught() {
+        let mut process = ada();
+        let (outcome, output) = converse_with(
+            &after_thirteen("deepseek, openai\nyes\nyes\nyes\n"),
+            None,
+            &stored(&[Provider::OpenAi], "global"),
+            &mut process,
+        );
+
+        let warned = |name: &str| {
+            let heading = format!("Warning for {name} (version 1):\n{DESIGN_WARNING}\n");
+            let prompt = format!("Type yes to accept this warning for {name}: ");
+            let at = output
+                .find(&format!("{heading}{prompt}"))
+                .unwrap_or_else(|| panic!("no full warning and prompt for {name}: {output}"));
+            at + heading.len() + prompt.len()
+        };
+        let after_openai = warned("openai");
+        let after_deepseek = warned("deepseek");
+        assert!(after_openai < after_deepseek, "{output}");
+        assert_eq!(output.matches(DESIGN_WARNING).count(), 2, "{output}");
+        let summary = output.find("Outside review providers confirmed").unwrap();
+        let final_prompt = output
+            .find("Write these values? Type yes to write: ")
+            .unwrap();
+        assert!(
+            after_deepseek <= summary && summary < final_prompt,
+            "{output}"
+        );
+        assert_eq!(
+            acknowledgement_of(&outcome),
+            Some(&Acknowledge {
+                providers: vec![Provider::OpenAi, Provider::DeepSeek],
+                owner: "Ada Owner".into(),
+            })
+        );
+
+        for refusal in ["\n", "y\n"] {
+            let (outcome, output) = converse_with(
+                &after_thirteen(&format!("openai\n{refusal}")),
+                None,
+                &Selection::none(),
+                &mut Recorded::new(),
+            );
+            assert_eq!(outcome, Outcome::Declined, "{refusal:?}");
+            assert!(!output.contains("Write these values?"), "{output}");
+        }
+    }
+
+    #[test]
+    fn a_write_or_store_open_after_an_interview_ended_without_yes_is_caught() {
+        let cases = [
+            (after_thirteen("\n"), Outcome::Unchanged),
+            (after_thirteen("openai\nno\n"), Outcome::Declined),
+            (after_thirteen("openai\n"), Outcome::Declined),
+            (after_thirteen(""), Outcome::Declined),
+            (format!("\nmax\n{}\nno\n", blanks(11)), Outcome::Declined),
+        ];
+        for (input, expected) in cases {
+            let mut process = Recorded::new();
+            let (outcome, output) = converse_with(&input, None, &Selection::none(), &mut process);
+            assert_eq!(outcome, expected, "{input:?}");
+            assert_eq!(acknowledgement_of(&outcome), None, "{input:?}");
+            assert!(process.launches().is_empty(), "{input:?}");
+            if expected == Outcome::Unchanged {
+                assert!(!output.contains("Write these values?"), "{output}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_provider_acknowledged_without_a_git_user_name_is_caught() {
+        let input = after_thirteen("openai\nyes\nyes\n");
+        for mut process in [
+            Recorded::new().fail(1, ""),
+            Recorded::new().unavailable(std::io::ErrorKind::NotFound.into()),
+        ] {
+            let (outcome, output) = converse_with(&input, None, &Selection::none(), &mut process);
+
+            let Outcome::Refused(Refusal(render)) = outcome else {
+                panic!("not refused: {outcome:?}");
+            };
+            assert!(
+                render.lines[0].starts_with("owner-identity-missing:"),
+                "{render:?}"
+            );
+            assert!(render.lines[0].contains("user.name"), "{render:?}");
+            assert_eq!(render.code, 2);
+            assert!(render.error);
+            assert!(!output.contains("Write these values?"), "{output}");
+            assert_eq!(process.arguments(), [["config", "--get", "user.name"]]);
+        }
+
+        let mut process = Recorded::new();
+        converse_with(
+            &after_thirteen("\n"),
+            None,
+            &Selection::none(),
+            &mut process,
+        );
+        assert!(process.launches().is_empty());
+    }
+
+    #[test]
+    fn a_bad_provider_answer_taken_or_not_asked_again_is_caught() {
+        let mut process = ada();
+        let (outcome, output) = converse_with(
+            &after_thirteen("anthropic\nopenai\nyes\nyes\n"),
+            None,
+            &Selection::none(),
+            &mut process,
+        );
+
+        let prompt = "outside providers are none from default: ";
+        assert_eq!(output.matches(prompt).count(), 2, "{output}");
+        let first = output.find(prompt).unwrap();
+        let refusal = output.find("\"anthropic\" is not an answer").unwrap();
+        let second = output.rfind(prompt).unwrap();
+        assert!(first < refusal && refusal < second, "{output}");
+        assert_eq!(
+            acknowledgement_of(&outcome),
+            Some(&Acknowledge {
+                providers: vec![Provider::OpenAi],
+                owner: "Ada Owner".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_stored_selection_left_out_of_the_provider_question_is_caught() {
+        for (stored, prompt) in [
+            (
+                stored(&[Provider::DeepSeek], "global"),
+                "outside providers are deepseek from global: ",
+            ),
+            (
+                stored(&[Provider::OpenAi, Provider::DeepSeek], "global"),
+                "outside providers are openai, deepseek from global: ",
+            ),
+        ] {
+            let mut process = Recorded::new();
+            let (outcome, output) =
+                converse_with(&after_thirteen("\n"), None, &stored, &mut process);
+
+            assert!(output.contains(prompt), "{output}");
+            assert_eq!(outcome, Outcome::Unchanged);
+            assert!(process.launches().is_empty());
+        }
     }
 }

@@ -9,13 +9,6 @@
 /// The `providers.acknowledged` event and its payload.
 pub mod event;
 /// The owner identity from git.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview reads the owner identity and is wired in next"
-    )
-)]
 pub(crate) mod identity;
 /// Recording the acknowledgement unless a current one covers it.
 #[cfg_attr(
