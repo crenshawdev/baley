@@ -4,7 +4,7 @@ This file is the order of work from now to Baley's first public release: nine bu
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 issues [#190](https://github.com/crenshawdev/baley/issues/190), [#203](https://github.com/crenshawdev/baley/issues/203), [#214](https://github.com/crenshawdev/baley/issues/214), [#219](https://github.com/crenshawdev/baley/issues/219), [#220](https://github.com/crenshawdev/baley/issues/220), [#221](https://github.com/crenshawdev/baley/issues/221), [#227](https://github.com/crenshawdev/baley/issues/227) and [#235](https://github.com/crenshawdev/baley/issues/235), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 issues [#190](https://github.com/crenshawdev/baley/issues/190), [#203](https://github.com/crenshawdev/baley/issues/203), [#214](https://github.com/crenshawdev/baley/issues/214), [#219](https://github.com/crenshawdev/baley/issues/219), [#220](https://github.com/crenshawdev/baley/issues/220), [#221](https://github.com/crenshawdev/baley/issues/221), [#227](https://github.com/crenshawdev/baley/issues/227), [#235](https://github.com/crenshawdev/baley/issues/235) and [#238](https://github.com/crenshawdev/baley/issues/238) to [#249](https://github.com/crenshawdev/baley/issues/249), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -37,7 +37,7 @@ flowchart TB
     class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the eight open Build 3 issues are listed below but have no GitHub dependency link to it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the twenty open Build 3 issues are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -332,7 +332,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. This work owns the signed checksum manifest's signature format and trust root, both verifier implementations (the installer's available before Baley exists and the updater's), and their qualification. It fills T14's named `verify_download` seam between download and staging in both delivery paths. T14 and T17 will have built and qualified delivery with unsigned development artifacts only; no release exists before #14 completes verification. Installation follows [ADR 0038](adr/0038-installer-and-opt-in-updates.md): one installer command, binary-written wiring at the stable path, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. Provider access follows [ADR 0039](adr/0039-session-owned-provider-credentials.md), with no Baley key file or provider call. #14 must name any new signature-verification dependency; none is selected yet. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220, #221, #227 and #235.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220, #221, #227, #235 and #238 to #249.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -344,7 +344,7 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 ## Other open issues
 
-Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the eight Build 3 issues to #14. "Carried by" means that build does the fix.
+Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the twenty Build 3 issues to #14. "Carried by" means that build does the fix.
 
 ### Upkeep and docs
 
@@ -374,16 +374,28 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 | [#219](https://github.com/crenshawdev/baley/issues/219) | Bug: the guard never judges a commit that has anything in front of `git` | Evidence | Its text names no build |
 | [#220](https://github.com/crenshawdev/baley/issues/220) | Design: decide what the guard does with a commit or push it declines to read | Evidence | Its text names no build |
 | [#221](https://github.com/crenshawdev/baley/issues/221) | Enhancement: judge a commit after a plain `cd` at the directory it names instead of asking | Evidence | Its text says to build it with #219 |
-| [#227](https://github.com/crenshawdev/baley/issues/227) | A case-variant spelling lets a stub take the executable's or another artifact's file on a case-insensitive filesystem | None | Its text names no build |
-| [#235](https://github.com/crenshawdev/baley/issues/235) | The live restore script does not refuse a symlinked results folder or ledger, so it can delete a database outside the disposable root | None | Its text names no build |
+| [#227](https://github.com/crenshawdev/baley/issues/227) | A case-variant spelling lets a stub take the executable's or another artifact's file on a case-insensitive filesystem | Evidence | Its text names no build |
+| [#235](https://github.com/crenshawdev/baley/issues/235) | The live restore script does not refuse a symlinked results folder or ledger, so it can delete a database outside the disposable root | Evidence | Its text names no build |
+| [#238](https://github.com/crenshawdev/baley/issues/238) | A downloaded manifest's version text is split into every dot-separated part before the part count is checked, so a huge malformed version can exhaust memory instead of being refused | None | Its text names no build |
+| [#239](https://github.com/crenshawdev/baley/issues/239) | Joining a relative link target to the link's folder keeps `bin/../` in the path, so a stable link the kernel resolves can fail with a name-too-long error under a very long `HOME` | None | Its text names no build |
+| [#240](https://github.com/crenshawdev/baley/issues/240) | Rollback exchanges with the stable entry without confirming it is still this attempt's link, then deletes what it displaced, which can destroy an owner's newer replacement | None | Its text names no build |
+| [#241](https://github.com/crenshawdev/baley/issues/241) | The lease check before activation is a point-in-time check, so an attempt that loses its claim after it can still activate | None | Its text names no build |
+| [#242](https://github.com/crenshawdev/baley/issues/242) | The new link is published and its folder synced before the displaced entry is checked, so a conflicting activation can become durable if the updater dies before rollback | None | Its text names no build |
+| [#243](https://github.com/crenshawdev/baley/issues/243) | The staged-binary check reads the file owner's execute bit, not whether the installing user can run the file | None | Its text names no build |
+| [#244](https://github.com/crenshawdev/baley/issues/244) | A stale claim holder can still activate after another check takes over its lease | None | Its text names no build |
+| [#245](https://github.com/crenshawdev/baley/issues/245) | The activation rollback can delete a replacement the owner put at the stable path during the rollback | None | Its text names no build |
+| [#246](https://github.com/crenshawdev/baley/issues/246) | A retry that finds an already published staged binary skips the folder syncs a failed earlier attempt did not finish | None | Its text names no build |
+| [#247](https://github.com/crenshawdev/baley/issues/247) | `install.sh`'s final staging move can overwrite a different binary another installer placed after the existence check | None | Its text names no build |
+| [#248](https://github.com/crenshawdev/baley/issues/248) | `install.sh` checks only the staged file, so a version folder that is a symbolic link can place the binary outside the versions folder | None | Its text names no build |
+| [#249](https://github.com/crenshawdev/baley/issues/249) | `install.sh`'s temporary-link check strips trailing newlines from `readlink`, so a crafted directory link can pass it | None | Its text names no build |
 
 ## Milestones
 
-Counts from GitHub on 2026-10-08, after #184, #200, #201 and #229 closed. #227 and #235 have no milestone. Evidence shows 43 closed and 15 open issues, and Encyclopedists six closed and one open.
+Counts from GitHub on 2026-10-09. #238 to #249 have no milestone. Evidence shows 43 closed and 21 open issues, and Encyclopedists six closed and one open.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
-| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 43 | 15 | Builds 3 to 9, bug #40, #44 and Build 3 issues #190, #203, #214, #219, #220 and #221 | Open |
+| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 43 | 21 | Builds 3 to 9, bug #40, #44, #68, #69, #72, #93 and Build 3 issues #190, #203, #214, #219, #220, #221, #227 and #235 | Open |
 | [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 6 | 1 | #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
 | [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
