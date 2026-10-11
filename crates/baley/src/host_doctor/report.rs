@@ -8,9 +8,10 @@ use super::prerequisites::{Judged as Prerequisites, Kind, missing_sentence};
 use super::protection::{Judged, NotJudged};
 use super::provider_hosts::Judged as ProviderHosts;
 use super::store_health::{Compatibility, Judged as Store};
-use super::{ArtifactState, Findings, MapFault, server_context};
+use super::{ArtifactState, Findings, MapFault, Stable, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
 use crate::mcp::context::ProjectContext;
+use crate::update::installation::{Active, Occupant};
 
 /// The heading that opens the host section.
 const HEADING: &str = "Claude Code host checks";
@@ -113,6 +114,9 @@ impl Report {
                 stale.path.as_deref().unwrap_or("its recorded path")
             ));
         }
+        if let Some(stable) = &findings.stable {
+            lines.push(stable_line(stable));
+        }
         if let Some((path, gap_found)) = &findings.executable {
             gap = true;
             lines.push(format!(
@@ -191,6 +195,43 @@ fn install_lines(install: &InstallRecord, lines: &mut Vec<String>) -> bool {
         ));
     }
     !install.finished || install.held_back.is_some()
+}
+
+/// The version the stable path links to, which new sessions start. Never a
+/// finding: the executable line raises the code when the path cannot run, and
+/// a running session's version is not read here.
+fn stable_line(stable: &Stable) -> String {
+    let (path, versions) = (stable.path.display(), stable.versions.display());
+    match &stable.active {
+        Ok(Active::Version(version)) => format!(
+            "stable path: {path} links to staged version {version}, the version new Claude Code sessions start"
+        ),
+        Ok(Active::NotManaged(occupant)) => {
+            let occupant = match occupant {
+                Occupant::Nothing => "has nothing at it".to_owned(),
+                Occupant::NotALink => "is a file or folder, not a link".to_owned(),
+                Occupant::LinkOutsideVersions => {
+                    format!("is a link to a file outside {versions}")
+                }
+                Occupant::LinkToNonVersion => {
+                    format!("is a link into {versions} whose folder is not named as a version")
+                }
+                Occupant::LinkToOtherFile => {
+                    format!("is a link into {versions} to a file not named baley")
+                }
+                Occupant::DanglingLink => {
+                    format!("is a link into {versions} whose target is gone")
+                }
+                Occupant::LinkToNonFile => {
+                    format!("is a link into {versions} whose target is not a regular file")
+                }
+            };
+            format!("stable path: {path} {occupant}, so Baley manages no staged version there")
+        }
+        Err(cause) => format!(
+            "stable path: {path} could not be examined: {cause}, so the version it runs is unknown"
+        ),
+    }
 }
 
 /// The review providers whose API host the settings file allows. Never a
@@ -1542,5 +1583,63 @@ mod tests {
             named[0]
         );
         assert_eq!(one.code, 0, "{:?}", one.lines);
+    }
+
+    #[test]
+    fn a_staged_version_taken_from_the_running_binary_or_the_record_is_caught() {
+        use serde_json::json;
+
+        let own = env!("CARGO_PKG_VERSION");
+        let staged_at = |target: &str| {
+            let mut record = installed_record();
+            record["binary_version"] = json!("0.1.5");
+            record["updates"]["staged_version"] = json!("0.1.5");
+            let mut observation =
+                installed_from(record, &crate::install::fixtures::complete_settings());
+            observation.stable = Some(stable_link(target));
+            report_of(&observation)
+        };
+
+        let ours = staged_at("/home/o/.local/lib/crenshawdev/baley/versions/0.2.0/baley");
+        assert_eq!(
+            lines_with(&ours, &[STABLE, "0.2.0"]).len(),
+            1,
+            "{:?}",
+            ours.lines
+        );
+        assert!(lines_with(&ours, &["0.1.5"]).is_empty(), "{:?}", ours.lines);
+        assert!(
+            !line_for(&ours, "stable path").contains(own),
+            "{:?}",
+            ours.lines
+        );
+        assert_eq!(ours.code, 0, "{:?}", ours.lines);
+
+        let elsewhere = staged_at("/opt/baley/versions/0.2.0/baley");
+        let line = line_for(&elsewhere, "stable path");
+        assert!(line.contains(STABLE), "{line}");
+        assert!(!line.contains("0.2.0"), "{line}");
+        assert!(line.contains("manages no staged version"), "{line}");
+        assert_eq!(elsewhere.code, 0, "{:?}", elsewhere.lines);
+    }
+
+    #[test]
+    fn a_stable_path_that_cannot_be_examined_reported_with_a_version_is_caught() {
+        let cause = "Permission denied (os error 13)";
+        let mut observation = installed_observation();
+        observation.stable.as_mut().unwrap().seen = Err(cause.to_owned());
+        let report = report_of(&observation);
+        assert_eq!(
+            lines_with(&report, &[STABLE, cause]).len(),
+            1,
+            "{:?}",
+            report.lines
+        );
+        let line = line_for(&report, "stable path");
+        assert!(line.contains(cause), "{line}");
+        for version in ["0.1.0", env!("CARGO_PKG_VERSION"), "staged version"] {
+            assert!(!line.contains(version), "{version} in {line}");
+        }
+        assert_eq!(report.code, 0, "{:?}", report.lines);
     }
 }

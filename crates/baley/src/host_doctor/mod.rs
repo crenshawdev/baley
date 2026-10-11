@@ -59,6 +59,7 @@ use crate::host_artifacts::installed::{self, Installed};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
 use crate::host_artifacts::stubs;
 use crate::install;
+use crate::update::installation::{self as installation, Active, Layout, StablePath};
 
 /// Why no placement map could be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,11 +163,24 @@ pub struct Mapped {
     pub derived: Option<PlacementMap>,
 }
 
+/// The stable path as a look at it found it, with the layout it is judged
+/// against. No program is started to learn a version.
+#[derive(Debug, Clone)]
+pub struct StableSeen {
+    /// The installation's paths, derived from `HOME`.
+    pub layout: Layout,
+    /// What the look found, or the system's text when it failed.
+    pub seen: Result<StablePath, String>,
+}
+
 /// What was gathered about the host.
 #[derive(Debug, Clone)]
 pub struct Observation {
     /// What was found for the placement map, or why none could be built.
     pub host: Result<Mapped, MapFault>,
+    /// The stable path, or none when `HOME` and `CLAUDE_CONFIG_DIR` could
+    /// not place the installation.
+    pub stable: Option<StableSeen>,
     /// Baley's resolved folders, which the coverage judge protects.
     pub folders: Folders,
     /// The discovered checkout's `baley.toml`, which is write-only too.
@@ -226,6 +240,7 @@ pub fn gather<S: Ledger>(
     });
     Observation {
         host,
+        stable: None,
         folders,
         checkout_file,
         prerequisites: prerequisites::gather(path, os),
@@ -267,6 +282,10 @@ pub fn observe<S: Ledger + Admin + Views>(
         .as_ref()
         .ok()
         .map(|installed| installed.placements.clone());
+    let stable = derived.as_ref().ok().map(|installed| StableSeen {
+        layout: installed.layout.clone(),
+        seen: installation::gather_stable(&installed.layout).map_err(|error| error.to_string()),
+    });
     let mut observation = gather(
         installed_placements(derived, record),
         folders,
@@ -279,6 +298,7 @@ pub fn observe<S: Ledger + Admin + Views>(
         mapped.record = latest;
         mapped.derived = placements;
     }
+    observation.stable = stable;
     observation
 }
 
@@ -408,6 +428,10 @@ pub struct Document {
 pub struct Findings {
     /// Why no map exists, when none could be built.
     pub no_map: Option<MapFault>,
+    /// The version the stable path runs, or why Baley manages none there,
+    /// or the cause when it could not be examined. None when the
+    /// installation could not be placed.
+    pub stable: Option<Stable>,
     /// What the latest install record says about the install, or none when
     /// there is no record.
     pub install: Option<install_record::Judged>,
@@ -439,6 +463,33 @@ pub struct Findings {
     pub provider_hosts: Option<provider_hosts::Judged>,
 }
 
+/// The stable path and what it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stable {
+    /// The stable path.
+    pub path: PathBuf,
+    /// The folder a staged version lives under.
+    pub versions: PathBuf,
+    /// The version it links to, or why Baley manages none there, or the
+    /// system's text when it could not be examined.
+    pub active: Result<Active, String>,
+}
+
+/// Judges the stable path by the rule `baley update` uses: a version only
+/// when the link's stored target is that version's binary under this
+/// installation's own versions folder.
+fn stable(observation: &Observation) -> Option<Stable> {
+    observation.stable.as_ref().map(|seen| Stable {
+        path: seen.layout.stable_path().to_path_buf(),
+        versions: seen.layout.versions_folder().to_path_buf(),
+        active: seen
+            .seen
+            .as_ref()
+            .map(|found| installation::judge_active(&seen.layout, found))
+            .map_err(Clone::clone),
+    })
+}
+
 /// Where an artifact sits in the order the report lists them: the stubs,
 /// then the registration, the hook and the settings.
 fn rank(artifact: &Artifact) -> u8 {
@@ -457,6 +508,7 @@ pub fn judge(observation: &Observation) -> Findings {
         Err(fault) => {
             return Findings {
                 no_map: Some(fault.clone()),
+                stable: stable(observation),
                 install: None,
                 stale_stubs: Vec::new(),
                 artifacts: Vec::new(),
@@ -618,6 +670,7 @@ pub fn judge(observation: &Observation) -> Findings {
 
     Findings {
         no_map: None,
+        stable: stable(observation),
         install,
         stale_stubs,
         artifacts,
@@ -830,6 +883,7 @@ pub(crate) mod fixtures {
     pub(crate) fn unmapped(fault: MapFault) -> Observation {
         Observation {
             host: Err(fault),
+            stable: None,
             folders: folders(),
             checkout_file: None,
             prerequisites: linux_with_both(),
@@ -855,6 +909,7 @@ pub(crate) mod fixtures {
                 record: None,
                 derived: None,
             }),
+            stable: None,
             folders: folders(),
             checkout_file: None,
             prerequisites: linux_with_both(),
@@ -961,8 +1016,23 @@ pub(crate) mod fixtures {
         let mapped = observation.host.as_mut().unwrap();
         mapped.record = Some(record);
         mapped.derived = Some(crate::install::fixtures::installed().placements);
+        observation.stable = Some(stable_link(
+            "/home/o/.local/lib/crenshawdev/baley/versions/0.1.0/baley",
+        ));
         observation.health = user_health(false);
         observation
+    }
+
+    /// The stable path for `HOME` `/home/o` seen as a link whose stored
+    /// target is `target` and leads to a regular file.
+    pub(crate) fn stable_link(target: &str) -> StableSeen {
+        StableSeen {
+            layout: crate::install::fixtures::installed().layout,
+            seen: Ok(StablePath::Link {
+                target: target.into(),
+                followed: installation::Followed::RegularFile,
+            }),
+        }
     }
 
     /// The installed fixture: a complete install whose report has code 0.
