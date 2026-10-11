@@ -97,10 +97,11 @@ LABELS="older base newer"
 CREATED=""
 cleanup() {
   if [ -n "$CREATED" ]; then
+    # Only this run's three registrations go, by path, whether or not the folder is still there. A
+    # repository-wide prune would also drop another worktree whose folder is away for a while.
     for LABEL in $LABELS; do
-      [ -e "$BUILD/$LABEL" ] && git -C "$REPO" worktree remove --force "$BUILD/$LABEL" >/dev/null 2>&1
+      git -C "$REPO" worktree remove --force "$BUILD/$LABEL" >/dev/null 2>&1
     done
-    git -C "$REPO" worktree prune >/dev/null 2>&1
     rm -rf "$BUILD"
   fi
 }
