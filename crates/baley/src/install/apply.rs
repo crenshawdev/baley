@@ -15,19 +15,21 @@ use crate::replace::{self, Failure};
 use super::plan::Plan;
 use super::registration::{self, Attempt, Next, Registered, Step};
 
-/// What applying a plan did: each file write, in plan order, and the
-/// registration step.
+/// What applying a plan did: each file write and each removal, in plan
+/// order, and the registration step.
 pub(crate) struct Applying {
     /// One result per write reached, in plan order.
     pub writes: Vec<Result<(), Failure>>,
+    /// One result per retired stub removal reached, in plan order.
+    pub removals: Vec<Result<(), Failure>>,
     /// What became of the registration.
     pub attempt: Attempt,
 }
 
 /// Applies the file writes in order with default folder modes, stopping at the
 /// first failure. A failed sync is returned too, since the rename already
-/// happened. The registration launches run after every file is written, and
-/// only when every write was reached.
+/// happened. The retired stubs are removed, then the registration launches
+/// run, both only when every write was reached.
 pub(crate) fn run(
     plan: &Plan,
     latest: Option<&Value>,
@@ -39,8 +41,20 @@ pub(crate) fn run(
         && writes
             .iter()
             .all(|result| matches!(result, Ok(()) | Err(Failure::Unsynced { .. })));
+    let removals = if reached {
+        plan.removals
+            .iter()
+            .map(|stub| replace::remove(&stub.path, &stub.sha256))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let attempt = register(plan, reached, latest, registration_file, executable);
-    Applying { writes, attempt }
+    Applying {
+        writes,
+        removals,
+        attempt,
+    }
 }
 
 fn write_files(plan: &Plan) -> Vec<Result<(), Failure>> {
