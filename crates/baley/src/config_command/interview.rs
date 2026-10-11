@@ -21,6 +21,14 @@ mod providers;
     not(test),
     expect(
         dead_code,
+        reason = "the interview runs the steps once the ordered writes are wired"
+    )
+)]
+mod report;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "the interview prints the summary once the ordered writes are wired"
     )
 )]
