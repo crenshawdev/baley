@@ -21,7 +21,11 @@ pub enum LedgerCommand {
     },
     /// Report the health of every project. The checkout's project is checked
     /// against the remote its `git.remote` names, every other one locally.
-    Doctor,
+    Doctor {
+        /// The host whose wiring the host checks judge, Claude Code by default.
+        #[arg(long, value_name = "name", default_value = "claude-code")]
+        host: String,
+    },
     /// Export one project into a new standalone home.
     Export {
         /// Ledger project id.

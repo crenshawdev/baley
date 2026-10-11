@@ -42,7 +42,9 @@ pub fn run(args: InstallArgs) -> ExitCode {
     ))
 }
 
-fn select_host(name: &str) -> Result<Host, Render> {
+/// The host named by `--host`, or the `unknown-host` refusal that install and
+/// the doctor share.
+pub(crate) fn select_host(name: &str) -> Result<Host, Render> {
     Host::parse(name).ok_or_else(|| {
         let supported = Host::ALL.map(Host::name).join(", ");
         Render::refusal(format!(

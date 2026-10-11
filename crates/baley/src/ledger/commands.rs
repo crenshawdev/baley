@@ -38,9 +38,10 @@ fn require_remote(forge: &mut Forge, name: &str) -> Result<(), Render> {
 
 /// Wires one owner command to the core and storage port. The config folder
 /// is where `purge`'s policy step finds the global file; `doctor` also takes
-/// the ledger home.
+/// the ledger home and the host `begin` selected.
 pub(super) fn dispatch(
     command: LedgerCommand,
+    host: Option<Host>,
     store: Arc<SqliteStore>,
     cwd: PathBuf,
     folders: &Folders,
@@ -56,7 +57,9 @@ pub(super) fn dispatch(
         } => command_plan::verify_form(project.as_deref(), local_only, views)
             .map_err(Render::refusal)
             .and_then(|form| verify(&store, &mut forge, config, &cwd, form)),
-        LedgerCommand::Doctor => doctor(&store, &mut forge, folders, &cwd),
+        LedgerCommand::Doctor { .. } => host
+            .ok_or_else(unexpected_plan)
+            .and_then(|host| doctor(&store, &mut forge, folders, &cwd, host)),
         LedgerCommand::Export { project, to } => export(&store, &ProjectId(project), &to),
         LedgerCommand::Purge {
             project,
@@ -123,6 +126,7 @@ fn doctor(
     forge: &mut Forge,
     folders: &Folders,
     cwd: &Path,
+    selected: Host,
 ) -> Result<Render, Render> {
     let config = folders.config.as_path();
     let projects = store
@@ -156,7 +160,14 @@ fn doctor(
         .as_ref()
         .map(|file| file.path.clone());
     let ids: Vec<ProjectId> = projects.iter().map(|(id, _)| id.clone()).collect();
-    let host = host_report(folders.clone(), checkout_file, store, &ids, &health);
+    let host = host_report(
+        folders.clone(),
+        checkout_file,
+        store,
+        &ids,
+        &health,
+        selected,
+    );
     Ok(display::with_host(rendered, &host))
 }
 
@@ -170,11 +181,12 @@ fn host_report(
     store: &SqliteStore,
     projects: &[ProjectId],
     health: &Health,
+    host: Host,
 ) -> host_doctor::Report {
     let env = Environment::read();
     let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
     let derived = installed::resolve(&env, std::env::var_os("CLAUDE_CONFIG_DIR"), &manifest);
-    let record = install_record::read(store, Host::ClaudeCode.name());
+    let record = install_record::read(store, host.name());
     let observation = host_doctor::gather(
         host_doctor::installed_placements(derived, record),
         folders,
