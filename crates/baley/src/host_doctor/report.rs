@@ -6,6 +6,7 @@ use super::guard_records::Judged as GuardRecords;
 use super::install_record::Judged as InstallRecord;
 use super::prerequisites::{Judged as Prerequisites, Kind, missing_sentence};
 use super::protection::{Judged, NotJudged};
+use super::provider_hosts::Judged as ProviderHosts;
 use super::store_health::{Compatibility, Judged as Store};
 use super::{ArtifactState, Findings, MapFault, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
@@ -163,6 +164,9 @@ impl Report {
                 ));
             }
         }
+        if let Some(judged) = &findings.provider_hosts {
+            lines.push(provider_host_line(judged));
+        }
         server_lines(&findings.server, &mut lines);
         gap |= store_lines(&findings.store, &mut lines);
         gap |= guard_record_lines(&findings.guard_records, &mut lines);
@@ -187,6 +191,41 @@ fn install_lines(install: &InstallRecord, lines: &mut Vec<String>) -> bool {
         ));
     }
     !install.finished || install.held_back.is_some()
+}
+
+/// The review providers whose API host the settings file allows. Never a
+/// finding: the owner chose them in the interview.
+fn provider_host_line(judged: &ProviderHosts) -> String {
+    match judged {
+        ProviderHosts::Allowed {
+            settings,
+            providers,
+        } if providers.is_empty() => format!(
+            "provider hosts: sandbox.network.allowedDomains in {} allows no review provider's API host",
+            settings.display()
+        ),
+        ProviderHosts::Allowed {
+            settings,
+            providers,
+        } => {
+            let named: Vec<String> = providers
+                .iter()
+                .map(|provider| format!("{} ({})", provider.name(), provider.api_host()))
+                .collect();
+            format!(
+                "provider hosts: sandbox.network.allowedDomains in {} allows the API hosts of {}",
+                settings.display(),
+                named.join(", ")
+            )
+        }
+        ProviderHosts::Unknown => {
+            "provider hosts: not judged because the settings placement is unknown".to_owned()
+        }
+        ProviderHosts::Unusable => {
+            "provider hosts: not judged because the settings document above could not be used"
+                .to_owned()
+        }
+    }
 }
 
 /// The server's context as the last recorded server call shows it. None of
@@ -1451,5 +1490,57 @@ mod tests {
             assert!(!line.contains("differs"), "{line}");
         }
         assert_eq!(unchanged.code, 0, "{:?}", unchanged.lines);
+    }
+    #[test]
+    fn provider_hosts_added_after_install_read_as_drift_or_left_unlisted_is_caught() {
+        use serde_json::json;
+        use sha2::{Digest, Sha256};
+
+        let installed_digest: String = Sha256::digest(
+            serde_json::to_vec(&crate::install::fixtures::complete_settings()).unwrap(),
+        )
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+        let with_hosts = |hosts: serde_json::Value| {
+            let mut settings = crate::install::fixtures::complete_settings();
+            settings["sandbox"]["network"] = json!({"allowedDomains": hosts});
+            let mut record = installed_record();
+            record["sandbox"]["sha256"] = json!(installed_digest);
+            report_of(&installed_from(record, &settings))
+        };
+
+        let both = with_hosts(json!(["example.com", "api.deepseek.com", "api.openai.com"]));
+        assert_eq!(
+            lines_with(&both, &["api.openai.com"]).len(),
+            1,
+            "{:?}",
+            both.lines
+        );
+        let line = lines_with(&both, &["api.openai.com"])[0];
+        for part in ["openai", "api.deepseek.com", "deepseek"] {
+            assert!(line.contains(part), "{part} missing from {line}");
+        }
+        assert!(
+            line.find("openai").unwrap() < line.find("deepseek").unwrap(),
+            "{line}"
+        );
+        assert!(!line.contains("example.com"), "{line}");
+        assert!(
+            !line_for(&both, "settings").contains("differs"),
+            "{:?}",
+            both.lines
+        );
+        assert_eq!(both.code, 0, "{:?}", both.lines);
+
+        let one = with_hosts(json!(["api.openai.com"]));
+        let named = lines_with(&one, &["api.openai.com", "openai"]);
+        assert_eq!(named.len(), 1, "{:?}", one.lines);
+        assert!(
+            !named[0].contains("deepseek") && !named[0].contains("api.deepseek.com"),
+            "{}",
+            named[0]
+        );
+        assert_eq!(one.code, 0, "{:?}", one.lines);
     }
 }

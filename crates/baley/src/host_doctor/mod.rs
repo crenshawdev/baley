@@ -29,7 +29,8 @@
 //! held the sandbox block back and which recorded stubs are stale. [`drift`]
 //! judges whether the placed hook and settings still hold Baley's entries,
 //! those install renders over the derived placements and those the record
-//! holds.
+//! holds. [`provider_hosts`] lists the review providers whose API host the
+//! settings document allows.
 
 pub mod drift;
 pub mod guard_records;
@@ -37,6 +38,7 @@ pub mod install_record;
 pub mod placed;
 pub mod prerequisites;
 pub mod protection;
+pub mod provider_hosts;
 pub mod report;
 pub mod server_context;
 pub mod store_health;
@@ -432,6 +434,9 @@ pub struct Findings {
     pub store: store_health::Judged,
     /// Whether the guard's per-user records were behind at the start.
     pub guard_records: guard_records::Judged,
+    /// The review providers whose API host the settings document allows, or
+    /// why that was not judged. None when there is no map.
+    pub provider_hosts: Option<provider_hosts::Judged>,
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -463,6 +468,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 server: server_context::judge(&observation.server),
                 store: store_health::judge(&observation.health, &observation.folders),
                 guard_records: guard_records::judge(&observation.health),
+                provider_hosts: None,
             };
         }
     };
@@ -594,6 +600,21 @@ pub fn judge(observation: &Observation) -> Findings {
         .as_ref()
         .map(|record| install_record::stale(record, &shipped))
         .unwrap_or_default();
+    let provider_hosts = match documents
+        .iter()
+        .find(|document| document.artifacts.contains(&Artifact::Settings))
+    {
+        None => provider_hosts::Judged::Unknown,
+        Some(Document {
+            path,
+            content: Content::Object(value),
+            ..
+        }) => provider_hosts::Judged::Allowed {
+            settings: path.clone(),
+            providers: provider_hosts::allowed(value),
+        },
+        Some(_) => provider_hosts::Judged::Unusable,
+    };
 
     Findings {
         no_map: None,
@@ -612,6 +633,7 @@ pub fn judge(observation: &Observation) -> Findings {
             &prerequisites.unsupported(),
         )),
         nine_tools: protection::nine_tools(&mapped.map, &documents),
+        provider_hosts: Some(provider_hosts),
         prerequisites,
         server: server_context::judge(&observation.server),
         store: store_health::judge(&observation.health, &observation.folders),
