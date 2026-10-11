@@ -478,6 +478,7 @@ mod tests {
         let no_socat = prerequisites("linux", &["bwrap"]);
         let plan = plan::judge(&Gathered {
             placements: &installed.placements,
+            claude_folder: &installed.claude_folder,
             folders: &folders(),
             latest: None,
             observations: &observations,

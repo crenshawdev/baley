@@ -4,7 +4,7 @@
 
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::folders::Environment;
 use crate::update::installation::{HomeRefusal, Layout};
@@ -79,10 +79,7 @@ pub fn resolve(
     let stubs = manifest
         .iter()
         .map(|entry| {
-            let path = claude_folder
-                .join("skills")
-                .join(&entry.identity)
-                .join("SKILL.md");
+            let path = stub_path(&claude_folder, &entry.identity);
             (entry.clone(), Placement::At(path))
         })
         .collect();
@@ -104,6 +101,12 @@ pub fn resolve(
         layout,
         placements,
     })
+}
+
+/// Where a stub with `identity` goes under Claude Code's configuration
+/// folder.
+pub fn stub_path(claude_folder: &Path, identity: &str) -> PathBuf {
+    claude_folder.join("skills").join(identity).join("SKILL.md")
 }
 
 #[cfg(test)]

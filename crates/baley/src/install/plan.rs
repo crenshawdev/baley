@@ -4,7 +4,7 @@
 //! evidence when a write or launch cannot finish.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use baley_core::policy::Host;
 use baley_store::StoreError;
@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::folders::Folders;
 use crate::host_artifacts::compose::same_server;
+use crate::host_artifacts::installed::stub_path;
 use crate::host_artifacts::placement::{Artifact, PlacementMap};
 use crate::host_doctor::placed::{ExecutableGap, Fault, FileState};
 use crate::host_doctor::prerequisites::Judged;
@@ -39,6 +40,8 @@ pub struct Observation {
 pub struct Gathered<'a> {
     /// Where every artifact goes, and the stable executable.
     pub placements: &'a PlacementMap,
+    /// Claude Code's configuration folder, which holds the stubs.
+    pub claude_folder: &'a Path,
     /// Baley's data and configuration folders.
     pub folders: &'a Folders,
     /// The latest install record's payload, when there is one.
@@ -89,6 +92,9 @@ pub struct Plan {
     /// Stubs this binary no longer ships whose files still hold the bytes
     /// the record says Baley placed, removed after the writes.
     pub removals: Vec<Retired>,
+    /// Stubs this binary no longer ships whose files could not be read, with
+    /// the cause. They stay recorded, since they may still be Baley's.
+    pub unreadable: Vec<(Retired, String)>,
 }
 
 /// A stub the latest record lists that this binary does not place.
@@ -103,8 +109,14 @@ pub struct Retired {
 }
 
 /// The stubs the latest record lists that this binary does not place, each
-/// at an absolute path that is no placed file's path.
-pub(crate) fn retired(latest: Option<&Value>, placements: &PlacementMap) -> Vec<Retired> {
+/// recorded at exactly the path a stub of its identity takes under
+/// `claude_folder`. Any other recorded path is never touched, so a record
+/// cannot point a removal at a file outside a stub's own folder.
+pub(crate) fn retired(
+    latest: Option<&Value>,
+    placements: &PlacementMap,
+    claude_folder: &Path,
+) -> Vec<Retired> {
     let placed = placements.expected_files();
     let Some(stubs) = latest
         .and_then(|record| record.get("stubs"))
@@ -124,18 +136,38 @@ pub(crate) fn retired(latest: Option<&Value>, placements: &PlacementMap) -> Vec<
             let shipped = placed.iter().any(|file| {
                 file.stub
                     .is_some_and(|entry| entry.identity == retired.identity)
-                    || file.path == retired.path
             });
-            (retired.path.is_absolute() && !shipped).then_some(retired)
+            let mut parts = Path::new(&retired.identity).components();
+            let plain = matches!(
+                (parts.next(), parts.next()),
+                (Some(Component::Normal(_)), None)
+            );
+            let own = retired.path == stub_path(claude_folder, &retired.identity);
+            (plain && own && !shipped).then_some(retired)
         })
         .collect()
 }
 
-/// Whether the file at a retired stub's path is still the one Baley placed:
-/// its bytes have the recorded hash and the path is no link.
-fn removable(retired: &Retired, seen: &Observation) -> bool {
-    !seen.symbolic_link
-        && matches!(&seen.state, FileState::Bytes(bytes) if digest(bytes) == retired.sha256)
+/// What install does with a retired stub's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Retiring {
+    /// The bytes have the recorded hash and the path is no link.
+    Remove,
+    /// The file could not be read, so it may still be Baley's.
+    Keep(String),
+    /// Gone, a link or other bytes: nothing of Baley's is there.
+    Leave,
+}
+
+fn retiring(retired: &Retired, seen: &Observation) -> Retiring {
+    match &seen.state {
+        _ if seen.symbolic_link => Retiring::Leave,
+        FileState::Bytes(bytes) if digest(bytes) == retired.sha256 => Retiring::Remove,
+        FileState::Fault(fault @ Fault::Unreadable(_)) => {
+            Retiring::Keep(format!("the file {fault}"))
+        }
+        _ => Retiring::Leave,
+    }
 }
 
 /// The hook and the registration held back from an empty stable path.
@@ -299,10 +331,15 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
     }
     // A retired stub that is not provably Baley's is the owner's: it is left
     // where it is and refuses nothing.
-    let removals = retired(gathered.latest, placements)
-        .into_iter()
-        .filter(|stub| removable(stub, &observed(&stub.path)))
-        .collect();
+    let mut removals = Vec::new();
+    let mut unreadable = Vec::new();
+    for stub in retired(gathered.latest, placements, gathered.claude_folder) {
+        match retiring(&stub, &observed(&stub.path)) {
+            Retiring::Remove => removals.push(stub),
+            Retiring::Keep(cause) => unreadable.push((stub, cause)),
+            Retiring::Leave => {}
+        }
+    }
     Ok(Plan {
         writes,
         outcomes,
@@ -311,6 +348,7 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         registration_seen: registration::held(&registration_read),
         wiring,
         removals,
+        unreadable,
     })
 }
 
@@ -329,7 +367,7 @@ pub struct Applied {
     /// Whether a remove launch succeeded after that read.
     pub registration_removed: bool,
     /// Each planned removal of a retired stub, in plan order, with what
-    /// became of it.
+    /// became of it, then each retired stub that could not be read.
     pub retired: Vec<(Retired, RetiredOutcome)>,
 }
 
@@ -344,7 +382,8 @@ impl Applied {
 
 /// Interprets write observations in plan order, then the removals and the
 /// registration step. A failed folder sync still placed the bytes or removed
-/// the file, but every failure stops subsequent writes.
+/// the file, but leaves the run partial, and every failure stops subsequent
+/// writes.
 pub(crate) fn applied(
     plan: &Plan,
     results: &[Result<(), Failure>],
@@ -404,7 +443,17 @@ pub(crate) fn applied(
     }
     for (index, stub) in plan.removals.iter().enumerate() {
         let outcome = match removals.get(index) {
-            Some(Ok(()) | Err(Failure::Unsynced { .. })) => RetiredOutcome::Removed,
+            Some(Ok(())) => RetiredOutcome::Removed,
+            // The file is gone, but like an unsynced write the run is partial.
+            Some(Err(Failure::Unsynced { path, cause })) => {
+                applied.failure.get_or_insert_with(|| {
+                    format!(
+                        "{} was removed, but its folder could not be synced, so the removal may not survive a crash: {cause}",
+                        path.display()
+                    )
+                });
+                RetiredOutcome::Removed
+            }
             Some(Err(Failure::Unchanged { path, cause })) => {
                 RetiredOutcome::Failed(format!("not-removable: {}: {cause}", path.display()))
             }
@@ -418,6 +467,11 @@ pub(crate) fn applied(
             )),
         };
         applied.retired.push((stub.clone(), outcome));
+    }
+    for (stub, cause) in &plan.unreadable {
+        applied
+            .retired
+            .push((stub.clone(), RetiredOutcome::Failed(cause.clone())));
     }
     let registration = match &attempt.result {
         Registered::Unchanged => ArtifactOutcome::Unchanged,
@@ -713,6 +767,7 @@ mod tests {
         let judged = |observations: &BTreeMap<PathBuf, Observation>| {
             judge(&Gathered {
                 placements: &installed.placements,
+                claude_folder: &installed.claude_folder,
                 folders: &folders(),
                 latest: None,
                 observations,
@@ -895,6 +950,7 @@ mod tests {
 
             let refusal = judge(&Gathered {
                 placements: &installed.placements,
+                claude_folder: &installed.claude_folder,
                 folders: &folders(),
                 latest: None,
                 observations: &observations,
@@ -921,6 +977,7 @@ mod tests {
     ) -> Gathered<'a> {
         Gathered {
             placements: &installed.placements,
+            claude_folder: &installed.claude_folder,
             folders,
             latest,
             observations,
@@ -1153,6 +1210,7 @@ mod tests {
         let plan_for = |gap: Option<&ExecutableGap>| {
             judge(&Gathered {
                 placements: &installed.placements,
+                claude_folder: &installed.claude_folder,
                 folders: &folders,
                 latest: None,
                 observations: &observations,
@@ -1310,6 +1368,7 @@ mod tests {
         let latest = json!({ "stubs": stubs });
         judge(&Gathered {
             placements: &installed.placements,
+            claude_folder: &installed.claude_folder,
             folders: &folders(),
             latest: Some(&latest),
             observations: &observations,
@@ -1334,27 +1393,94 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_stub_baley_placed_left_on_disk_is_caught() {
+    fn a_retired_stub_baley_placed_not_planned_for_removal_is_caught() {
         let old = old_stub();
         let plan = plan_with(
             json!([recorded(&old)]),
             &[(OLD, file(Some(b"old stub"), false))],
         );
         assert_eq!(plan.removals, [old]);
+        assert!(plan.unreadable.is_empty(), "{:?}", plan.unreadable);
     }
 
     #[test]
     fn an_owner_file_at_a_retired_stub_path_planned_for_removal_is_caught() {
         let old = old_stub();
-        for (case, extra) in [
-            ("other bytes", vec![(OLD, file(Some(b"mine"), false))]),
-            ("a link", vec![(OLD, file(Some(b"old stub"), true))]),
-            ("absent", vec![(OLD, file(None, false))]),
-            ("unobserved", vec![]),
+        for (case, seen) in [
+            ("other bytes", file(Some(b"mine"), false)),
+            ("a link", file(Some(b"old stub"), true)),
+            ("absent", file(None, false)),
         ] {
-            let plan = plan_with(json!([recorded(&old)]), &extra);
+            let plan = plan_with(json!([recorded(&old)]), &[(OLD, seen)]);
             assert!(plan.removals.is_empty(), "{case}: {:?}", plan.removals);
+            assert!(plan.unreadable.is_empty(), "{case}: {:?}", plan.unreadable);
         }
+    }
+
+    #[test]
+    fn a_retired_stub_recorded_outside_its_own_stub_path_planned_for_removal_is_caught() {
+        let bytes = b"old stub";
+        for (case, identity, path) in [
+            ("another file", "bal-old", "/home/o/notes.md"),
+            (
+                "an alias through ..",
+                "bal-old",
+                "/home/o/.claude/skills/bal-help/../bal-old/SKILL.md",
+            ),
+            (
+                "an identity naming a parent",
+                "../bal-old",
+                "/home/o/.claude/skills/../bal-old/SKILL.md",
+            ),
+            (
+                "another Claude folder",
+                "bal-old",
+                "/home/o/other/skills/bal-old/SKILL.md",
+            ),
+        ] {
+            let stub = Retired {
+                identity: identity.into(),
+                path: path.into(),
+                sha256: digest(bytes),
+            };
+            let plan = plan_with(
+                json!([recorded(&stub)]),
+                &[(path, file(Some(bytes), false))],
+            );
+            assert!(plan.removals.is_empty(), "{case}: {:?}", plan.removals);
+            assert!(plan.unreadable.is_empty(), "{case}: {:?}", plan.unreadable);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_retired_stub_dropped_without_a_word_is_caught() {
+        let old = old_stub();
+        let cause = "the file cannot be read: Permission denied (os error 13)";
+        let plan = plan_with(
+            json!([recorded(&old)]),
+            &[(
+                OLD,
+                Observation {
+                    state: FileState::Fault(Fault::Unreadable(
+                        "Permission denied (os error 13)".into(),
+                    )),
+                    symbolic_link: false,
+                },
+            )],
+        );
+        assert!(plan.removals.is_empty(), "{:?}", plan.removals);
+        assert_eq!(plan.unreadable, [(old.clone(), cause.to_owned())]);
+
+        let attempt = Attempt {
+            seen: None,
+            removed: false,
+            result: Registered::Registered,
+        };
+        let written: Vec<Result<(), Failure>> = plan.writes.iter().map(|_| Ok(())).collect();
+        assert_eq!(
+            applied(&plan, &written, &[], &attempt).retired,
+            [(old, RetiredOutcome::Failed(cause.into()))]
+        );
     }
 
     #[test]
@@ -1464,13 +1590,23 @@ mod tests {
             applied(&plan, writes, removals, &attempt).retired
         };
 
+        assert_eq!(applied(&plan, &written, &[Ok(())], &attempt).failure, None);
+        // The file is gone, yet the run is partial, like an unsynced write.
         let unsynced = [Err(Failure::Unsynced {
             path: OLD.into(),
             cause: denied(),
         })];
+        let synced_not = applied(&plan, &written, &unsynced, &attempt);
+        assert_eq!(synced_not.retired, [(old.clone(), RetiredOutcome::Removed)]);
         assert_eq!(
-            outcome(&written, &unsynced),
-            [(old.clone(), RetiredOutcome::Removed)]
+            synced_not.failure.as_deref(),
+            Some(
+                format!(
+                    "{OLD} was removed, but its folder could not be synced, so the removal may not survive a crash: {}",
+                    denied()
+                )
+                .as_str()
+            )
         );
         let unchanged = [Err(Failure::Unchanged {
             path: OLD.into(),

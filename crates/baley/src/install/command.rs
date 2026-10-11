@@ -144,7 +144,11 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
                 .or_insert_with(|| observe(file.path));
         }
     }
-    for stub in plan::retired(latest_payload, &installed.placements) {
+    for stub in plan::retired(
+        latest_payload,
+        &installed.placements,
+        &installed.claude_folder,
+    ) {
         observations
             .entry(stub.path.clone())
             .or_insert_with(|| observe(&stub.path));
@@ -157,6 +161,7 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
         placed::observe_executable(Path::new(installed.placements.executable().as_str()));
     let plan = plan::judge(&plan::Gathered {
         placements: &installed.placements,
+        claude_folder: &installed.claude_folder,
         folders: &folders,
         latest: latest_payload,
         observations: &observations,
