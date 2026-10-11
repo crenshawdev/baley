@@ -23,9 +23,13 @@
 //! Nothing here writes a file, the ledger or Claude Code's settings, and
 //! nothing guesses where an artifact belongs: an artifact whose placement is
 //! unknown is reported as not installed, and that alone never raises the exit
-//! status.
+//! status. The one exception is the hook when a record exists: install
+//! withheld it, which is a gap. [`observe`] reads the record beside the map,
+//! and [`install_record`] judges whether that install finished and whether
+//! it held the sandbox block back.
 
 pub mod guard_records;
+pub mod install_record;
 pub mod placed;
 pub mod prerequisites;
 pub mod protection;
@@ -33,19 +37,22 @@ pub mod report;
 pub mod server_context;
 pub mod store_health;
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use baley_store::{Health, Ledger, ProjectId, StoreError};
+use baley_core::policy::Host;
+use baley_store::{Admin, Health, Ledger, ProjectId, StoreError, Views};
 use serde_json::Value;
 
 pub use report::Report;
 
 use placed::{ExecutableGap, FileState, RegistrationJudgement, StubJudgement};
 
-use crate::folders::Folders;
+use crate::folders::{Environment, Folders};
 use crate::host_artifacts::installed::{self, Installed};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
+use crate::host_artifacts::stubs;
+use crate::install;
 
 /// Why no placement map could be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +145,9 @@ pub struct Mapped {
     pub executable: Option<ExecutableGap>,
     /// Every distinct path of the map's expected files, read once.
     pub reads: Vec<PlacedRead>,
+    /// The latest install record the map was built from, or none when there
+    /// is none or the map was supplied without one.
+    pub record: Option<Value>,
 }
 
 /// What was gathered about the host.
@@ -198,6 +208,7 @@ pub fn gather<S: Ledger>(
             map,
             executable,
             reads,
+            record: None,
         }
     });
     Observation {
@@ -208,6 +219,48 @@ pub fn gather<S: Ledger>(
         server: server_context::gather(stored.store, stored.projects),
         health: stored.health.clone(),
     }
+}
+
+/// The values the host checks take from the process, supplied by the caller.
+pub struct Process<'a> {
+    /// `HOME` and the folder variables, which place the stable path.
+    pub env: &'a Environment,
+    /// `CLAUDE_CONFIG_DIR`, which places Claude Code's files when set.
+    pub claude_config_dir: Option<OsString>,
+    /// `PATH`, searched for the sandbox's programs.
+    pub path: Option<&'a OsStr>,
+    /// The target OS, as `std::env::consts::OS` names it.
+    pub os: &'a str,
+}
+
+/// Gathers the observation the doctor judges for `host`: derives the
+/// installed paths from `process`, reads the host's latest install record,
+/// builds the placement map from both and gathers as [`gather`] does, with
+/// the record kept beside the map. Every read the host checks make starts
+/// here. It owns no rule and has no unit test of its own.
+pub fn observe<S: Ledger + Admin + Views>(
+    process: Process<'_>,
+    folders: Folders,
+    checkout_file: Option<PathBuf>,
+    host: Host,
+    stored: Stored<'_, S>,
+) -> Observation {
+    let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
+    let derived = installed::resolve(process.env, process.claude_config_dir, &manifest);
+    let record = install::record::read(stored.store, host.name());
+    let latest = record.as_ref().ok().cloned().flatten();
+    let mut observation = gather(
+        installed_placements(derived, record),
+        folders,
+        checkout_file,
+        process.path,
+        process.os,
+        stored,
+    );
+    if let Ok(mapped) = &mut observation.host {
+        mapped.record = latest;
+    }
+    observation
 }
 
 /// What the judgement found out about one artifact.
@@ -271,6 +324,11 @@ pub enum ArtifactState {
         /// The entry found.
         found: serde_json::Value,
     },
+    /// The latest install record holds no guard hook, so install placed none.
+    NotPlaced {
+        /// The stable path the hook runs.
+        executable: String,
+    },
 }
 
 impl ArtifactState {
@@ -317,6 +375,9 @@ pub struct Document {
 pub struct Findings {
     /// Why no map exists, when none could be built.
     pub no_map: Option<MapFault>,
+    /// What the latest install record says about the install, or none when
+    /// there is no record.
+    pub install: Option<install_record::Judged>,
     /// Each artifact of the map and what was found, in artifact order.
     pub artifacts: Vec<(Artifact, ArtifactState)>,
     /// What is wrong with the executable, with its path.
@@ -357,6 +418,7 @@ pub fn judge(observation: &Observation) -> Findings {
         Err(fault) => {
             return Findings {
                 no_map: Some(fault.clone()),
+                install: None,
                 artifacts: Vec::new(),
                 executable: None,
                 documents: Vec::new(),
@@ -451,17 +513,24 @@ pub fn judge(observation: &Observation) -> Findings {
         };
         artifacts.push((file.artifact, state));
     }
-    artifacts.extend(
-        mapped
-            .map
-            .not_installed()
-            .into_iter()
-            .map(|artifact| (artifact, ArtifactState::NotInstalled)),
-    );
+    let install = mapped.record.as_ref().map(install_record::judge);
+    // With a record, an unknown hook placement means install withheld it.
+    let withheld = install.as_ref().is_some_and(|install| !install.hook_placed);
+    artifacts.extend(mapped.map.not_installed().into_iter().map(|artifact| {
+        let state = if withheld && artifact == Artifact::Hook {
+            ArtifactState::NotPlaced {
+                executable: mapped.map.executable().as_str().to_owned(),
+            }
+        } else {
+            ArtifactState::NotInstalled
+        };
+        (artifact, state)
+    }));
     artifacts.sort_by_key(|(artifact, _)| rank(artifact));
 
     Findings {
         no_map: None,
+        install,
         artifacts,
         executable: mapped
             .executable
@@ -693,6 +762,7 @@ pub(crate) mod fixtures {
                         state,
                     })
                     .collect(),
+                record: None,
             }),
             folders: folders(),
             checkout_file: None,
@@ -700,6 +770,114 @@ pub(crate) mod fixtures {
             server: server_context::Observed::NoCall,
             health: clean_health(),
         }
+    }
+    /// The stable path for `HOME` `/home/o`.
+    pub(crate) const STABLE: &str = "/home/o/.local/bin/baley";
+
+    /// A complete install record for `HOME` `/home/o`, written by hand in the
+    /// shape of design 0012 section 6's `install.recorded` table, over the
+    /// settings document `install::fixtures::complete_settings` holds.
+    pub(crate) fn installed_record() -> Value {
+        use crate::install::fixtures::{complete_settings, hook_item};
+        let settings = complete_settings();
+        let stubs: Vec<Value> = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "identity": entry.identity,
+                    "path": format!("/home/o/.claude/skills/{}/SKILL.md", entry.identity),
+                    "sha256": entry.digest,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "host": "claude-code",
+            "binary_version": "0.1.0",
+            "binary_path": STABLE,
+            "complete": true,
+            "registered": {
+                "registration": {
+                    "path": REGISTRATION,
+                    "entry": {"command": STABLE, "args": ["serve"]},
+                },
+                "hook": {"path": SETTINGS, "item": hook_item()},
+            },
+            "stubs": stubs,
+            "sandbox": {
+                "settings_path": SETTINGS,
+                "sha256": crate::store::model::digest(&serde_json::to_vec(&settings).unwrap()),
+                "home": HOME,
+                "config": CONFIG,
+                "write_only_files": [
+                    STABLE,
+                    SETTINGS,
+                    REGISTRATION,
+                    HELP,
+                    "/home/o/.claude/skills/bal-capture/SKILL.md",
+                ],
+                "write_only_folders": ["/home/o/.local/lib/crenshawdev/baley/versions"],
+                "permissions_deny": settings["permissions"]["deny"],
+                "deny_read": settings["sandbox"]["filesystem"]["denyRead"],
+                "deny_write": settings["sandbox"]["filesystem"]["denyWrite"],
+                "held_back": null,
+            },
+            "defaults": {},
+            "updates": {"auto": false, "staged_version": null},
+        })
+    }
+
+    /// A host installed for `HOME` `/home/o` as `record` says, its settings
+    /// file holding `settings`: the map `installed_placements` builds, the
+    /// registration file holding Baley's entry, each stub its manifest bytes,
+    /// a runnable executable, both sandbox programs found on Linux and the
+    /// views of `user` current.
+    pub(crate) fn installed_from(record: Value, settings: &Value) -> Observation {
+        let map = installed_placements(
+            Ok(crate::install::fixtures::installed()),
+            Ok(Some(record.clone())),
+        )
+        .unwrap();
+        let registration = serde_json::json!({
+            "mcpServers": {"baley": {"command": STABLE, "args": ["serve"]}},
+        });
+        let stub_reads: Vec<(String, FileState)> = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                (
+                    format!("/home/o/.claude/skills/{}/SKILL.md", entry.identity),
+                    FileState::Bytes(entry.bytes),
+                )
+            })
+            .collect();
+        let mut reads = vec![
+            (
+                SETTINGS,
+                FileState::Bytes(serde_json::to_vec(settings).unwrap()),
+            ),
+            (
+                REGISTRATION,
+                FileState::Bytes(serde_json::to_vec(&registration).unwrap()),
+            ),
+        ];
+        reads.extend(
+            stub_reads
+                .iter()
+                .map(|(path, state)| (path.as_str(), state.clone())),
+        );
+        let mut observation = observed(map, reads);
+        observation.host.as_mut().unwrap().record = Some(record);
+        observation.health = user_health(false);
+        observation
+    }
+
+    /// The installed fixture: a complete install whose report has code 0.
+    pub(crate) fn installed_observation() -> Observation {
+        installed_from(
+            installed_record(),
+            &crate::install::fixtures::complete_settings(),
+        )
     }
 }
 

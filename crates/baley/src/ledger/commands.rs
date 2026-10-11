@@ -13,8 +13,6 @@ use super::{
 use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders};
-use crate::host_artifacts::{installed, stubs};
-use crate::install::record as install_record;
 use crate::{host_doctor, init, policy_step, settings};
 use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, ProjectIdentity, Unavailable};
@@ -171,10 +169,8 @@ fn doctor(
     Ok(display::with_host(rendered, &host))
 }
 
-/// The host section: the stable path and the artifacts the latest install
-/// record shows `baley install` wrote, each reported as not installed when the
-/// record does not show it, and the server's context from the last server
-/// call the ledger holds.
+/// The host section for `host`. Only the process environment is read here;
+/// `host_doctor::observe` gathers the rest.
 fn host_report(
     folders: Folders,
     checkout_file: Option<PathBuf>,
@@ -184,15 +180,18 @@ fn host_report(
     host: Host,
 ) -> host_doctor::Report {
     let env = Environment::read();
-    let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
-    let derived = installed::resolve(&env, std::env::var_os("CLAUDE_CONFIG_DIR"), &manifest);
-    let record = install_record::read(store, host.name());
-    let observation = host_doctor::gather(
-        host_doctor::installed_placements(derived, record),
+    let path = std::env::var_os("PATH");
+    let process = host_doctor::Process {
+        env: &env,
+        claude_config_dir: std::env::var_os("CLAUDE_CONFIG_DIR"),
+        path: path.as_deref(),
+        os: std::env::consts::OS,
+    };
+    let observation = host_doctor::observe(
+        process,
         folders,
         checkout_file,
-        std::env::var_os("PATH").as_deref(),
-        std::env::consts::OS,
+        host,
         host_doctor::Stored {
             store,
             projects,

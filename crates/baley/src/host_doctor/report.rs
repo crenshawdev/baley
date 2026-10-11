@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use super::guard_records::Judged as GuardRecords;
+use super::install_record::Judged as InstallRecord;
 use super::prerequisites::{Judged as Prerequisites, Kind, missing_sentence};
 use super::protection::{Judged, NotJudged};
 use super::store_health::{Compatibility, Judged as Store};
@@ -38,6 +39,9 @@ impl Report {
                     "install record: it could not be read: {cause}, so an installation cannot be told from none"
                 ),
             });
+        }
+        if let Some(install) = &findings.install {
+            gap |= install_lines(install, &mut lines);
         }
         for (artifact, state) in &findings.artifacts {
             gap |= state.is_gap();
@@ -79,6 +83,9 @@ impl Report {
                 ArtifactState::RegistrationDiffers { path, found } => format!(
                     "{artifact}: {} differs from the entry Baley renders (another command, other arguments or environment entries): {found}",
                     path.display()
+                ),
+                ArtifactState::NotPlaced { executable } => format!(
+                    "{artifact}: the latest baley install placed none, and it places the hook only while something runnable is at {executable}; run install.sh, or place the baley binary or a link to it at that path, then run baley install again"
                 ),
             });
         }
@@ -141,6 +148,22 @@ impl Report {
             code: u8::from(gap),
         }
     }
+}
+
+/// The lines on an unfinished install and a held-back sandbox block. Returns
+/// whether there was either, each a gap until install runs again.
+fn install_lines(install: &InstallRecord, lines: &mut Vec<String>) -> bool {
+    if !install.finished {
+        lines.push("install outcome: the latest baley install was partial; run baley install again and fix each gap its receipt names".to_owned());
+    }
+    if let Some(held) = &install.held_back {
+        let settings = held.settings_path.as_deref().unwrap_or("the settings file");
+        lines.push(format!(
+            "sandbox block: the latest baley install held it back from {settings}: {}; baley install writes it when it runs again once the sandbox can run on this machine",
+            held.reason
+        ));
+    }
+    !install.finished || install.held_back.is_some()
 }
 
 /// The server's context as the last recorded server call shows it. None of
@@ -1251,5 +1274,72 @@ mod tests {
         all.health.epoch = baley_store_sqlite::EPOCH + 1;
         let report = report_of(&all);
         assert_eq!(report.code, 1, "{:?}", report.lines);
+    }
+    /// The lines holding every word in `words`.
+    fn lines_with<'r>(report: &'r Report, words: &[&str]) -> Vec<&'r String> {
+        report
+            .lines
+            .iter()
+            .filter(|line| words.iter().all(|word| line.contains(word)))
+            .collect()
+    }
+
+    #[test]
+    fn an_unfinished_install_reported_healthy_is_caught() {
+        use serde_json::{Value, json};
+
+        let settings = crate::install::fixtures::complete_settings();
+        let reason = "socat missing from PATH";
+
+        let mut partial = installed_record();
+        partial["complete"] = json!(false);
+        let report = report_of(&installed_from(partial, &settings));
+        assert_eq!(
+            lines_with(&report, &["partial", "baley install"]).len(),
+            1,
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+
+        let mut held_back = installed_record();
+        held_back["sandbox"]["held_back"] = json!(reason);
+        let report = report_of(&installed_from(held_back, &settings));
+        assert_eq!(
+            lines_with(&report, &[reason, SETTINGS, "baley install"]).len(),
+            1,
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+
+        let mut no_hook = installed_record();
+        no_hook["complete"] = json!(false);
+        no_hook["registered"]["hook"] = Value::Null;
+        let report = report_of(&installed_from(no_hook, &settings));
+        let hook = line_for(&report, "hook");
+        for part in [STABLE, "install.sh", "baley install"] {
+            assert!(hook.contains(part), "{part} missing from {hook}");
+        }
+        assert!(!hook.contains("no placement is known"), "{hook}");
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+
+        let report = report_of(&installed_observation());
+        assert!(
+            lines_with(&report, &["partial"]).is_empty(),
+            "{:?}",
+            report.lines
+        );
+        assert!(
+            lines_with(&report, &[SETTINGS, "baley install"]).is_empty(),
+            "{:?}",
+            report.lines
+        );
+        assert!(
+            !line_for(&report, "hook").contains("install.sh"),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 0, "{:?}", report.lines);
     }
 }
