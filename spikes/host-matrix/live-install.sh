@@ -228,8 +228,14 @@ grep -q '^checkout-status: DIRTY' "$OUT/pins.txt" \
 
 # The prefix every later command and session starts with. Baley's home and config folders, the stable path
 # and the versions folder all derive from the disposable HOME, Claude Code's own lookups and updater stay
-# inside it, and a bare baley resolves to the disposable stable path first.
-PREFIX="env -u BALEY_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME HOME=$DH CLAUDE_CONFIG_DIR=$CC DISABLE_AUTOUPDATER=1 PATH=$DH/.local/bin:$PATH"
+# inside it, and a bare baley resolves to the disposable stable path first. Every value is single-quoted
+# for the shell that pastes it, since PATH can hold a space or a shell character.
+shq() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+PREFIX="env -u BALEY_HOME -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME HOME=$(shq "$DH") CLAUDE_CONFIG_DIR=$(shq "$CC") DISABLE_AUTOUPDATER=1 PATH=$(shq "$DH/.local/bin:$PATH")"
 
 # The observation sheet. Every row has an id that never changes, so the procedure, the sheet and
 # live-install-reads.sh can name it. Marks are pass, fail or unavailable, or observed for a row that
@@ -455,8 +461,8 @@ write_sheet > "$SHEET"
 # mode that asks is set at launch; a part that needs another mode says so in its flags.
 BALEY_TOOLS="mcp__baley__baley_version,mcp__baley__baley_query,mcp__baley__baley_apply"
 launch() {
-  printf '  %s\n    cd %s && %s claude --debug-file %s/debug-%s.log%s\n\n' \
-    "$1" "$2" "$PREFIX" "$OUT" "$1" "$3"
+  printf '  %s\n    cd %s && %s claude --debug-file %s%s\n\n' \
+    "$1" "$(shq "$2")" "$PREFIX" "$(shq "$OUT/debug-$1.log")" "$3"
 }
 print_launches() {
   cat <<TEXT
