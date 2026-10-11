@@ -131,7 +131,7 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 19);
+    assert_eq!(schema.entries().len(), 20);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -697,7 +697,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 19);
+        assert_eq!(policy.settings.len(), 20);
         assert!(
             policy
                 .settings
@@ -1459,7 +1459,7 @@ fn an_update_setting_missing_or_open_to_project_files_is_caught() {
         (source.kind, source.default, source.scope, source.owner),
         (Kind::HttpsAddress, Builtin::Absent, Scope::Global, "0012")
     );
-    assert_eq!(schema.entries().len(), 19);
+    assert_eq!(schema.entries().len(), 20);
 }
 
 #[test]
@@ -1513,4 +1513,103 @@ fn an_update_source_with_a_query_or_fragment_that_swallows_the_platform_path_is_
             Some(Value::HttpsAddress(source.into()))
         );
     }
+}
+
+#[test]
+fn a_reviewer_list_missing_from_the_schema_or_off_its_default_or_scope_is_caught() {
+    let schema = Schema::standard();
+    let reviewers = schema
+        .get("review.reviewers")
+        .expect("review.reviewers is missing");
+    assert_eq!(
+        (
+            reviewers.kind,
+            reviewers.default,
+            reviewers.scope,
+            reviewers.owner
+        ),
+        (
+            Kind::ReviewerList,
+            Builtin::ReviewerList(&["host"]),
+            Scope::Both,
+            "0008"
+        )
+    );
+    let policy = standard(None, None, None).unwrap();
+    let effective = value_of(&policy, "review.reviewers");
+    assert_eq!(
+        effective.value,
+        Some(Value::ReviewerList(vec!["host".into()]))
+    );
+    assert_eq!(effective.source, default_source());
+}
+
+fn reviewer_names(policy: &EffectivePolicy) -> Option<Vec<String>> {
+    match &value_of(policy, "review.reviewers").value {
+        Some(Value::ReviewerList(names)) => Some(names.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_reviewer_list_read_with_an_unknown_reviewer_or_the_wrong_type_is_caught() {
+    let strings = |names: &[&str]| Some(names.iter().map(|n| n.to_string()).collect::<Vec<_>>());
+    for (line, expected) in [
+        (
+            "reviewers = [\"host\", \"openai\", \"deepseek\"]",
+            strings(&["host", "openai", "deepseek"]),
+        ),
+        ("reviewers = []", strings(&[])),
+    ] {
+        let policy = standard(None, Some(&format!("[review]\n{line}\n")), None).unwrap();
+        assert_eq!(reviewer_names(&policy), expected, "{line}");
+        assert_eq!(
+            value_of(&policy, "review.reviewers").source.layer,
+            Layer::Global,
+            "{line}"
+        );
+    }
+    for line in [
+        "reviewers = [\"anthropic\"]",
+        "reviewers = [\"OpenAI\"]",
+        "reviewers = [\"host\", 7]",
+    ] {
+        let refusal = global_fault(&format!("[review]\n{line}\n"));
+        assert_eq!(refusal.code(), "config-unavailable", "{line}");
+        assert!(
+            matches!(
+                refusal.fault,
+                Fault::OutsideGrammar {
+                    kind: Kind::ReviewerList,
+                    line: 2,
+                    ..
+                }
+            ),
+            "{line}: {refusal:?}"
+        );
+        assert!(
+            refusal.to_string().contains("review.reviewers"),
+            "{line}: {refusal}"
+        );
+    }
+    let wrong = global_fault("[review]\nreviewers = \"openai\"\n");
+    assert_eq!(wrong.code(), "config-unavailable");
+    assert!(
+        matches!(
+            wrong.fault,
+            Fault::WrongType {
+                expected: Expected::ReviewerList,
+                found: "string",
+                line: 2,
+                ..
+            }
+        ),
+        "{wrong:?}"
+    );
+    assert!(
+        wrong
+            .to_string()
+            .ends_with("review.reviewers is a string, not a list of host, openai or deepseek"),
+        "{wrong}"
+    );
 }

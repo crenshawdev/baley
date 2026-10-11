@@ -1107,4 +1107,65 @@ mod tests {
             plan.settings.gaps
         );
     }
+
+    #[test]
+    fn owner_provider_hosts_dropped_or_an_acknowledgement_recorded_by_install_is_caught() {
+        let installed = installed();
+        let mut observations = all_absent(&installed);
+        observations.insert(
+            PathBuf::from(SETTINGS),
+            Observation {
+                state: FileState::Bytes(
+                    br#"{"model":"opus","sandbox":{"network":{"allowedDomains":["api.openai.com","example.com"]}}}"#
+                        .to_vec(),
+                ),
+                symbolic_link: false,
+            },
+        );
+        let (folders, prerequisites) = (folders(), linux());
+
+        let plan = judge(&gathered_for(
+            &installed,
+            None,
+            &observations,
+            &prerequisites,
+            &folders,
+        ))
+        .expect("an owner's settings file with provider hosts plans");
+
+        let write = plan
+            .writes
+            .iter()
+            .find(|write| write.path == Path::new(SETTINGS))
+            .expect("the settings file is written");
+        let written: Value = serde_json::from_slice(&write.bytes).unwrap();
+        assert_eq!(written["model"], "opus");
+        assert_eq!(
+            written["sandbox"]["network"],
+            json!({"allowedDomains": ["api.openai.com", "example.com"]})
+        );
+
+        // The record install builds for that plan holds no provider or
+        // acknowledgement.
+        let attempt = Attempt {
+            seen: None,
+            removed: false,
+            result: Registered::Registered,
+        };
+        let results: Vec<Result<(), Failure>> = plan.writes.iter().map(|_| Ok(())).collect();
+        let applied = applied(&plan, &results, &attempt);
+        let facts = facts(
+            "0.2.0",
+            &installed.placements,
+            None,
+            &plan.settings,
+            &applied,
+            &Ok(true),
+            updates(),
+        );
+        let recorded = event::recorded_event(&facts);
+        assert_eq!(recorded.stream.0, "install");
+        assert_eq!(recorded.type_name, "install.recorded");
+        assert_eq!(recorded.payload["defaults"], json!({}));
+    }
 }

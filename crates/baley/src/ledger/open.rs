@@ -14,15 +14,17 @@ use baley_store_sqlite::Options;
 
 use crate::install::event::register_install_events;
 use crate::install::view::InstallProjector;
+use crate::providers::event::register_provider_events;
 use crate::update::events::register_update_events;
 
 /// Registers exactly the anchor types, `project.initialized`, the four
 /// `models.*` types, `policy.effective`, `checkout.seen`, `capture.recorded`,
 /// `guard.answered`, `guard.policy_recorded`, `install.recorded`,
-/// `update.checked` and `update.failed` understood by the CLI, and declares
-/// view set version 8: `capture checkout claim_scope guard guard_policy
-/// install model_catalog policy request`. The install view holds only install
-/// records. Update outcomes are read from their stream and have no projector.
+/// `update.checked`, `update.failed` and `providers.acknowledged` understood by
+/// the CLI, and declares view set version 8: `capture checkout claim_scope
+/// guard guard_policy install model_catalog policy request`. The install view
+/// holds only install records. Update outcomes and provider acknowledgements
+/// are read from their streams and have no projector.
 /// A project brought to view set 8 is read-only for older binaries.
 /// The startup `quick_check` is off for command-line callers.
 pub(crate) fn options() -> Options {
@@ -36,6 +38,7 @@ pub(crate) fn options() -> Options {
     register_guard_events(&mut registry).expect("unique guard types");
     register_install_events(&mut registry).expect("unique install types");
     register_update_events(&mut registry).expect("unique update types");
+    register_provider_events(&mut registry).expect("unique provider types");
     Options {
         schema: Box::new(registry),
         projectors: vec![
@@ -505,6 +508,46 @@ pub(crate) mod tests {
             );
         }
     }
+
+    // The acknowledgement stays on its stream, outside every view, so the view
+    // set does not rise and an older binary keeps writing `user`.
+    #[test]
+    fn the_acknowledgement_event_left_unregistered_or_given_a_view_is_caught() {
+        use crate::providers::event::{PROVIDERS_ACKNOWLEDGED, PROVIDERS_ACKNOWLEDGED_VERSION};
+
+        for opened in [
+            options(),
+            server_options(),
+            guard_options(Duration::from_millis(1_500)),
+        ] {
+            assert!(
+                opened
+                    .schema
+                    .reads(PROVIDERS_ACKNOWLEDGED, PROVIDERS_ACKNOWLEDGED_VERSION)
+            );
+            assert!(
+                !opened
+                    .schema
+                    .reads(PROVIDERS_ACKNOWLEDGED, PROVIDERS_ACKNOWLEDGED_VERSION + 1)
+            );
+            assert_eq!(opened.view_set_version, NonZeroU32::new(8).unwrap());
+            let mut names = view_names(&opened);
+            names.sort();
+            assert_eq!(
+                names,
+                [
+                    "capture",
+                    "checkout",
+                    "guard",
+                    "guard_policy",
+                    "install",
+                    "model_catalog",
+                    "policy"
+                ]
+            );
+        }
+    }
+
     /// One capture in `project`, recorded as the capture command does.
     fn record_capture(
         store: &baley_store_sqlite::SqliteStore,

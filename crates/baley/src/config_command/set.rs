@@ -11,7 +11,7 @@ use baley_core::catalog::{
     Catalog, MODEL_CATALOG_VIEW, USER_PROJECT, accepted_names, catalog_key, state_key,
 };
 use baley_core::policy::config_command::{
-    Place, VersionSource, changed_pairs, choose_outcome, collapse_repeats, judge_models,
+    Place, TypedPair, VersionSource, changed_pairs, choose_outcome, collapse_repeats, judge_models,
     judge_pairs, needs_catalog, render_file, render_set,
 };
 use baley_core::policy::recorded::{
@@ -23,7 +23,7 @@ use baley_core::policy::{
 };
 use baley_store::{Admin, Ledger, ProjectId, RequestId, StoreError, Views};
 
-use crate::checkout::{Site, gather_and_admit};
+use crate::checkout::{EntryError, EntryRefusal, Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{self, Environment, Folders, Platform};
 use crate::ledger::clock::SystemClock;
@@ -31,6 +31,7 @@ use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
 use crate::policy_step::{self, Reads};
+use crate::providers::record;
 use crate::{init, models, replace, settings};
 
 /// Writes `pairs` into the file `layer` names and returns what the command
@@ -62,6 +63,103 @@ fn refusal(text: impl ToString) -> Render {
     Render::refusal(text.to_string())
 }
 
+/// What a reviewer-list write did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListWritten {
+    /// The SHA-256 of the bytes written, which the settings step binds to when
+    /// it writes the same file.
+    pub(crate) digest: String,
+    /// The policy version the step recorded, when the write ran in a project in
+    /// this machine's ledger.
+    pub(crate) version: Option<u64>,
+}
+
+/// Writes one top-level `review.reviewers` list into the global file, which the
+/// interview showed with `expected`'s digest, and runs the policy step when the
+/// working directory is in a project the ledger lists. It reuses `config set`'s
+/// judgements and file write, but never goes through `judge_pairs`, so
+/// `list-not-settable` does not apply to it.
+pub(crate) fn apply_list(pair: &TypedPair, expected: &Expected) -> Result<ListWritten, Render> {
+    let folders = Folders::resolve(Platform::current(), &Environment::read()).map_err(refusal)?;
+    let found = found_project()?;
+    let global_path = settings::global_path(&folders);
+    let (project, reads) = gather_reads(found, &global_path, &folders.config);
+    let prepared = prepare(
+        FileLayer::Global,
+        &global_path,
+        project.as_ref(),
+        &reads,
+        Schema::standard(),
+    )
+    .map_err(refusal)?;
+
+    // The store opens before the write, so an unsafe ledger refuses while the
+    // file is still as it was.
+    let at = SystemClock::now();
+    let mut ledgered = None;
+    if let Some(project) = &prepared.project {
+        let opened =
+            open::store(&folders.home, &at, open::options()).map_err(|e| record::failure(&e))?;
+        if in_ledger(&opened, &project.id).map_err(|e| record::failure(&e))? {
+            ledgered = Some((opened, project));
+        }
+    }
+    let digest = replace_list(&prepared, expected, pair, &folders.config)?;
+    let version = match &ledgered {
+        Some((store, project)) => {
+            // A failure from here on leaves the file written, so it says so
+            // after its own code line.
+            let step = || -> Result<u64, Render> {
+                let reads = regather(&folders.config, project).map_err(refusal)?;
+                let (policy, recorded) = build_policy(project, &reads)?;
+                admit_checkout(store, project, &policy, &recorded, &at).map_err(
+                    |error| match error.refusal() {
+                        EntryRefusal::Store(error) => record::failure(error),
+                        _ => crate::ledger::display::entry_error(&error, &project.id),
+                    },
+                )?;
+                record_version(store, project, &recorded, new_request_id(), &at)
+                    .map_err(|error| record::failure(&error))
+            };
+            Some(step().map_err(|mut render| {
+                render.lines.push(format!(
+                    "wrote {}, and the change stands",
+                    prepared.target.display()
+                ));
+                render
+            })?)
+        }
+        None => None,
+    };
+    Ok(ListWritten { digest, version })
+}
+
+/// Replaces the global file with `pair` written into it, given what the
+/// interview showed. The file is refused when it is not the one shown or is a
+/// link, every other key is kept, and a missing config folder is created
+/// private. Returns the SHA-256 of the bytes written. It takes its paths and
+/// reads as values, so a test runs it in a folder of its own.
+fn replace_list(
+    prepared: &Prepared,
+    expected: &Expected,
+    pair: &TypedPair,
+    config_folder: &Path,
+) -> Result<String, Render> {
+    let digest = prepared.base.as_ref().map(|file| file.digest.as_str());
+    check_expected(expected, &prepared.target, digest)?;
+    refuse_link(&prepared.target).map_err(refusal)?;
+    let bytes = render_file(
+        Schema::standard(),
+        FileLayer::Global,
+        prepared.base.as_ref(),
+        std::slice::from_ref(pair),
+    )
+    .map_err(refusal)?;
+    write_file(&prepared.target, &bytes, digest, Some(config_folder))
+        .map_err(|failure| render_failure(&failure))?;
+    Ok(settings::file(&prepared.target, bytes).digest)
+}
+
 fn attempt(
     layer: FileLayer,
     host: Option<Host>,
@@ -69,14 +167,7 @@ fn attempt(
     expected: Option<&Expected>,
 ) -> Result<Render, Render> {
     let folders = Folders::resolve(Platform::current(), &Environment::read()).map_err(refusal)?;
-    let unavailable =
-        |error: io::Error| display::store_error(&StoreError::Unavailable(error.to_string()), None);
-    let cwd = std::env::current_dir().map_err(unavailable)?;
-    let ancestors = discovery::ancestors(&cwd).map_err(unavailable)?;
-    let found = match discovery::discover(&ancestors) {
-        Discovery::Managed { folder, root } => Some((folder, root)),
-        Discovery::Unmanaged { .. } | Discovery::Outside => None,
-    };
+    let found = found_project()?;
 
     check_project_expected(layer, found.is_some(), expected)?;
     let schema = Schema::standard();
@@ -87,26 +178,7 @@ fn attempt(
     let typed = judge_pairs(schema, layer, found.is_some(), host, &named).map_err(refusal)?;
 
     let global_path = settings::global_path(&folders);
-    let (project, reads) = match found {
-        Some((folder, root)) => {
-            let working = settings::read(&folder.join(PROJECT_FILE));
-            let head = working.as_ref().ok().and_then(Option::as_ref);
-            let reads =
-                policy_step::gather(&folders.config, &root, head, &mut crate::process::System);
-            (
-                Some(ProjectSeen {
-                    folder,
-                    root,
-                    working,
-                }),
-                reads,
-            )
-        }
-        None => {
-            let global = settings::read(&global_path);
-            (None, Reads { global, head: None })
-        }
-    };
+    let (project, reads) = gather_reads(found, &global_path, &folders.config);
     let prepared =
         prepare(layer, &global_path, project.as_ref(), &reads, schema).map_err(refusal)?;
     if let Some(expected) = expected {
@@ -177,21 +249,8 @@ fn attempt(
                 let (policy, recorded) = build_policy(project, &reads)?;
                 // Checkout admission runs only here, where the set runs the
                 // policy step, so it sits inside the note's closure.
-                let site = Site {
-                    root: &project.root,
-                    policy: &policy,
-                    path: &recorded.checkout,
-                };
-                gather_and_admit(
-                    store,
-                    &ProjectId(project.id.clone()),
-                    &site,
-                    &mut crate::process::System,
-                    new_request_id(),
-                    &at,
-                    None,
-                )
-                .map_err(|error| crate::ledger::display::entry_error(&error, &project.id))?;
+                admit_checkout(store, project, &policy, &recorded, &at)
+                    .map_err(|error| crate::ledger::display::entry_error(&error, &project.id))?;
                 record_policy(store, project, &recorded, new_request_id(), &at)
             };
             step().map_err(|mut render| {
@@ -212,6 +271,48 @@ fn attempt(
         code: 0,
         error: false,
     })
+}
+
+/// The repository root and the folder holding `baley.toml` for the project the
+/// working directory is in, or none outside a managed project.
+fn found_project() -> Result<Option<(PathBuf, PathBuf)>, Render> {
+    let unavailable =
+        |error: io::Error| display::store_error(&StoreError::Unavailable(error.to_string()), None);
+    let cwd = std::env::current_dir().map_err(unavailable)?;
+    let ancestors = discovery::ancestors(&cwd).map_err(unavailable)?;
+    Ok(match discovery::discover(&ancestors) {
+        Discovery::Managed { folder, root } => Some((folder, root)),
+        Discovery::Unmanaged { .. } | Discovery::Outside => None,
+    })
+}
+
+/// Reads the settings files a write judges: in a project the working-tree
+/// project file, the global file and HEAD's copy, and outside one the global
+/// file alone.
+fn gather_reads(
+    found: Option<(PathBuf, PathBuf)>,
+    global_path: &Path,
+    config: &Path,
+) -> (Option<ProjectSeen>, Reads) {
+    match found {
+        Some((folder, root)) => {
+            let working = settings::read(&folder.join(PROJECT_FILE));
+            let head = working.as_ref().ok().and_then(Option::as_ref);
+            let reads = policy_step::gather(config, &root, head, &mut crate::process::System);
+            (
+                Some(ProjectSeen {
+                    folder,
+                    root,
+                    working,
+                }),
+                reads,
+            )
+        }
+        None => {
+            let global = settings::read(global_path);
+            (None, Reads { global, head: None })
+        }
+    }
 }
 
 /// A vanished project after the interview began is a conflict, not a new project.
@@ -331,6 +432,31 @@ fn build_policy(
     Ok((policy, recorded))
 }
 
+/// Admits the project's checkout, built at the project's root by
+/// `build_policy`. It runs before the policy step, where a write runs one.
+fn admit_checkout(
+    store: &(impl Ledger + Views),
+    project: &Project,
+    policy: &EffectivePolicy,
+    recorded: &RecordedPolicy,
+    at: &str,
+) -> Result<(), EntryError> {
+    let site = Site {
+        root: &project.root,
+        policy,
+        path: &recorded.checkout,
+    };
+    gather_and_admit(
+        store,
+        &ProjectId(project.id.clone()),
+        &site,
+        &mut crate::process::System,
+        new_request_id(),
+        at,
+        None,
+    )
+}
+
 /// Runs the policy step for `recorded`, built at the project's root by
 /// `build_policy`. Returns the version in force.
 fn record_policy(
@@ -340,6 +466,18 @@ fn record_policy(
     request_id: RequestId,
     at: &str,
 ) -> Result<u64, Render> {
+    record_version(store, project, recorded, request_id, at)
+        .map_err(|error| display::store_error(&error, Some(&project.id)))
+}
+
+/// The policy step as the store reports it, so a caller words its own failure.
+fn record_version(
+    store: &(impl Admin + Views + Ledger),
+    project: &Project,
+    recorded: &RecordedPolicy,
+    request_id: RequestId,
+    at: &str,
+) -> Result<u64, StoreError> {
     policy_step::step(
         store,
         &ProjectId(project.id.clone()),
@@ -348,7 +486,6 @@ fn record_policy(
         at,
         None,
     )
-    .map_err(|error| display::store_error(&error, Some(&project.id)))
 }
 
 /// The project the working directory is in, with its project file as read.
@@ -954,5 +1091,146 @@ mod tests {
         let render = render_failure(&unchanged);
         assert_eq!((render.code, render.error), (3, true));
         assert!(render.lines[0].contains("disk full"), "{:?}", render.lines);
+    }
+    /// The global file in `dir` as `prepare` judges it outside a project, and
+    /// what the interview showed of it.
+    fn global_in(dir: &Path, text: Option<&str>) -> (Prepared, Expected) {
+        let path = dir.join("config.toml");
+        if let Some(text) = text {
+            std::fs::write(&path, text).unwrap();
+        }
+        let reads = Reads {
+            global: settings::read(&path),
+            head: None,
+        };
+        let prepared = prepare(FileLayer::Global, &path, None, &reads, Schema::standard()).unwrap();
+        let shown = Expected {
+            path,
+            digest: prepared.base.as_ref().map(|file| file.digest.clone()),
+        };
+        (prepared, shown)
+    }
+
+    fn reviewer_list(names: &[&str]) -> TypedPair {
+        TypedPair {
+            name: "review.reviewers".to_owned(),
+            host: None,
+            value: baley_core::policy::Value::ReviewerList(
+                names.iter().map(|name| (*name).to_owned()).collect(),
+            ),
+        }
+    }
+
+    const OWNER_FILE: &str = "escalate_on_failure = true\nextra = 1\n\n[updates]\nauto = true\n\n[review]\nreviewers = [\"host\"]\nnote = \"kept\"\n";
+
+    #[test]
+    fn a_reviewer_list_write_that_loses_another_setting_or_misreports_its_digest_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let (prepared, shown) = global_in(dir.path(), Some(OWNER_FILE));
+
+        let digest = replace_list(
+            &prepared,
+            &shown,
+            &reviewer_list(&["host", "openai"]),
+            dir.path(),
+        )
+        .unwrap();
+
+        let bytes = std::fs::read(&shown.path).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        for kept in [
+            "escalate_on_failure = true",
+            "extra = 1",
+            "auto = true",
+            "note = \"kept\"",
+        ] {
+            assert!(text.contains(kept), "{kept} lost from {text}");
+        }
+        let written = settings::read(&shown.path).unwrap().unwrap();
+        let layer = parse_layer(&written, FileLayer::Global, Schema::standard()).unwrap();
+        let listed: Vec<_> = layer
+            .values
+            .iter()
+            .filter(|value| value.name == "review.reviewers")
+            .map(|value| value.value.clone())
+            .collect();
+        assert_eq!(
+            listed,
+            [baley_core::policy::Value::ReviewerList(vec![
+                "host".to_owned(),
+                "openai".to_owned()
+            ])]
+        );
+        assert_eq!(digest, crate::providers::fixtures::sha256_hex(&text));
+    }
+
+    #[test]
+    fn a_reviewer_list_written_over_a_global_file_changed_since_it_was_shown_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let (prepared, shown) = global_in(dir.path(), Some(OWNER_FILE));
+        let other_bytes = Expected {
+            path: shown.path.clone(),
+            digest: Some(settings::file(&shown.path, b"other = 1\n".to_vec()).digest),
+        };
+        let was_absent = Expected {
+            path: shown.path.clone(),
+            digest: None,
+        };
+
+        for (case, shown) in [("other bytes", other_bytes), ("absent", was_absent)] {
+            let refused = replace_list(
+                &prepared,
+                &shown,
+                &reviewer_list(&["host", "openai"]),
+                dir.path(),
+            )
+            .unwrap_err();
+
+            assert_eq!(refused.code, 2, "{case}");
+            assert!(
+                refused.lines[0].starts_with("config-conflict: "),
+                "{case}: {refused:?}"
+            );
+            assert!(
+                refused.lines[0].contains("changed since it was shown; run the interview again"),
+                "{case}: {refused:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&prepared.target).unwrap(),
+                OWNER_FILE
+            );
+        }
+    }
+
+    #[test]
+    fn a_reviewer_list_written_through_a_linked_global_file_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.toml");
+        std::fs::write(&real, OWNER_FILE).unwrap();
+        symlink(&real, dir.path().join("config.toml")).unwrap();
+        let (prepared, shown) = global_in(dir.path(), None);
+
+        let refused = replace_list(
+            &prepared,
+            &shown,
+            &reviewer_list(&["host", "openai"]),
+            dir.path(),
+        )
+        .unwrap_err();
+
+        assert_eq!(refused.code, 2);
+        assert!(
+            refused.lines[0].starts_with("config-conflict: "),
+            "{refused:?}"
+        );
+        assert!(refused.lines[0].contains("config.toml"), "{refused:?}");
+        assert!(refused.lines[0].contains("symbolic link"), "{refused:?}");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), OWNER_FILE);
+        assert!(
+            std::fs::symlink_metadata(dir.path().join("config.toml"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }

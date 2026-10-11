@@ -74,7 +74,7 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->2
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->2
-    2-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
+    2-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs.<br />Adds the chosen providers'<br />API hosts to the sandbox<br />allow list with baley config<br />interview</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
     14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
     2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
@@ -85,7 +85,7 @@ graph LR
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs. The session sends review and model-list requests to providers. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
+*Figure 1. System context. The host reaches Baley two ways: over MCP from its session, and through its pre-tool hook before each tool call runs. `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs. `baley config interview` adds the chosen providers' API hosts to the same settings file. The session sends review and model-list requests to providers. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 | Actor | What it is | Its part |
 |---|---|---|
@@ -190,10 +190,10 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->3
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->3
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->3
-    3-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
+    3-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs.<br />Adds the chosen providers'<br />API hosts to the sandbox<br />allow list with baley config<br />interview</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
     14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
-    3-. "<div>Reads, and writes a file<br />whole for config set</div><div style='font-size: 70%'></div>" .->13
+    3-. "<div>Reads, and writes a file<br />whole for config set and for<br />the interview's reviewer list</div><div style='font-size: 70%'></div>" .->13
     3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
     3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
     3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
@@ -206,7 +206,7 @@ graph LR
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus the detached updater. The updater opens the same per-user store through the store port to claim and record at most one check per UTC day per installation. Provider calls and credentials stay with the host session. Manual `baley update` waits for its downloads and receipt in the foreground; only checks started by `baley serve` when `updates.auto` is on run in the detached updater. Both update paths are built and use the binary's HTTP client. T14 and T17 use unsigned development artifacts only; #14 supplies signed checksum manifests and release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)). `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs.*
+*Figure 3. Containers: the Baley server, one process per session over MCP and one per tool call through the pre-tool hook, with the ledger and the settings files, plus the detached updater. The binary writes Baley's global settings file whole for `config set` and for the interview's reviewer list. The updater opens the same per-user store through the store port to claim and record at most one check per UTC day per installation. Provider calls and credentials stay with the host session. Manual `baley update` waits for its downloads and receipt in the foreground; only checks started by `baley serve` when `updates.auto` is on run in the detached updater. Both update paths are built and use the binary's HTTP client. T14 and T17 use unsigned development artifacts only; #14 supplies signed checksum manifests and release verification. The guard hook records its answers in the per-user ledger ([0010](0010-guard.md)). `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs. `baley config interview` adds the chosen providers' API hosts to the same settings file.*
 
 <!-- c4:components -->
 ```mermaid
@@ -262,14 +262,14 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->4
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->4
-    4-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
+    4-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs.<br />Adds the chosen providers'<br />API hosts to the sandbox<br />allow list with baley config<br />interview</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
     4-. "<div>Asks what may happen next</div><div style='font-size: 70%'></div>" .->5
     5-. "<div>Applies the area's rules</div><div style='font-size: 70%'></div>" .->6
     6-. "<div>Requests work orders</div><div style='font-size: 70%'></div>" .->7
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
-    4-. "<div>Writes a settings file whole,<br />for config set</div><div style='font-size: 70%'></div>" .->13
+    4-. "<div>Writes a settings file whole,<br />for config set and for the<br />interview's reviewer list</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->9
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->10
     4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8
@@ -288,7 +288,7 @@ graph LR
 ```
 <!-- /c4:components -->
 
-*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts the detached updater at `baley serve` startup only when `updates.auto` is on, without waiting for the child or the network. The updater opens the same per-user ledger through the store port to claim and record at most one check per UTC day per installation. The host interface also runs manual `baley update` in the foreground, waiting for the release source and its receipt. Both update paths are built for unsigned development artifacts only until #14 supplies signed checksum manifests and release verification. Figure 3 shows the updater's download path. The host interface also runs `baley install`, which writes the host's wiring, seeds the catalog and records `install.recorded` in the per-user ledger.*
+*Figure 4. Components inside the Baley server, the binary each session starts over stdio and the pre-tool hook starts for each tool call. The model catalog reads imported lists and has no provider connection or key reader. The host interface starts the detached updater at `baley serve` startup only when `updates.auto` is on, without waiting for the child or the network. The updater opens the same per-user ledger through the store port to claim and record at most one check per UTC day per installation. The host interface also runs manual `baley update` in the foreground, waiting for the release source and its receipt. Both update paths are built for unsigned development artifacts only until #14 supplies signed checksum manifests and release verification. Figure 3 shows the updater's download path. The host interface also runs `baley install`, which writes the host's wiring, seeds the catalog and records `install.recorded` in the per-user ledger. The interview adds the chosen providers' API hosts to Claude Code's settings file, and writes the global reviewer list whole, as `config set` writes a settings file.*
 
 | Component | Responsibility |
 |---|---|

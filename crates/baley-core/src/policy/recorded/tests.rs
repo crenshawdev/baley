@@ -628,3 +628,14 @@ fn the_branch_list_recorded_as_a_string_or_dropped_is_caught() {
         json!([])
     );
 }
+
+#[test]
+fn a_reviewer_list_left_out_of_the_recorded_policy_is_caught() {
+    let merged = effective_policy(Schema::standard(), None, None, None).expect("no files");
+    let payload = payload(&merged, 1);
+    assert_eq!(payload["values"]["review.reviewers"], json!(["host"]));
+    assert_eq!(
+        payload["sources"]["review.reviewers"],
+        json!({"layer": "default"})
+    );
+}

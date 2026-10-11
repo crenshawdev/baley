@@ -90,11 +90,20 @@ impl fmt::Display for SetRefusal {
             SetRefusal::UnknownSetting { name } => {
                 write!(f, "{} is not a setting Baley reads", name.escape_debug())
             }
-            SetRefusal::ListNotSettable { name } => write!(
-                f,
-                "{} is a list, and config set does not write lists; edit the list in baley.toml",
-                name.escape_debug()
-            ),
+            SetRefusal::ListNotSettable { name } => {
+                // The reviewer list lives in the global file too, and the
+                // interview is how an owner chooses its providers.
+                let advice = if name == "review.reviewers" {
+                    "baley config interview chooses the outside providers, and the list can be edited by hand in config.toml or baley.toml"
+                } else {
+                    "edit the list in baley.toml"
+                };
+                write!(
+                    f,
+                    "{} is a list, and config set does not write lists; {advice}",
+                    name.escape_debug()
+                )
+            }
             SetRefusal::WrongLayer { name, scope, layer } => {
                 let (scope, file, flag) = match (scope, layer) {
                     (Scope::Project, _) => ("project", "global", "--project"),
@@ -125,6 +134,7 @@ impl fmt::Display for SetRefusal {
                         format!("one of {}", names.join(", "))
                     }
                     Kind::BranchList => "a list of branch names".to_owned(),
+                    Kind::ReviewerList => "a list of host, openai or deepseek".to_owned(),
                     Kind::HttpsAddress => {
                         "an https:// address with no spaces, query or fragment".to_owned()
                     }
@@ -188,7 +198,7 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
         Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
         // A list is edited in `baley.toml`, so no command-line text is one.
-        Kind::BranchList => None,
+        Kind::BranchList | Kind::ReviewerList => None,
         Kind::HttpsAddress => is_https_address(text).then(|| Value::HttpsAddress(text.to_owned())),
     }
 }
@@ -200,7 +210,8 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
 /// the earliest check any pair fails, naming the first pair that fails it:
 /// `not-a-project`, `unknown-setting`, `list-not-settable`, `wrong-layer`, then
 /// `invalid-value`. A list is refused before its layer is judged, so both files
-/// get the same answer, to edit `baley.toml`.
+/// get the same answer: to edit the list by hand, and for the reviewer list to
+/// run the interview.
 /// A host comes only from `host`, so a name written with a `host.<name>.`
 /// prefix is unknown. A setting given twice comes back twice, so each value
 /// given can still be checked against the catalog.
@@ -223,7 +234,7 @@ pub fn judge_pairs(
         entries.push(entry);
     }
     for ((name, _), entry) in pairs.iter().zip(&entries) {
-        if entry.kind == Kind::BranchList {
+        if matches!(entry.kind, Kind::BranchList | Kind::ReviewerList) {
             return Err(SetRefusal::ListNotSettable {
                 name: (*name).to_owned(),
             });

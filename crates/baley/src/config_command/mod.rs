@@ -1,13 +1,15 @@
 //! `baley config`: the owner's settings commands (design 0003 section 5).
 //! `set` changes a settings file, `show` reports every setting and `interview`
-//! asks for the model and effort of each role in the terminal. The judges
-//! live in `baley_core::policy::config_command`; the files here gather what
-//! they judge and print what they return.
+//! asks for the model and effort of each role and for the outside review
+//! providers in the terminal. The judges live in
+//! `baley_core::policy::config_command`; the files here gather what they
+//! judge and print what they return.
 //!
 //! The module is not named `config`, which the inherited engine holds in
 //! `lib.rs` and `main.rs` until Build 9.
 
 mod interview;
+mod reviewers;
 mod set;
 mod show;
 
@@ -31,7 +33,7 @@ enum ConfigCommand {
     Set(SetArgs),
     /// Show every setting with its layer, its diagnostics and where it was set.
     Show(ShowArgs),
-    /// Ask for each role's model and effort and for `escalate_on_failure`, then write the answers.
+    /// Ask for each role's model and effort, for `escalate_on_failure` and for the outside review providers, then write the answers.
     Interview(InterviewArgs),
 }
 

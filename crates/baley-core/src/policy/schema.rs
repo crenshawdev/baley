@@ -179,11 +179,18 @@ pub enum Kind {
     OnProtected,
     /// A list of branch names, possibly empty. Each is a non-blank string.
     BranchList,
+    /// A list of reviewer names, possibly empty. Each is exactly one of
+    /// [`REVIEWER_NAMES`], case not folded; repeats are kept as written.
+    ReviewerList,
     /// An `https://` address: the scheme, then at least one character, with no
     /// whitespace, control character, query or fragment (`?` or `#`). Whether
     /// anything answers there is the fetcher's question, not the schema's.
     HttpsAddress,
 }
+
+/// The names a reviewer list may hold (design 0003 section 9): the host's own
+/// reviewer and the two outside providers.
+pub const REVIEWER_NAMES: [&str; 3] = ["host", "openai", "deepseek"];
 
 /// Whether `text` is an `https://` address the schema accepts (design 0012
 /// section 9): the scheme, at least one more character, and no whitespace,
@@ -208,6 +215,8 @@ pub enum Default {
     OnProtected(OnProtected),
     /// A static list of branch names.
     BranchList(&'static [&'static str]),
+    /// A static list of reviewer names.
+    ReviewerList(&'static [&'static str]),
 }
 impl Default {
     fn fits(self, kind: Kind) -> bool {
@@ -218,6 +227,7 @@ impl Default {
                 | (Default::Rung(_), Kind::Rung)
                 | (Default::OnProtected(_), Kind::OnProtected)
                 | (Default::BranchList(_), Kind::BranchList)
+                | (Default::ReviewerList(_), Kind::ReviewerList)
         )
     }
 }
@@ -267,8 +277,8 @@ impl Schema {
     }
 
     /// The schema: each role's model and effort, `escalate_on_failure`,
-    /// `git.remote`, the guard's settings under `git` and the two `updates`
-    /// settings.
+    /// `git.remote`, the guard's settings under `git`, the two `updates`
+    /// settings and `review.reviewers`.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -343,6 +353,13 @@ impl Schema {
                 default: Default::Absent,
                 scope: Scope::Global,
                 owner: "0012",
+            });
+            entries.push(Entry {
+                name: "review.reviewers".into(),
+                kind: Kind::ReviewerList,
+                default: Default::ReviewerList(&["host"]),
+                scope: Scope::Both,
+                owner: "0008",
             });
             Schema::new(entries)
         })

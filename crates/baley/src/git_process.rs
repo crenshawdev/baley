@@ -35,6 +35,9 @@ pub enum Caller {
     ProjectHead,
     /// A checkout's root commit and remote URL, read for checkout admission.
     CheckoutFacts,
+    /// The owner's name, `git config --get user.name`, read as the identity
+    /// on a provider acknowledgement.
+    OwnerIdentity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +79,8 @@ pub fn deadline(caller: Caller) -> Deadline {
         | Caller::LandingGit
         | Caller::AnchorForge
         | Caller::ProjectHead
-        | Caller::CheckoutFacts => Deadline::Exact(OTHER_GIT_DEADLINE),
+        | Caller::CheckoutFacts
+        | Caller::OwnerIdentity => Deadline::Exact(OTHER_GIT_DEADLINE),
     }
 }
 

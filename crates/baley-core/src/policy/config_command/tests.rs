@@ -1864,3 +1864,123 @@ fn a_config_set_source_with_a_query_or_fragment_the_parser_would_refuse_is_caugh
         "[updates]\nsource = \"https://dl.example/dev\"\n"
     );
 }
+
+fn reviewers(names: &[&str]) -> TypedPair {
+    pair(
+        "review.reviewers",
+        None,
+        Value::ReviewerList(names.iter().map(|name| name.to_string()).collect()),
+    )
+}
+
+#[test]
+fn a_reviewer_list_rendered_as_anything_but_a_toml_array_is_caught() {
+    let bytes = render_file(
+        Schema::standard(),
+        FileLayer::Global,
+        None,
+        &[reviewers(&["host", "openai"])],
+    )
+    .unwrap();
+    let read = |bytes: Vec<u8>| {
+        let file = SettingsFile {
+            path: "/c/config.toml".into(),
+            bytes,
+            digest: "d".into(),
+        };
+        parse_layer(&file, FileLayer::Global, Schema::standard()).expect("the render reads back")
+    };
+    let layer = read(bytes);
+    let written: Vec<_> = layer
+        .values
+        .iter()
+        .filter(|written| written.name == "review.reviewers")
+        .collect();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].host, None);
+    assert_eq!(
+        written[0].value,
+        Value::ReviewerList(vec!["host".into(), "openai".into()])
+    );
+
+    let empty = render_file(
+        Schema::standard(),
+        FileLayer::Global,
+        None,
+        &[reviewers(&[])],
+    )
+    .unwrap();
+    let layer = read(empty);
+    let written: Vec<_> = layer
+        .values
+        .iter()
+        .filter(|written| written.name == "review.reviewers")
+        .collect();
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].value, Value::ReviewerList(Vec::new()));
+}
+
+#[test]
+fn a_reviewer_list_shown_without_its_kind_default_or_scope_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = render_show(&ShowRequest {
+        schema: Schema::standard(),
+        host: None,
+        names: &["review.reviewers"],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(
+        lines[0],
+        "review.reviewers: kind list of host, openai or deepseek, default [\"host\"], scope both"
+    );
+}
+
+#[test]
+fn a_reviewer_list_set_from_the_command_line_not_refused_as_a_list_is_caught() {
+    let cases: [(FileLayer, bool); 2] = [(FileLayer::Global, false), (FileLayer::Project, true)];
+    for (layer, in_project) in cases {
+        for pairs in [
+            vec![("review.reviewers", "openai")],
+            vec![("review.reviewers", "[\"host\",\"openai\"]")],
+            vec![
+                ("escalate_on_failure", "true"),
+                ("review.reviewers", "openai"),
+            ],
+        ] {
+            let refusal = judge_pairs(Schema::standard(), layer, in_project, None, &pairs)
+                .expect_err("a list is never set from the command line");
+            assert_eq!(
+                refusal,
+                SetRefusal::ListNotSettable {
+                    name: "review.reviewers".into()
+                },
+                "{layer:?} {pairs:?}"
+            );
+            let text = refusal.to_string();
+            assert!(
+                text.starts_with(
+                    "list-not-settable: review.reviewers is a list, and config set does not write lists"
+                ),
+                "{text}"
+            );
+            assert!(text.contains("baley config interview"), "{text}");
+            assert!(text.contains("config.toml"), "{text}");
+            assert!(!text.ends_with("edit the list in baley.toml"), "{text}");
+        }
+    }
+    let branches = judge_standard(FileLayer::Project, &[("git.protected_branches", "main")])
+        .expect_err("a list is never set from the command line");
+    assert!(
+        branches
+            .to_string()
+            .ends_with("edit the list in baley.toml"),
+        "{branches}"
+    );
+}

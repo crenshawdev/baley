@@ -244,10 +244,14 @@ mod tests {
     }
 
     fn events(store: &impl Ledger) -> Vec<Event> {
+        stream_events(store, "install")
+    }
+
+    fn stream_events(store: &impl Ledger, stream: &str) -> Vec<Event> {
         store
             .stream(
                 &ProjectId("user".into()),
-                &StreamName("install".into()),
+                &StreamName(stream.into()),
                 0,
                 PageRequest {
                     limit: 100,
@@ -281,6 +285,8 @@ mod tests {
         assert_eq!(event.request_id, request(1));
         assert_eq!(event.payload, expected);
         assert_eq!(read(&store, "claude-code"), Ok(Some(expected)));
+        // Install never records a provider acknowledgement.
+        assert_eq!(stream_events(&store, "providers"), Vec::<Event>::new());
     }
 
     #[test]

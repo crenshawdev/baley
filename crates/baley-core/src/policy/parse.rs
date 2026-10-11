@@ -10,7 +10,9 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use super::merge::FileRef;
 use super::project::ProjectProblem;
-use super::schema::{Entry, Host, Kind, OnProtected, Rung, Schema, Scope, is_https_address};
+use super::schema::{
+    Entry, Host, Kind, OnProtected, REVIEWER_NAMES, Rung, Schema, Scope, is_https_address,
+};
 
 /// The code of every refusal that leaves the policy unbuilt.
 pub const CONFIG_UNAVAILABLE: &str = "config-unavailable";
@@ -50,6 +52,9 @@ pub enum Value {
     OnProtected(OnProtected),
     /// Branch names as written, in file order. May be empty.
     BranchList(Vec<String>),
+    /// Reviewer names as written, in file order, repeats included. May be
+    /// empty. Each is one of [`REVIEWER_NAMES`].
+    ReviewerList(Vec<String>),
     /// An `https://` address.
     HttpsAddress(String),
 }
@@ -218,6 +223,8 @@ pub enum Expected {
     OnProtected,
     /// A list of branch names.
     BranchList,
+    /// A list of reviewer names.
+    ReviewerList,
     /// An `https://` address.
     HttpsAddress,
 }
@@ -230,6 +237,7 @@ impl From<Kind> for Expected {
             Kind::RemoteName => Expected::RemoteName,
             Kind::OnProtected => Expected::OnProtected,
             Kind::BranchList => Expected::BranchList,
+            Kind::ReviewerList => Expected::ReviewerList,
             Kind::HttpsAddress => Expected::HttpsAddress,
         }
     }
@@ -296,6 +304,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::RemoteName => "a remote name".to_owned(),
                 Expected::OnProtected => format!("one of {}", on_protected_names()),
                 Expected::BranchList => "a list of branch names".to_owned(),
+                Expected::ReviewerList => format!("a list of {}", reviewer_names()),
                 Expected::HttpsAddress => "an https:// address".to_owned(),
             };
             write!(
@@ -326,6 +335,11 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Kind::BranchList => {
                     f.write_str("holds an empty branch name; remove it or write a name")
                 }
+                Kind::ReviewerList => write!(
+                    f,
+                    "holds \"{written}\", which is not {}; write one of them or remove it",
+                    reviewer_names()
+                ),
                 Kind::HttpsAddress => write!(
                     f,
                     "is \"{written}\"; write an https:// address without a query or fragment (? or #) or remove the line"
@@ -415,6 +429,14 @@ impl fmt::Display for Diagnostic {
 fn rungs() -> String {
     let names: Vec<&str> = Rung::ALL.into_iter().map(Rung::name).collect();
     names.join(", ")
+}
+
+/// The accepted reviewer names in prose: `host, openai or deepseek`.
+fn reviewer_names() -> String {
+    match REVIEWER_NAMES.split_last() {
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
 }
 
 fn on_protected_names() -> String {
@@ -583,6 +605,25 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
                 names.push(name.to_owned());
             }
             Ok(Value::BranchList(names))
+        }
+        Kind::ReviewerList => {
+            let DeValue::Array(items) = value else {
+                return Err(wrong());
+            };
+            let mut names = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                let at = Some(item.span().start);
+                let Some(name) = item.get_ref().as_str() else {
+                    // Named by its type: the element has no text to quote.
+                    let found = item.get_ref().type_str();
+                    return Err(Mismatch::Grammar(format!("{} {found}", article(found)), at));
+                };
+                if !REVIEWER_NAMES.contains(&name) {
+                    return Err(Mismatch::Grammar(name.to_owned(), at));
+                }
+                names.push(name.to_owned());
+            }
+            Ok(Value::ReviewerList(names))
         }
         Kind::HttpsAddress => {
             let written = value.as_str().ok_or_else(wrong)?;

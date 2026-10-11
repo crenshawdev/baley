@@ -81,6 +81,16 @@ impl Provider {
             .into_iter()
             .find(|provider| provider.name() == name)
     }
+
+    /// The host the provider's API calls reach, which the interview adds to
+    /// Claude Code's sandbox allowance. It is compiled here and read from no
+    /// key table (design 0012 section 5).
+    pub fn api_host(self) -> &'static str {
+        match self {
+            Provider::OpenAi => "api.openai.com",
+            Provider::DeepSeek => "api.deepseek.com",
+        }
+    }
 }
 
 /// How capable a model is within its provider, from the hint table, best fit

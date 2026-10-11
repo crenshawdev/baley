@@ -14,6 +14,8 @@ pub mod apply;
 pub mod command;
 /// Installation ownership facts and the `install.recorded` event.
 pub mod event;
+/// The settings-file part of the installation writer that the interview's host step uses.
+pub mod hosts;
 /// Ordered artifact writes or a refusal from supplied file observations.
 pub mod plan;
 /// The install outcome and the owner's next steps, rendered from supplied facts.

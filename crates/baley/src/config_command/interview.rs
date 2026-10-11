@@ -1,7 +1,17 @@
 //! `baley config interview` (design 0003 section 5). It gathers both settings
-//! files and HEAD's copy as `show` does, asks for each role's model and effort
-//! and for `escalate_on_failure` in the terminal, and writes the answers
-//! through one `set::apply`. It opens no store and runs no policy step itself.
+//! files, HEAD's copy and Claude Code's settings file, asks for each role's
+//! model and effort and for `escalate_on_failure` in the terminal, then asks
+//! which outside review providers to use and takes a typed `yes` to the warning
+//! for each one chosen. A summary lists every write and every file it can
+//! change, and one final `yes` confirms it.
+//!
+//! The conversation opens no store and writes no file, and its one seam is the
+//! process that reads git's `user.name`. Only after the final `yes` do the
+//! writes run, in order and each only when it has something to change: the
+//! acknowledgement in the per-user ledger, the providers' API hosts in Claude
+//! Code's settings file, the global `review.reviewers` list, then the settings
+//! through `set::apply`. A failing step stops the run, and the report names its
+//! code and the writes already done.
 
 use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
@@ -12,11 +22,27 @@ use baley_store::StoreError;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+mod providers;
+mod report;
+mod summary;
+mod writes;
+
+use self::providers::{Ready, Refusal, Staged};
+use self::report::{Done, Step};
+use self::summary::Where;
+use self::writes::{Ack, Input, Plan, Refused, Stream};
+use super::reviewers::{self, Selection};
 use super::set;
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
+use crate::install::hosts::{self, ClaudeSettings};
+use crate::ledger::clock::SystemClock;
+use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
+use crate::ledger::open;
 use crate::policy_step::{self, Reads};
+use crate::process::Process;
+use crate::providers::record;
 use crate::settings;
 
 /// Asks the questions on `input` and `output`, then writes the answers.
@@ -68,6 +94,7 @@ fn attempt(
         }
     };
     let start = begin(Schema::standard(), file, host, seen)?;
+    let claude = hosts::read();
 
     let questions = questions(&start.policy);
     let failed = |error: io::Error| Render {
@@ -80,23 +107,108 @@ fn attempt(
     if let Some(note) = &start.note {
         writeln!(output, "{note}").map_err(failed)?;
     }
-    let outcome =
-        converse(&questions, &start.target, start.layer, host, input, output).map_err(failed)?;
+    let outcome = converse(
+        &questions,
+        &Destination {
+            target: &start.target,
+            layer: start.layer,
+            host,
+            global: &start.global_path,
+            home: &folders.home,
+            in_project: start.in_project,
+        },
+        &start.stored,
+        &claude,
+        &mut crate::process::System,
+        input,
+        output,
+    )
+    .map_err(failed)?;
     Ok(match outcome {
         Outcome::Declined => Render::line("Nothing was written.", 0),
+        Outcome::Refused(Refusal(render)) => render,
         Outcome::Unchanged => {
             Render::line("Nothing changed: every answer kept the value in force.", 0)
         }
-        Outcome::Send(request) => set::apply(
-            request.layer,
-            request.host,
-            &request.pairs,
-            Some(&set::Expected {
-                path: start.target,
-                digest: start.digest,
-            }),
-        ),
+        Outcome::Send(request) => execute(*request, &folders, &start),
     })
+}
+
+/// Runs the confirmed steps in order after the final `yes`, each only when the
+/// plan holds it, and stops at the first failure. The report names that
+/// failure's code, the writes already done and the steps never started.
+fn execute(request: Request, folders: &Folders, start: &Start) -> Render {
+    let Request { layer, host, plan } = request;
+    let mut outcomes: Vec<report::Outcome> = Vec::new();
+    // What the settings step expects of its target: the file as the interview
+    // showed it, until the reviewer step has written the global file.
+    let mut settings_digest = start.digest.clone();
+    while let Some(step) = report::next(&plan, &outcomes) {
+        let outcome = match step {
+            Step::Acknowledgement => {
+                acknowledge(&folders.home, planned(&plan.acknowledgement).who())
+            }
+            Step::Hosts => {
+                let step = planned(&plan.hosts);
+                hosts::write(&step.path, &step.allowance).map(|note| Done::Hosts { note })
+            }
+            Step::Reviewers => {
+                let shown = set::Expected {
+                    path: start.global_path.clone(),
+                    digest: start.global_digest.clone(),
+                };
+                set::apply_list(planned(&plan.reviewers), &shown).map(|written| {
+                    if layer == FileLayer::Global {
+                        settings_digest = Some(written.digest);
+                    }
+                    Done::Reviewers {
+                        version: written.version,
+                    }
+                })
+            }
+            Step::Settings => {
+                let shown = set::Expected {
+                    path: start.target.clone(),
+                    digest: settings_digest.clone(),
+                };
+                let render = set::apply(layer, host, &plan.settings, Some(&shown));
+                if render.code == 0 {
+                    Ok(Done::Settings(render.lines))
+                } else {
+                    Err(render)
+                }
+            }
+        };
+        outcomes.push(outcome);
+    }
+    report::report(&plan, &start.global_path, &outcomes)
+}
+
+/// The step a run reaches, which the plan holds because the run follows the plan.
+fn planned<T>(step: &Option<T>) -> &T {
+    step.as_ref()
+        .expect("a step in the run is a step in the plan")
+}
+
+/// Opens the per-user ledger, reads the `providers` stream and records the
+/// acknowledgement unless a current one covers it. A store failure is the
+/// step's failure, with its ledger code.
+fn acknowledge(home: &Path, who: &providers::Acknowledge) -> report::Outcome {
+    let at = SystemClock::now();
+    let store = open::store(home, &at, open::options()).map_err(|error| record::failure(&error))?;
+    let seen = record::read(&store).map_err(|error| record::failure(&error))?;
+    let stream = Stream {
+        payloads: &seen.payloads,
+        at: &at,
+    };
+    match writes::settle(who, &stream) {
+        Ack::Record(_, event) => {
+            record::append(&store, *event, seen.version, new_request_id(), &at)
+                .map_err(|error| record::failure(&error))?;
+            Ok(Done::Acknowledgement { recorded: true })
+        }
+        Ack::Reused(_) | Ack::Requested(_) => Ok(Done::Acknowledgement { recorded: false }),
+    }
 }
 
 /// What the gatherer found.
@@ -124,6 +236,24 @@ struct Start {
     /// The pending note, set when the target is the project file and the
     /// working-tree file holds changes HEAD's copy does not.
     note: Option<String>,
+    /// What the global file stores for the reviewer list.
+    stored: Stored,
+    /// The global file's path.
+    global_path: PathBuf,
+    /// The global file's own read, bound before the first question, which the
+    /// reviewer write checks.
+    global_digest: Option<String>,
+    /// Whether the working directory is in a managed project.
+    in_project: bool,
+}
+
+/// What the global file stores for `review.reviewers`.
+struct Stored {
+    /// The outside providers, shown before the provider question.
+    selection: Selection,
+    /// The names the file lists at its top level, or none when it writes no
+    /// such value.
+    names: Option<Vec<String>>,
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
@@ -165,6 +295,15 @@ fn begin(
     )
     .map_err(|refusal| Render::refusal(refusal.to_string()))?;
     let layer = file.unwrap_or_else(|| default_layer(layers.global.as_ref()));
+    let in_project = project_file.is_some();
+    let global_path = seen.global_path.clone();
+    let global_digest = seen
+        .reads
+        .global
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .map(|file| file.digest.clone());
     let target = match (layer, project_file) {
         (FileLayer::Project, Some(path)) => path,
         (FileLayer::Project, None) => return Err(not_a_project()),
@@ -178,6 +317,13 @@ fn begin(
         .map_err(|refusal| Render::refusal(refusal.to_string()))?
         .map(|file| file.digest);
     Ok(Start {
+        stored: Stored {
+            selection: reviewers::stored(layers.global.as_ref()),
+            names: reviewers::written(layers.global.as_ref()),
+        },
+        global_path,
+        global_digest,
+        in_project,
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
         layer,
         target,
@@ -360,49 +506,29 @@ fn read_answer(input: &mut impl BufRead) -> io::Result<Option<String>> {
     Ok(Some(line.trim().to_owned()))
 }
 
-/// The one `config set` an interview sends.
+/// What an interview sends once the owner has typed the final `yes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Request {
-    /// The file to write.
+    /// The file the settings answers go to.
     layer: FileLayer,
     /// The host section to write into, `None` for the top level.
     host: Option<Host>,
-    /// The non-blank answers as name and value, in question order.
-    pairs: Vec<(String, String)>,
+    /// The confirmed steps: the acknowledgement, the hosts, the reviewer list
+    /// and the settings answers.
+    plan: Plan,
 }
 
 /// What the interview does with the answers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum Outcome {
-    /// The owner stopped, so nothing is written.
+    /// The owner stopped, so nothing is written and no store is opened.
     Declined,
     /// Every answer was blank, so there is nothing to write.
     Unchanged,
-    /// Write these answers through `config set`.
-    Send(Request),
-}
-
-fn outcome(collected: Collected, layer: FileLayer, host: Option<Host>) -> Outcome {
-    match collected {
-        Collected::Stopped => Outcome::Declined,
-        Collected::Answers(pairs) if pairs.is_empty() => Outcome::Unchanged,
-        Collected::Answers(pairs) => Outcome::Send(Request { layer, host, pairs }),
-    }
-}
-
-/// The lines that say what is about to be written and where.
-fn summary(target: &Path, host: Option<Host>, pairs: &[(String, String)]) -> Vec<String> {
-    let section = host.map_or_else(String::new, |host| format!(" [host.{}]", host.name()));
-    let mut lines = vec![format!(
-        "The interview will write to {}{section}",
-        target.display()
-    )];
-    lines.extend(
-        pairs
-            .iter()
-            .map(|(name, value)| format!("  {name}={value}")),
-    );
-    lines
+    /// The owner identity is missing, so the interview stops before its summary.
+    Refused(Refusal),
+    /// Run these steps.
+    Send(Box<Request>),
 }
 
 /// Only the word `yes` confirms, so a blank line, `y` and a closed input all
@@ -411,22 +537,14 @@ fn accepts(answer: Option<&str>) -> bool {
     answer == Some("yes")
 }
 
-/// Lists what will be written and asks once. An interview with no answer has
-/// nothing to confirm, and one that is not confirmed is stopped.
+/// Lists what will be written and asks once. Whether the owner typed `yes`.
 fn confirm(
-    collected: Collected,
-    target: &Path,
-    host: Option<Host>,
+    plan: &Plan,
+    at: &Where<'_>,
     input: &mut impl BufRead,
     output: &mut impl Write,
-) -> io::Result<Collected> {
-    let Collected::Answers(pairs) = collected else {
-        return Ok(collected);
-    };
-    if pairs.is_empty() {
-        return Ok(Collected::Answers(pairs));
-    }
-    for line in summary(target, host, &pairs) {
+) -> io::Result<bool> {
+    for line in summary::lines(plan, at) {
         writeln!(output, "{line}")?;
     }
     write!(output, "Write these values? Type yes to write: ")?;
@@ -436,25 +554,84 @@ fn confirm(
         // The prompt holds the line, so end it before anything else prints.
         writeln!(output)?;
     }
-    Ok(if accepts(answer.as_deref()) {
-        Collected::Answers(pairs)
-    } else {
-        Collected::Stopped
-    })
+    Ok(accepts(answer.as_deref()))
 }
 
-/// Asks every question, confirms, and decides what to send.
+/// Where the writes will land, as the owner is told.
+struct Destination<'a> {
+    /// The settings file's path.
+    target: &'a Path,
+    /// Which file it is.
+    layer: FileLayer,
+    /// The host section, `None` for the top level.
+    host: Option<Host>,
+    /// The global settings file, which holds the reviewer list.
+    global: &'a Path,
+    /// Baley's home, which holds the ledger.
+    home: &'a Path,
+    /// Whether the working directory is in a managed project.
+    in_project: bool,
+}
+
+/// Asks every question, then the provider question, plans the writes, confirms
+/// them and decides what to send. It touches no file and no store, and its one
+/// seam is `process`.
 fn converse(
     questions: &[Question],
-    target: &Path,
-    layer: FileLayer,
-    host: Option<Host>,
+    destination: &Destination<'_>,
+    stored: &Stored,
+    claude: &Result<ClaudeSettings, String>,
+    process: &mut dyn Process,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> io::Result<Outcome> {
-    let collected = ask(questions, input, output)?;
-    let collected = confirm(collected, target, host, input, output)?;
-    Ok(outcome(collected, layer, host))
+    let Destination {
+        target,
+        layer,
+        host,
+        global,
+        home,
+        in_project,
+    } = *destination;
+    let Collected::Answers(pairs) = ask(questions, input, output)? else {
+        return Ok(Outcome::Declined);
+    };
+    let Ready {
+        answer,
+        acknowledgement,
+    } = match providers::stage(&stored.selection, process, input, output)? {
+        Staged::Declined => return Ok(Outcome::Declined),
+        Staged::Refused(refusal) => return Ok(Outcome::Refused(refusal)),
+        Staged::Ready(ready) => ready,
+    };
+    // A settings file that cannot take the hosts refuses here, before the
+    // summary, so nothing has been written when the owner is told.
+    let plan = match writes::plan(&Input {
+        answer: &answer,
+        acknowledgement: acknowledgement.as_ref(),
+        stored: stored.names.as_deref(),
+        claude,
+        stream: None,
+        settings: &pairs,
+    }) {
+        Ok(plan) => plan,
+        Err(Refused(line)) => return Ok(Outcome::Refused(Refusal(Render::refusal(line)))),
+    };
+    if !plan.writes() {
+        return Ok(Outcome::Unchanged);
+    }
+    let at = Where {
+        home,
+        global,
+        target,
+        layer,
+        host,
+        in_project,
+    };
+    if !confirm(&plan, &at, input, output)? {
+        return Ok(Outcome::Declined);
+    }
+    Ok(Outcome::Send(Box::new(Request { layer, host, plan })))
 }
 
 #[cfg(test)]
@@ -463,6 +640,7 @@ mod tests {
     use std::path::Path;
 
     use crate::committed::{Committed, Pending};
+    use crate::process::Recorded;
     use baley_core::policy::{Fault, parse_layer};
 
     const GLOBAL: &str = "/c/config.toml";
@@ -563,15 +741,51 @@ mod tests {
         assert!(asked.iter().all(|q| q.name != "git.remote"));
     }
 
-    /// Runs the conversation over supplied input lines.
+    /// Runs the conversation over supplied input lines, with nothing stored
+    /// and a process that fails the test if git is launched.
     fn converse_over(input: &str, host: Option<Host>) -> (Outcome, String) {
+        converse_with(input, host, &Selection::none(), &mut Recorded::new())
+    }
+
+    /// Runs the conversation with a stored selection and a scripted process,
+    /// over a Claude settings file that is absent.
+    fn converse_with(
+        input: &str,
+        host: Option<Host>,
+        stored: &Selection,
+        process: &mut Recorded,
+    ) -> (Outcome, String) {
+        let absent = Ok(ClaudeSettings {
+            path: "/home/o/.claude/settings.json".into(),
+            current: crate::install::settings::Current {
+                document: serde_json::json!({}),
+                symbolic_link: false,
+                read_digest: None,
+            },
+        });
         let asked = questions(&policy(None, None, None));
         let mut output = Vec::new();
+        let names = (stored.layer == "global").then(|| {
+            std::iter::once("host".to_owned())
+                .chain(stored.providers.iter().map(|p| p.name().to_owned()))
+                .collect()
+        });
         let outcome = converse(
             &asked,
-            Path::new(GLOBAL),
-            FileLayer::Global,
-            host,
+            &Destination {
+                target: Path::new(GLOBAL),
+                layer: FileLayer::Global,
+                host,
+                global: Path::new(GLOBAL),
+                home: Path::new("/h"),
+                in_project: false,
+            },
+            &Stored {
+                selection: stored.clone(),
+                names,
+            },
+            &absent,
+            process,
             &mut input.as_bytes(),
             &mut output,
         )
@@ -600,7 +814,8 @@ mod tests {
     fn pairs_of(outcome: &Outcome) -> Vec<(&str, &str)> {
         match outcome {
             Outcome::Send(request) => request
-                .pairs
+                .plan
+                .settings
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.as_str()))
                 .collect(),
@@ -611,7 +826,7 @@ mod tests {
     #[test]
     fn a_blank_and_an_all_whitespace_answer_each_give_no_pair() {
         let (outcome, _) = converse_over(
-            &format!("{}yes\n", answers(&[(1, "   \t "), (2, "sonnet")])),
+            &format!("{}\nyes\n", answers(&[(1, "   \t "), (2, "sonnet")])),
             None,
         );
 
@@ -620,14 +835,15 @@ mod tests {
 
     #[test]
     fn an_answer_is_trimmed_before_it_is_sent() {
-        let (outcome, _) = converse_over(&format!("{}yes\n", answers(&[(0, "  sonnet  ")])), None);
+        let (outcome, _) =
+            converse_over(&format!("{}\nyes\n", answers(&[(0, "  sonnet  ")])), None);
 
         assert_eq!(pairs_of(&outcome), [("roles.planner.model", "sonnet")]);
     }
 
     #[test]
     fn an_answer_equal_to_the_value_in_force_is_still_sent() {
-        let (outcome, _) = converse_over(&format!("{}yes\n", answers(&[(1, "high")])), None);
+        let (outcome, _) = converse_over(&format!("{}\nyes\n", answers(&[(1, "high")])), None);
 
         assert_eq!(pairs_of(&outcome), [("roles.planner.effort", "high")]);
     }
@@ -642,7 +858,7 @@ mod tests {
 
     #[test]
     fn thirteen_blank_answers_give_nothing_to_write_not_an_empty_request() {
-        let (outcome, _) = converse_over(&blanks(13), None);
+        let (outcome, _) = converse_over(&blanks(14), None);
 
         assert_eq!(outcome, Outcome::Unchanged);
     }
@@ -650,20 +866,25 @@ mod tests {
     #[test]
     fn two_answers_give_one_request_in_question_order_with_the_layer_and_host() {
         let (outcome, output) = converse_over(
-            &format!("{}yes\n", answers(&[(12, "true"), (3, "max")])),
+            &format!("{}\nyes\n", answers(&[(12, "true"), (3, "max")])),
             Some(Host::ClaudeCode),
         );
 
         assert_eq!(
             outcome,
-            Outcome::Send(Request {
+            Outcome::Send(Box::new(Request {
                 layer: FileLayer::Global,
                 host: Some(Host::ClaudeCode),
-                pairs: vec![
-                    ("roles.analyzer.effort".to_owned(), "max".to_owned()),
-                    ("escalate_on_failure".to_owned(), "true".to_owned()),
-                ],
-            })
+                plan: Plan {
+                    acknowledgement: None,
+                    hosts: None,
+                    reviewers: None,
+                    settings: vec![
+                        ("roles.analyzer.effort".to_owned(), "max".to_owned()),
+                        ("escalate_on_failure".to_owned(), "true".to_owned()),
+                    ],
+                },
+            }))
         );
         assert!(
             output.contains("roles.analyzer.effort is high from default: "),
@@ -941,7 +1162,7 @@ mod tests {
 
     /// One answer, a model for the planner, then the confirmation line.
     fn one_answer_then(confirmation: &str) -> String {
-        format!("{}{confirmation}", answers(&[(0, "sonnet")]))
+        format!("{}\n{confirmation}", answers(&[(0, "sonnet")]))
     }
 
     #[test]
@@ -963,7 +1184,7 @@ mod tests {
 
     #[test]
     fn thirteen_blank_answers_are_not_asked_to_confirm() {
-        let (outcome, output) = converse_over(&blanks(13), None);
+        let (outcome, output) = converse_over(&blanks(14), None);
 
         assert_eq!(outcome, Outcome::Unchanged);
         assert!(!output.contains("Write these values?"), "{output}");
@@ -984,7 +1205,7 @@ mod tests {
 
     #[test]
     fn the_summary_comes_before_the_question_and_names_each_pair_and_the_file() {
-        let input = format!("{}yes\n", answers(&[(0, "sonnet"), (1, "max")]));
+        let input = format!("{}\nyes\n", answers(&[(0, "sonnet"), (1, "max")]));
 
         let (_, output) = converse_over(&input, None);
 
@@ -1042,7 +1263,7 @@ mod tests {
     #[test]
     fn a_bad_effort_is_asked_again_until_a_rung_is_given() {
         // The planner's effort is the second question.
-        let input = format!("\nHigh\nbogus\nmax\n{}yes\n", blanks(11));
+        let input = format!("\nHigh\nbogus\nmax\n{}yes\n", blanks(12));
 
         let (outcome, output) = converse_over(&input, None);
 
@@ -1065,7 +1286,7 @@ mod tests {
 
     #[test]
     fn a_bad_escalate_answer_is_asked_again_and_false_is_taken() {
-        let input = format!("{}yes\nfalse\nyes\n", blanks(12));
+        let input = format!("{}yes\nfalse\n\nyes\n", blanks(12));
 
         let (outcome, output) = converse_over(&input, None);
 
@@ -1075,7 +1296,7 @@ mod tests {
 
     #[test]
     fn a_blank_after_a_bad_answer_keeps_the_value_and_gives_no_pair() {
-        let input = format!("\nbogus\n\n{}", blanks(11));
+        let input = format!("\nbogus\n\n{}", blanks(12));
 
         let (outcome, _) = converse_over(&input, None);
 
@@ -1091,7 +1312,7 @@ mod tests {
 
     #[test]
     fn an_unknown_model_is_sent_on_not_asked_again() {
-        let input = format!("claude-unknown-x\n{}yes\n", blanks(12));
+        let input = format!("claude-unknown-x\n{}yes\n", blanks(13));
 
         let (outcome, output) = converse_over(&input, None);
 
@@ -1188,5 +1409,193 @@ mod tests {
         );
 
         assert_eq!(start.ok().unwrap().note, None);
+    }
+
+    use self::providers::Acknowledge;
+    use crate::providers::fixtures::DESIGN_WARNING;
+    use baley_core::catalog::Provider;
+
+    /// Thirteen blank settings answers, then the given lines.
+    fn after_thirteen(rest: &str) -> String {
+        format!("{}{rest}", blanks(13))
+    }
+
+    fn stored(providers: &[Provider], layer: &'static str) -> Selection {
+        Selection {
+            providers: providers.to_vec(),
+            layer,
+        }
+    }
+
+    fn ada() -> Recorded {
+        Recorded::new().out("Ada Owner\n")
+    }
+
+    fn acknowledgement_of(outcome: &Outcome) -> Option<&Acknowledge> {
+        match outcome {
+            Outcome::Send(request) => request.plan.acknowledgement.as_ref().map(Ack::who),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_provider_taken_without_the_full_warning_and_a_typed_yes_is_caught() {
+        let mut process = ada();
+        let (outcome, output) = converse_with(
+            &after_thirteen("deepseek, openai\nyes\nyes\nyes\n"),
+            None,
+            &stored(&[Provider::OpenAi], "global"),
+            &mut process,
+        );
+
+        let warned = |name: &str| {
+            let heading = format!("Warning for {name} (version 1):\n{DESIGN_WARNING}\n");
+            let prompt = format!("Type yes to accept this warning for {name}: ");
+            let at = output
+                .find(&format!("{heading}{prompt}"))
+                .unwrap_or_else(|| panic!("no full warning and prompt for {name}: {output}"));
+            at + heading.len() + prompt.len()
+        };
+        let after_openai = warned("openai");
+        let after_deepseek = warned("deepseek");
+        assert!(after_openai < after_deepseek, "{output}");
+        assert_eq!(output.matches(DESIGN_WARNING).count(), 2, "{output}");
+        let summary = output.find("Outside review providers confirmed").unwrap();
+        let final_prompt = output
+            .find("Write these values? Type yes to write: ")
+            .unwrap();
+        assert!(
+            after_deepseek <= summary && summary < final_prompt,
+            "{output}"
+        );
+        assert_eq!(
+            acknowledgement_of(&outcome),
+            Some(&Acknowledge {
+                providers: vec![Provider::OpenAi, Provider::DeepSeek],
+                owner: "Ada Owner".into(),
+            })
+        );
+
+        // Each warning needs its own yes, so a yes to the first never covers the
+        // second, and input ending at the second declines too.
+        for answers in [
+            "openai\n\n",
+            "openai\ny\n",
+            "openai,deepseek\nyes\nno\n",
+            "openai,deepseek\nyes\n",
+        ] {
+            let mut process = Recorded::new();
+            let (outcome, output) = converse_with(
+                &after_thirteen(answers),
+                None,
+                &Selection::none(),
+                &mut process,
+            );
+            assert_eq!(outcome, Outcome::Declined, "{answers:?}");
+            assert_eq!(acknowledgement_of(&outcome), None, "{answers:?}");
+            assert!(!output.contains("Write these values?"), "{output}");
+            assert!(process.launches().is_empty(), "{answers:?}");
+        }
+    }
+
+    #[test]
+    fn a_write_or_store_open_after_an_interview_ended_without_yes_is_caught() {
+        let cases = [
+            (after_thirteen("\n"), Outcome::Unchanged),
+            (after_thirteen("openai\nno\n"), Outcome::Declined),
+            (after_thirteen("openai\n"), Outcome::Declined),
+            (after_thirteen(""), Outcome::Declined),
+            (format!("\nmax\n{}\nno\n", blanks(11)), Outcome::Declined),
+        ];
+        for (input, expected) in cases {
+            let mut process = Recorded::new();
+            let (outcome, output) = converse_with(&input, None, &Selection::none(), &mut process);
+            assert_eq!(outcome, expected, "{input:?}");
+            assert_eq!(acknowledgement_of(&outcome), None, "{input:?}");
+            assert!(process.launches().is_empty(), "{input:?}");
+            if expected == Outcome::Unchanged {
+                assert!(!output.contains("Write these values?"), "{output}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_provider_acknowledged_without_a_git_user_name_is_caught() {
+        let input = after_thirteen("openai\nyes\nyes\n");
+        for mut process in [
+            Recorded::new().fail(1, ""),
+            Recorded::new().unavailable(std::io::ErrorKind::NotFound.into()),
+        ] {
+            let (outcome, output) = converse_with(&input, None, &Selection::none(), &mut process);
+
+            let Outcome::Refused(Refusal(render)) = outcome else {
+                panic!("not refused: {outcome:?}");
+            };
+            assert!(
+                render.lines[0].starts_with("owner-identity-missing:"),
+                "{render:?}"
+            );
+            assert!(render.lines[0].contains("user.name"), "{render:?}");
+            assert_eq!(render.code, 2);
+            assert!(render.error);
+            assert!(!output.contains("Write these values?"), "{output}");
+            assert_eq!(process.arguments(), [["config", "--get", "user.name"]]);
+        }
+
+        let mut process = Recorded::new();
+        converse_with(
+            &after_thirteen("\n"),
+            None,
+            &Selection::none(),
+            &mut process,
+        );
+        assert!(process.launches().is_empty());
+    }
+
+    #[test]
+    fn a_bad_provider_answer_taken_or_not_asked_again_is_caught() {
+        let mut process = ada();
+        let (outcome, output) = converse_with(
+            &after_thirteen("anthropic\nopenai\nyes\nyes\n"),
+            None,
+            &Selection::none(),
+            &mut process,
+        );
+
+        let prompt = "outside providers are none from default: ";
+        assert_eq!(output.matches(prompt).count(), 2, "{output}");
+        let first = output.find(prompt).unwrap();
+        let refusal = output.find("\"anthropic\" is not an answer").unwrap();
+        let second = output.rfind(prompt).unwrap();
+        assert!(first < refusal && refusal < second, "{output}");
+        assert_eq!(
+            acknowledgement_of(&outcome),
+            Some(&Acknowledge {
+                providers: vec![Provider::OpenAi],
+                owner: "Ada Owner".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_stored_selection_left_out_of_the_provider_question_is_caught() {
+        for (stored, prompt) in [
+            (
+                stored(&[Provider::DeepSeek], "global"),
+                "outside providers are deepseek from global: ",
+            ),
+            (
+                stored(&[Provider::OpenAi, Provider::DeepSeek], "global"),
+                "outside providers are openai, deepseek from global: ",
+            ),
+        ] {
+            let mut process = Recorded::new();
+            let (outcome, output) =
+                converse_with(&after_thirteen("\n"), None, &stored, &mut process);
+
+            assert!(output.contains(prompt), "{output}");
+            assert_eq!(outcome, Outcome::Unchanged);
+            assert!(process.launches().is_empty());
+        }
     }
 }

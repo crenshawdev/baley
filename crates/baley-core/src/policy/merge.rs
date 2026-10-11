@@ -157,6 +157,9 @@ pub fn merge(
                 schema::Default::BranchList(names) => Some(Value::BranchList(
                     names.iter().map(|name| (*name).to_owned()).collect(),
                 )),
+                schema::Default::ReviewerList(names) => Some(Value::ReviewerList(
+                    names.iter().map(|name| (*name).to_owned()).collect(),
+                )),
             };
             let source = Source {
                 layer: Layer::Default,

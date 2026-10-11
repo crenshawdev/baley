@@ -98,6 +98,12 @@ fn git_subprocesses_run_under_a_deadline() {
             "git rev-list --max-parents=0 HEAD",
             60,
         ),
+        (
+            Caller::OwnerIdentity,
+            &["config", "--get", "user.name"],
+            "git config --get user.name",
+            60,
+        ),
     ];
     for &(caller, args, command, seconds) in rows {
         let error = finish(
@@ -149,6 +155,7 @@ fn registered_callers_select_their_deadlines() {
         Caller::AnchorForge,
         Caller::ProjectHead,
         Caller::CheckoutFacts,
+        Caller::OwnerIdentity,
     ] {
         assert_eq!(
             deadline(caller),
