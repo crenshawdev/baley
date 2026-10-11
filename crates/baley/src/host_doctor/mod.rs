@@ -1489,4 +1489,64 @@ mod integration {
         assert_eq!(listing(&home), ledger_before);
         assert_eq!(heads_before.len(), 2);
     }
+
+    #[test]
+    fn a_host_check_that_creates_user_or_appends_on_a_fresh_ledger_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (ledger, config) = (root.join("ledger"), root.join("config"));
+        let (home, bin) = (root.join("h"), root.join("bin"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+
+        let store =
+            crate::ledger::open::store(&ledger, T0, crate::ledger::open::options()).unwrap();
+        // The command runs the store's own doctor before the host checks.
+        let health = Admin::doctor(&store, T0, &BTreeMap::new()).unwrap();
+        let projects = Admin::projects(&store).unwrap();
+        assert!(projects.is_empty(), "{projects:?}");
+
+        let ledger_before = listing(&ledger);
+        let home_before = listing(&home);
+        let env = Environment {
+            home: Some(home.clone().into_os_string()),
+            ..Environment::default()
+        };
+        let search: OsString = bin.into();
+        let process = Process {
+            env: &env,
+            claude_config_dir: None,
+            path: Some(search.as_os_str()),
+            os: "linux",
+        };
+        let observation = observe(
+            process,
+            Folders {
+                home: ledger.clone(),
+                config,
+            },
+            None,
+            Host::ClaudeCode,
+            Stored {
+                store: &store,
+                projects: &[],
+                health: &health,
+            },
+        );
+        let report = Report::new(&judge(&observation));
+
+        // The acknowledgement read ran and found nothing, so the assertions
+        // below are about a read that happened.
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("none is recorded")),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(Admin::projects(&store).unwrap(), projects);
+        assert_eq!(listing(&ledger), ledger_before);
+        assert_eq!(listing(&home), home_before);
+    }
 }
