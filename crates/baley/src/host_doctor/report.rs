@@ -1,22 +1,23 @@
 //! The report: findings as owner lines and an exit code.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use baley_core::catalog::Provider;
+
+use super::acknowledgement::Standing;
 use super::guard_records::Judged as GuardRecords;
 use super::install_record::Judged as InstallRecord;
 use super::prerequisites::{Judged as Prerequisites, Kind, missing_sentence};
 use super::protection::{Judged, NotJudged};
 use super::provider_hosts::Judged as ProviderHosts;
 use super::store_health::{Compatibility, Judged as Store};
+use super::update_setting::Judged as UpdateSetting;
+use super::writable::{self, Seen};
 use super::{ArtifactState, Findings, MapFault, Stable, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
 use crate::mcp::context::ProjectContext;
 use crate::providers::warning::WARNING_VERSION;
 use crate::update::installation::{Active, Occupant};
-use baley_core::catalog::Provider;
-
-use super::acknowledgement::Standing;
-use super::update_setting::Judged as UpdateSetting;
 
 /// The heading that opens the host section.
 const HEADING: &str = "Claude Code host checks";
@@ -122,6 +123,7 @@ impl Report {
         if let Some(stable) = &findings.stable {
             lines.push(stable_line(stable));
         }
+        gap |= writable_lines(&findings.writable, &mut lines);
         if let Some((path, gap_found)) = &findings.executable {
             gap = true;
             lines.push(format!(
@@ -239,6 +241,36 @@ fn stable_line(stable: &Stable) -> String {
             "stable path: {path} could not be examined: {cause}, so the version it runs is unknown"
         ),
     }
+}
+
+/// The lines on the folders install writes into. Returns whether one exists
+/// and is not writable, a failed check; an absent one install creates.
+fn writable_lines(locations: &[(PathBuf, Seen)], lines: &mut Vec<String>) -> bool {
+    let mut failed = false;
+    for (location, seen) in locations {
+        let location = location.display();
+        if let Some(cause) = writable::failure(seen) {
+            failed = true;
+            lines.push(format!(
+                "installed location {location}: not writable: {cause}; make it writable for your user, then run baley install again"
+            ));
+        } else if *seen == Seen::Absent {
+            lines.push(format!(
+                "installed location {location}: absent; baley install creates it"
+            ));
+        }
+    }
+    if !locations.is_empty() && locations.iter().all(|(_, seen)| *seen == Seen::Writable) {
+        let named: Vec<String> = locations
+            .iter()
+            .map(|(location, _)| location.display().to_string())
+            .collect();
+        lines.push(format!(
+            "installed locations: {} are writable",
+            named.join(", ")
+        ));
+    }
+    failed
 }
 
 /// The effective global `updates.auto`, as the global settings hold it now.
@@ -1788,5 +1820,37 @@ mod tests {
             absent.lines
         );
         assert_eq!(absent.code, 0, "{:?}", absent.lines);
+    }
+
+    #[test]
+    fn an_unwritable_installed_location_left_out_of_the_code_is_caught() {
+        use super::super::writable::Seen;
+
+        let versions = "/home/o/.local/lib/crenshawdev/baley/versions";
+        let cause = "Permission denied (os error 13)";
+        let mut locked = installed_observation();
+        let mapped = locked.host.as_mut().unwrap();
+        assert!(mapped.writable.len() > 1, "{:?}", mapped.writable);
+        let entry = mapped
+            .writable
+            .iter_mut()
+            .find(|(location, _)| location == Path::new(versions))
+            .unwrap();
+        entry.1 = Seen::NotWritable(cause.to_owned());
+        let report = report_of(&locked);
+        let named = lines_with(&report, &[versions, cause]);
+        assert_eq!(named.len(), 1, "{:?}", report.lines);
+        for part in ["writable", "baley install"] {
+            assert!(named[0].contains(part), "{part} missing from {}", named[0]);
+        }
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+
+        let open = report_of(&installed_observation());
+        assert!(
+            lines_with(&open, &["not writable"]).is_empty(),
+            "{:?}",
+            open.lines
+        );
+        assert_eq!(open.code, 0, "{:?}", open.lines);
     }
 }

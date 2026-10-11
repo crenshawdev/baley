@@ -47,6 +47,7 @@ pub mod report;
 pub mod server_context;
 pub mod store_health;
 pub mod update_setting;
+pub mod writable;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -167,6 +168,9 @@ pub struct Mapped {
     /// was supplied without them. The hook and settings are judged for drift
     /// against them.
     pub derived: Option<PlacementMap>,
+    /// Each folder install writes into, in [`writable::locations`] order,
+    /// and what asking whether this user may write into it found.
+    pub writable: Vec<(PathBuf, writable::Seen)>,
 }
 
 /// The stable path as a look at it found it, with the layout it is judged
@@ -233,6 +237,13 @@ pub fn gather<S: Ledger + Admin>(
 ) -> Observation {
     let host = placement.map(|map| {
         let executable = placed::observe_executable(Path::new(map.executable().as_str()));
+        let writable = writable::locations(&map)
+            .into_iter()
+            .map(|location| {
+                let seen = writable::gather(&location);
+                (location, seen)
+            })
+            .collect();
         let mut reads: Vec<PlacedRead> = Vec::new();
         for file in map.expected_files() {
             if !reads.iter().any(|read| read.path == file.path) {
@@ -248,6 +259,7 @@ pub fn gather<S: Ledger + Admin>(
             reads,
             record: None,
             derived: None,
+            writable,
         }
     });
     let global_settings = crate::settings::read(&crate::settings::global_path(&folders));
@@ -481,6 +493,9 @@ pub struct Findings {
     /// The effective global `updates.auto`, or why the global settings
     /// give none.
     pub update_setting: update_setting::Judged,
+    /// Each folder install writes into and what asking about it found, in
+    /// [`writable::locations`] order. Empty with no map or no record.
+    pub writable: Vec<(PathBuf, writable::Seen)>,
     /// Each outside provider and where its acknowledgement stands, or the
     /// store's text when the acknowledgements could not be read.
     pub acknowledgements: Result<Vec<(Provider, acknowledgement::Standing)>, String>,
@@ -557,6 +572,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 provider_hosts: None,
                 acknowledgements: acknowledgements(observation),
                 update_setting: update_setting::judge(observation.global_settings.clone()),
+                writable: Vec::new(),
             };
         }
     };
@@ -725,6 +741,7 @@ pub fn judge(observation: &Observation) -> Findings {
         provider_hosts: Some(provider_hosts),
         acknowledgements: acknowledgements(observation),
         update_setting: update_setting::judge(observation.global_settings.clone()),
+        writable: mapped.writable.clone(),
         prerequisites,
         server: server_context::judge(&observation.server),
         store: store_health::judge(&observation.health, &observation.folders),
@@ -948,6 +965,7 @@ pub(crate) mod fixtures {
                     .collect(),
                 record: None,
                 derived: None,
+                writable: Vec::new(),
             }),
             stable: None,
             folders: folders(),
@@ -1058,6 +1076,10 @@ pub(crate) mod fixtures {
         let mapped = observation.host.as_mut().unwrap();
         mapped.record = Some(record);
         mapped.derived = Some(crate::install::fixtures::installed().placements);
+        mapped.writable = writable::locations(&mapped.map)
+            .into_iter()
+            .map(|location| (location, writable::Seen::Writable))
+            .collect();
         observation.stable = Some(stable_link(
             "/home/o/.local/lib/crenshawdev/baley/versions/0.1.0/baley",
         ));
