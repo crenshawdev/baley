@@ -115,8 +115,12 @@ CREATED=yes
 umask 022
 mkdir -p "$ART" || exit 1
 check_art
-for LABEL in $LABELS; do rm -rf "${ART:?}/$LABEL"; done
-rm -f "$ART/artifacts.txt"
+# A cleanup that fails can leave a link behind that the copies and the manifest write below would follow
+# out of the folder, so a failed cleanup stops the script before any write.
+for LABEL in $LABELS; do
+  rm -rf "${ART:?}/$LABEL" || { echo "could not clear $ART/$LABEL, so nothing was written" >&2; exit 1; }
+done
+rm -f "$ART/artifacts.txt" || { echo "could not clear $ART/artifacts.txt, so nothing was written" >&2; exit 1; }
 
 # set_version <worktree> <version>: the first version line of the baley crate, the one in [package].
 set_version() {
