@@ -365,13 +365,24 @@ pub enum ArtifactState {
         /// The manifest entry's SHA-256, which the bytes found share.
         digest: String,
     },
-    /// The stub differs from the manifest entry.
+    /// The stub differs from the manifest entry and is not one Baley placed.
     StubDiffers {
         /// The place.
         path: PathBuf,
         /// The manifest entry's SHA-256.
         expected: String,
         /// The SHA-256 of the bytes found.
+        found: String,
+    },
+    /// The stub differs from the manifest entry, and its SHA-256 is one the
+    /// latest install record holds for this identity: an older stub Baley
+    /// placed, which `baley install` replaces.
+    StubOlder {
+        /// The place.
+        path: PathBuf,
+        /// The manifest entry's SHA-256.
+        expected: String,
+        /// The SHA-256 of the bytes found, which the record holds.
         found: String,
     },
     /// The registration document holds the entry Baley renders.
@@ -539,6 +550,43 @@ fn acknowledgements(
         .map_err(Clone::clone)
 }
 
+/// The SHA-256 values the latest install record holds for a stub identity,
+/// read as `install::stubs::judge` reads them.
+fn recorded_hashes<'a>(record: Option<&'a Value>, identity: &str) -> Vec<&'a str> {
+    record
+        .and_then(|record| record.get("stubs"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|stub| stub.get("identity").and_then(Value::as_str) == Some(identity))
+        .filter_map(|stub| stub.get("sha256").and_then(Value::as_str))
+        .collect()
+}
+
+/// Judges a stub whose bytes are not the rendered ones. A stub whose digest
+/// is a hash the record holds for its identity is an older one Baley placed,
+/// which install replaces. Any other digest is not Baley's to replace.
+fn differing_stub(
+    path: PathBuf,
+    expected: String,
+    found: String,
+    recorded: &[&str],
+) -> ArtifactState {
+    if recorded.contains(&found.as_str()) {
+        ArtifactState::StubOlder {
+            path,
+            expected,
+            found,
+        }
+    } else {
+        ArtifactState::StubDiffers {
+            path,
+            expected,
+            found,
+        }
+    }
+}
+
 /// Where an artifact sits in the order the report lists them: the stubs,
 /// then the registration, the hook and the settings.
 fn rank(artifact: &Artifact) -> u8 {
@@ -665,11 +713,12 @@ pub fn judge(observation: &Observation) -> Findings {
                             path,
                             digest: entry.digest.clone(),
                         },
-                        StubJudgement::Differs { found_digest } => ArtifactState::StubDiffers {
+                        StubJudgement::Differs { found_digest } => differing_stub(
                             path,
-                            expected: entry.digest.clone(),
-                            found: found_digest,
-                        },
+                            entry.digest.clone(),
+                            found_digest,
+                            &recorded_hashes(mapped.record.as_ref(), &entry.identity),
+                        ),
                     },
                     None => ArtifactState::Read { path },
                 },
@@ -1115,6 +1164,48 @@ mod tests {
     use crate::host_artifacts::compose::compose;
     use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
     use crate::host_artifacts::{hook, security};
+
+    #[test]
+    fn an_older_stub_baley_placed_called_foreign_by_the_doctor_is_caught() {
+        let record = serde_json::json!({"stubs": [
+            {"identity": "bal-capture", "path": "/s/bal-capture/SKILL.md", "sha256": "old1"},
+            {"identity": "bal-help", "path": "/s/bal-help/SKILL.md", "sha256": "other"},
+        ]});
+        let judged = |identity: &str, found: &str| {
+            differing_stub(
+                PathBuf::from("/s/SKILL.md"),
+                "new".to_owned(),
+                found.to_owned(),
+                &recorded_hashes(Some(&record), identity),
+            )
+        };
+        let older = ArtifactState::StubOlder {
+            path: PathBuf::from("/s/SKILL.md"),
+            expected: "new".to_owned(),
+            found: "old1".to_owned(),
+        };
+        // The digest the record holds for this identity is Baley's own.
+        assert_eq!(judged("bal-capture", "old1"), older);
+        assert!(older.is_gap());
+        // A digest the record holds for another identity, one it holds for
+        // none, and no record at all are not Baley's.
+        let foreign = |found: &str| ArtifactState::StubDiffers {
+            path: PathBuf::from("/s/SKILL.md"),
+            expected: "new".to_owned(),
+            found: found.to_owned(),
+        };
+        assert_eq!(judged("bal-capture", "other"), foreign("other"));
+        assert_eq!(judged("bal-capture", "edited"), foreign("edited"));
+        assert_eq!(
+            differing_stub(
+                PathBuf::from("/s/SKILL.md"),
+                "new".to_owned(),
+                "old1".to_owned(),
+                &recorded_hashes(None, "bal-capture"),
+            ),
+            foreign("old1")
+        );
+    }
 
     #[test]
     fn a_missing_program_left_out_of_the_coverage_verdicts_is_caught() {

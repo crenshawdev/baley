@@ -87,6 +87,14 @@ impl Report {
                     "{artifact}: {} differs from the stub Baley renders: expected sha256 {expected}, found sha256 {found}; move it aside, then run baley install again",
                     path.display()
                 ),
+                ArtifactState::StubOlder {
+                    path,
+                    expected,
+                    found,
+                } => format!(
+                    "{artifact}: {} is an older stub Baley placed, not the one this version renders: expected sha256 {expected}, found sha256 {found}; run baley install to bring it to this version",
+                    path.display()
+                ),
                 ArtifactState::RegistrationMatches { path } => format!(
                     "{artifact}: {} holds the entry Baley renders for this binary",
                     path.display()
