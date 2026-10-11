@@ -68,11 +68,11 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->4
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->4
-    4-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
+    4-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs.<br />Adds the chosen providers'<br />API hosts to the sandbox<br />allow list with baley config<br />interview</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
-    4-. "<div>Writes a settings file whole,<br />for config set</div><div style='font-size: 70%'></div>" .->13
+    4-. "<div>Writes a settings file whole,<br />for config set and for the<br />interview's reviewer list</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->9
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->10
     4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8
@@ -84,7 +84,7 @@ graph LR
 ```
 <!-- /c4:configuration -->
 
-*Figure 1. Policy and the model catalog inside Baley. The host session calls providers with environment credentials and hands list responses to Baley for parsing. The host interface also runs `baley install`, which writes Claude Code's wiring and seeds the catalog without a list call.*
+*Figure 1. Policy and the model catalog inside Baley. The host session calls providers with environment credentials and hands list responses to Baley for parsing. The host interface also runs `baley install`, which writes Claude Code's wiring and seeds the catalog without a list call. The interview adds the chosen providers' API hosts to Claude Code's settings file, and writes the global reviewer list whole, as `config set` writes a settings file.*
 
 ## 2. Terms
 

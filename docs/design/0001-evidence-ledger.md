@@ -143,7 +143,7 @@ graph LR
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->2
     14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
     14-. "<div>Asks before each tool call<br />runs</div><div style='font-size: 70%'>[Pre-tool hook, one process per tool call]</div>" .->2
-    2-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
+    2-. "<div>Writes the wiring with baley<br />install: MCP registration,<br />pre-tool hook, sandbox and<br />deny settings, skill stubs.<br />Adds the chosen providers'<br />API hosts to the sandbox<br />allow list with baley config<br />interview</div><div style='font-size: 70%'>[claude mcp add-json, files under the Claude folder]</div>" .->14
     14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
     14-. "<div>Review and model-list API<br />calls with the owner's<br />environment keys</div><div style='font-size: 70%'></div>" .->18
     2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
@@ -154,7 +154,7 @@ graph LR
 ```
 <!-- /c4:context -->
 
-*Figure 1. System context from the shared C4 model. The host reaches Baley over MCP and its pre-tool hook. `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs. The session makes review and model-list API calls with the owner's environment keys; Baley receives their results. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
+*Figure 1. System context from the shared C4 model. The host reaches Baley over MCP and its pre-tool hook. `baley install` writes the host's wiring: the MCP registration through `claude`, the pre-tool hook, the sandbox and deny settings in the user settings file and the skill stubs. `baley config interview` adds the chosen providers' API hosts to the same settings file. The session makes review and model-list API calls with the owner's environment keys; Baley receives their results. The foreground `baley update` command and the detached opt-in updater are built and contact the release source. `baley serve` starts the detached check only when `updates.auto` is on, without waiting for it. T14 and T17 use unsigned development artifacts only, and #14 supplies release verification.*
 
 ```mermaid
 flowchart TB

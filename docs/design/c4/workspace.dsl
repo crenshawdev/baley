@@ -34,7 +34,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         host -> binary "Asks before each tool call runs" "Pre-tool hook, one process per tool call"
         # The only relation from a component to the host, so the context and
         # container views show it as an implied edge with this text.
-        hostInterface -> host "Writes the wiring with baley install: MCP registration, pre-tool hook, sandbox and deny settings, skill stubs" "claude mcp add-json, files under the Claude folder"
+        hostInterface -> host "Writes the wiring with baley install: MCP registration, pre-tool hook, sandbox and deny settings, skill stubs. Adds the chosen providers' API hosts to the sandbox allow list with baley config interview" "claude mcp add-json, files under the Claude folder"
         host -> repo "Workers edit source and commit"
         host -> reviewers "Review and model-list API calls with the owner's environment keys"
         hostInterface -> hardin "Asks what may happen next"
@@ -43,9 +43,9 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         composer -> policy "Resolves role, model and effort"
         # Explicit, so the container view shows the write beside the reads; the
         # implied edge would carry only the first component relation.
-        binary -> settings "Reads, and writes a file whole for config set"
+        binary -> settings "Reads, and writes a file whole for config set and for the interview's reviewer list"
         policy -> settings "Reads"
-        hostInterface -> settings "Writes a settings file whole, for config set"
+        hostInterface -> settings "Writes a settings file whole, for config set and for the interview's reviewer list"
         policy -> catalog "Checks model names"
         policy -> ports "Records the effective policy and each route"
         hostInterface -> policy "Settings commands"
