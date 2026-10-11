@@ -130,6 +130,10 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     let latest = record::latest(&store, args.host.as_str())
         .map_err(|error| display::store_error(&error, Some(USER_PROJECT)))?;
     let latest_payload = latest.as_ref().map(|latest| &latest.payload);
+    let observe = |path: &Path| plan::Observation {
+        state: placed::read(path),
+        symbolic_link: fs::symlink_metadata(path).is_ok_and(|meta| meta.is_symlink()),
+    };
     let mut observations = BTreeMap::new();
     for file in installed.placements.expected_files() {
         if file.stub.is_some()
@@ -137,12 +141,13 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
         {
             observations
                 .entry(file.path.to_path_buf())
-                .or_insert_with(|| plan::Observation {
-                    state: placed::read(file.path),
-                    symbolic_link: fs::symlink_metadata(file.path)
-                        .is_ok_and(|meta| meta.is_symlink()),
-                });
+                .or_insert_with(|| observe(file.path));
         }
+    }
+    for stub in plan::retired(latest_payload, &installed.placements) {
+        observations
+            .entry(stub.path.clone())
+            .or_insert_with(|| observe(&stub.path));
     }
     let prerequisites = prerequisites::judge(&prerequisites::gather(
         std::env::var_os("PATH").as_deref(),
@@ -164,7 +169,12 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
         &installed.registration_file,
         installed.placements.executable(),
     );
-    let applied = plan::applied(&plan, &applying.writes, &applying.attempt);
+    let applied = plan::applied(
+        &plan,
+        &applying.writes,
+        &applying.removals,
+        &applying.attempt,
+    );
     let seed = models::seed(&store, new_request_id(), &SystemClock::now());
 
     let schema = Schema::standard();

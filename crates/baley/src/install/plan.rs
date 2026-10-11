@@ -17,9 +17,10 @@ use crate::host_doctor::placed::{ExecutableGap, Fault, FileState};
 use crate::host_doctor::prerequisites::Judged;
 use crate::ledger::display::Render;
 use crate::replace::Failure;
+use crate::store::model::digest;
 
 use super::event;
-use super::receipt::{ArtifactOutcome, Notes};
+use super::receipt::{ArtifactOutcome, Notes, RetiredOutcome};
 use super::registration::{self, Attempt, Registered, Step};
 use super::settings::{self, Input};
 use super::stubs::{self, Decision};
@@ -85,6 +86,56 @@ pub struct Plan {
     /// Why the hook and the registration were held back, when nothing
     /// runnable sits at the stable path.
     pub wiring: Option<Wiring>,
+    /// Stubs this binary no longer ships whose files still hold the bytes
+    /// the record says Baley placed, removed after the writes.
+    pub removals: Vec<Retired>,
+}
+
+/// A stub the latest record lists that this binary does not place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retired {
+    /// The identity the record lists.
+    pub identity: String,
+    /// The absolute path the record lists.
+    pub path: PathBuf,
+    /// The SHA-256 the record holds for the bytes Baley placed there.
+    pub sha256: String,
+}
+
+/// The stubs the latest record lists that this binary does not place, each
+/// at an absolute path that is no placed file's path.
+pub(crate) fn retired(latest: Option<&Value>, placements: &PlacementMap) -> Vec<Retired> {
+    let placed = placements.expected_files();
+    let Some(stubs) = latest
+        .and_then(|record| record.get("stubs"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    stubs
+        .iter()
+        .filter_map(|stub| {
+            let field = |name| stub.get(name).and_then(Value::as_str);
+            let retired = Retired {
+                identity: field("identity")?.into(),
+                path: PathBuf::from(field("path")?),
+                sha256: field("sha256")?.into(),
+            };
+            let shipped = placed.iter().any(|file| {
+                file.stub
+                    .is_some_and(|entry| entry.identity == retired.identity)
+                    || file.path == retired.path
+            });
+            (retired.path.is_absolute() && !shipped).then_some(retired)
+        })
+        .collect()
+}
+
+/// Whether the file at a retired stub's path is still the one Baley placed:
+/// its bytes have the recorded hash and the path is no link.
+fn removable(retired: &Retired, seen: &Observation) -> bool {
+    !seen.symbolic_link
+        && matches!(&seen.state, FileState::Bytes(bytes) if digest(bytes) == retired.sha256)
 }
 
 /// The hook and the registration held back from an empty stable path.
@@ -103,9 +154,10 @@ fn unobserved() -> Observation {
     }
 }
 
-/// Plans the writes, or refuses every write with one line per conflict.
-/// Observations are keyed by path so artifacts sharing a document use one read.
-/// A missing observation refuses rather than inventing an absent file.
+/// Plans the writes and the retired stubs' removals, or refuses every write
+/// with one line per conflict. Observations are keyed by path so artifacts
+/// sharing a document use one read. A missing observation refuses a placed
+/// artifact rather than inventing an absent file, and removes nothing.
 pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
     let placements = gathered.placements;
     let observed = |path: &Path| {
@@ -245,6 +297,12 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
             }
         }
     }
+    // A retired stub that is not provably Baley's is the owner's: it is left
+    // where it is and refuses nothing.
+    let removals = retired(gathered.latest, placements)
+        .into_iter()
+        .filter(|stub| removable(stub, &observed(&stub.path)))
+        .collect();
     Ok(Plan {
         writes,
         outcomes,
@@ -252,6 +310,7 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         registration,
         registration_seen: registration::held(&registration_read),
         wiring,
+        removals,
     })
 }
 
@@ -269,12 +328,29 @@ pub struct Applied {
     pub registration_seen: Option<Value>,
     /// Whether a remove launch succeeded after that read.
     pub registration_removed: bool,
+    /// Each planned removal of a retired stub, in plan order, with what
+    /// became of it.
+    pub retired: Vec<(Retired, RetiredOutcome)>,
 }
 
-/// Interprets write observations in plan order, then the registration step.
-/// A failed folder sync still placed the bytes, but every failure stops
-/// subsequent writes.
-pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>], attempt: &Attempt) -> Applied {
+impl Applied {
+    /// Whether every planned removal of a retired stub happened.
+    pub fn all_retired_removed(&self) -> bool {
+        self.retired
+            .iter()
+            .all(|(_, outcome)| *outcome == RetiredOutcome::Removed)
+    }
+}
+
+/// Interprets write observations in plan order, then the removals and the
+/// registration step. A failed folder sync still placed the bytes or removed
+/// the file, but every failure stops subsequent writes.
+pub(crate) fn applied(
+    plan: &Plan,
+    results: &[Result<(), Failure>],
+    removals: &[Result<(), Failure>],
+    attempt: &Attempt,
+) -> Applied {
     let mut applied = Applied {
         outcomes: plan.outcomes.clone(),
         failure: None,
@@ -284,6 +360,7 @@ pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>], attempt: &At
         ),
         registration_seen: attempt.seen.clone(),
         registration_removed: attempt.removed,
+        retired: Vec::new(),
     };
     for (index, write) in plan.writes.iter().enumerate() {
         let result = results.get(index);
@@ -324,6 +401,23 @@ pub(crate) fn applied(plan: &Plan, results: &[Result<(), Failure>], attempt: &At
                 *state = outcome.clone();
             }
         }
+    }
+    for (index, stub) in plan.removals.iter().enumerate() {
+        let outcome = match removals.get(index) {
+            Some(Ok(()) | Err(Failure::Unsynced { .. })) => RetiredOutcome::Removed,
+            Some(Err(Failure::Unchanged { path, cause })) => {
+                RetiredOutcome::Failed(format!("not-removable: {}: {cause}", path.display()))
+            }
+            Some(Err(Failure::Refused(conflict))) => RetiredOutcome::Failed(conflict.to_string()),
+            None => RetiredOutcome::Failed(format!(
+                "an earlier write failed: {}",
+                applied
+                    .failure
+                    .as_deref()
+                    .unwrap_or("the removal was not reached")
+            )),
+        };
+        applied.retired.push((stub.clone(), outcome));
     }
     let registration = match &attempt.result {
         Registered::Unchanged => ArtifactOutcome::Unchanged,
@@ -371,7 +465,8 @@ pub(crate) fn complete(
 /// Builds ownership facts from applied outcomes without reading any path.
 /// Failed or unreached writes keep that identity's previous entry, so the
 /// next install can still recognize an older stub, hook, deny entry or
-/// registration while the file still holds it.
+/// registration while the file still holds it. A retired stub whose removal
+/// failed keeps its entry too.
 pub(crate) fn facts(
     version: &str,
     placements: &PlacementMap,
@@ -407,6 +502,19 @@ pub(crate) fn facts(
                 })
             }
         })
+        // A retired stub still on disk stays recorded, so the next install
+        // can still prove it is Baley's and remove it.
+        .chain(
+            applied
+                .retired
+                .iter()
+                .filter(|(_, outcome)| matches!(outcome, RetiredOutcome::Failed(_)))
+                .map(|(stub, _)| event::Stub {
+                    identity: stub.identity.clone(),
+                    path: stub.path.to_string_lossy().into_owned(),
+                    sha256: stub.sha256.clone(),
+                }),
+        )
         .collect();
     let settings_owned = applied
         .outcomes
@@ -419,6 +527,7 @@ pub(crate) fn facts(
         binary_version: version.into(),
         binary_path: placements.executable().as_str().into(),
         complete: applied.failure.is_none()
+            && applied.all_retired_removed()
             && complete(placements, &applied.outcomes, &applied.notes, seed),
         registration,
         hook,
@@ -565,6 +674,7 @@ mod tests {
                 notes: Notes::default(),
                 registration_seen: None,
                 registration_removed: false,
+                retired: Vec::new(),
             };
             let facts = facts(
                 "0.2.0",
@@ -649,6 +759,7 @@ mod tests {
                 notes: Notes::default(),
                 registration_seen: None,
                 registration_removed: false,
+                retired: Vec::new(),
             };
             facts(
                 "0.2.0",
@@ -990,6 +1101,7 @@ mod tests {
             notes: Notes::default(),
             registration_seen: seen,
             registration_removed: removed,
+            retired: Vec::new(),
         };
 
         // Everything is Baley's: complete follows the catalog seed.
@@ -1153,7 +1265,7 @@ mod tests {
             result: Registered::Registered,
         };
         let results: Vec<Result<(), Failure>> = plan.writes.iter().map(|_| Ok(())).collect();
-        let applied = applied(&plan, &results, &attempt);
+        let applied = applied(&plan, &results, &[], &attempt);
         let facts = facts(
             "0.2.0",
             &installed.placements,
@@ -1167,5 +1279,223 @@ mod tests {
         assert_eq!(recorded.stream.0, "install");
         assert_eq!(recorded.type_name, "install.recorded");
         assert_eq!(recorded.payload["defaults"], json!({}));
+    }
+
+    const OLD: &str = "/home/o/.claude/skills/bal-old/SKILL.md";
+    const CAPTURE: &str = "/home/o/.claude/skills/bal-capture/SKILL.md";
+    const HELP: &str = "/home/o/.claude/skills/bal-help/SKILL.md";
+
+    /// A file at a path, read as `bytes` or absent, and whether the path is a
+    /// link.
+    fn file(bytes: Option<&[u8]>, symbolic_link: bool) -> Observation {
+        Observation {
+            state: bytes.map_or(FileState::Absent, |bytes| FileState::Bytes(bytes.to_vec())),
+            symbolic_link,
+        }
+    }
+
+    /// The plan for a machine with nothing placed, whose latest record lists
+    /// `stubs`, with `extra` observed beside the placed paths.
+    fn plan_with(stubs: Value, extra: &[(&str, Observation)]) -> Plan {
+        let installed = installed();
+        let mut observations = BTreeMap::from([
+            (PathBuf::from(SETTINGS), file(None, false)),
+            (PathBuf::from("/home/o/.claude.json"), file(None, false)),
+            (PathBuf::from(CAPTURE), file(None, false)),
+            (PathBuf::from(HELP), file(None, false)),
+        ]);
+        for (path, seen) in extra {
+            observations.insert(PathBuf::from(path), seen.clone());
+        }
+        let latest = json!({ "stubs": stubs });
+        judge(&Gathered {
+            placements: &installed.placements,
+            folders: &folders(),
+            latest: Some(&latest),
+            observations: &observations,
+            prerequisites: &linux(),
+            executable: None,
+        })
+        .expect("plans")
+    }
+
+    /// `bal-old`, a stub this binary does not ship, recorded at `OLD` with
+    /// the hash of `old stub`.
+    fn old_stub() -> Retired {
+        Retired {
+            identity: "bal-old".into(),
+            path: OLD.into(),
+            sha256: digest(b"old stub"),
+        }
+    }
+
+    fn recorded(stub: &Retired) -> Value {
+        json!({"identity": stub.identity, "path": stub.path, "sha256": stub.sha256})
+    }
+
+    #[test]
+    fn a_retired_stub_baley_placed_left_on_disk_is_caught() {
+        let old = old_stub();
+        let plan = plan_with(
+            json!([recorded(&old)]),
+            &[(OLD, file(Some(b"old stub"), false))],
+        );
+        assert_eq!(plan.removals, [old]);
+    }
+
+    #[test]
+    fn an_owner_file_at_a_retired_stub_path_planned_for_removal_is_caught() {
+        let old = old_stub();
+        for (case, extra) in [
+            ("other bytes", vec![(OLD, file(Some(b"mine"), false))]),
+            ("a link", vec![(OLD, file(Some(b"old stub"), true))]),
+            ("absent", vec![(OLD, file(None, false))]),
+            ("unobserved", vec![]),
+        ] {
+            let plan = plan_with(json!([recorded(&old)]), &extra);
+            assert!(plan.removals.is_empty(), "{case}: {:?}", plan.removals);
+        }
+    }
+
+    #[test]
+    fn a_shipped_stub_planned_for_removal_is_caught() {
+        let older_help = Retired {
+            identity: "bal-help".into(),
+            path: HELP.into(),
+            sha256: digest(b"older help"),
+        };
+        // A retired entry naming a placed path whose bytes it would match.
+        let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+        let capture = &manifest[0];
+        assert_eq!(capture.identity, "bal-capture");
+        let at_capture = Retired {
+            path: CAPTURE.into(),
+            sha256: capture.digest.clone(),
+            ..old_stub()
+        };
+        let plan = plan_with(
+            json!([recorded(&older_help), recorded(&at_capture)]),
+            &[
+                (HELP, file(Some(b"older help"), false)),
+                (CAPTURE, file(Some(&capture.bytes), false)),
+            ],
+        );
+        assert!(plan.removals.is_empty(), "{:?}", plan.removals);
+        let replaced: Vec<_> = plan.writes.iter().map(|write| &write.path).collect();
+        assert!(replaced.contains(&&PathBuf::from(HELP)), "{replaced:?}");
+    }
+
+    #[test]
+    fn a_retired_stub_whose_removal_failed_dropped_from_the_record_is_caught() {
+        let installed = installed();
+        let settings = decision(&complete_settings(), None);
+        let old = old_stub();
+        let build = |outcome: RetiredOutcome| {
+            let applied = Applied {
+                outcomes: vec![
+                    (
+                        Artifact::Stub("bal-capture".into()),
+                        ArtifactOutcome::Unchanged,
+                    ),
+                    (
+                        Artifact::Stub("bal-help".into()),
+                        ArtifactOutcome::Unchanged,
+                    ),
+                    (Artifact::Registration, ArtifactOutcome::Unchanged),
+                    (Artifact::Hook, ArtifactOutcome::Unchanged),
+                    (Artifact::Settings, ArtifactOutcome::Unchanged),
+                ],
+                failure: None,
+                notes: Notes::default(),
+                registration_seen: None,
+                registration_removed: false,
+                retired: vec![(old.clone(), outcome)],
+            };
+            facts(
+                "0.2.0",
+                &installed.placements,
+                None,
+                &settings,
+                &applied,
+                &Ok(true),
+                updates(),
+            )
+        };
+        let identities = |facts: &event::Facts| -> Vec<String> {
+            facts
+                .stubs
+                .iter()
+                .map(|stub| stub.identity.clone())
+                .collect()
+        };
+
+        let removed = build(RetiredOutcome::Removed);
+        assert_eq!(identities(&removed), ["bal-capture", "bal-help"]);
+        assert!(removed.complete);
+
+        let left = build(RetiredOutcome::Failed("not-removable: denied".into()));
+        assert_eq!(identities(&left), ["bal-capture", "bal-help", "bal-old"]);
+        assert_eq!(
+            left.stubs[2],
+            event::Stub {
+                identity: "bal-old".into(),
+                path: OLD.into(),
+                sha256: digest(b"old stub"),
+            }
+        );
+        assert!(!left.complete);
+    }
+
+    #[test]
+    fn a_removal_result_misread_is_caught() {
+        let old = old_stub();
+        let plan = plan_with(
+            json!([recorded(&old)]),
+            &[(OLD, file(Some(b"old stub"), false))],
+        );
+        let attempt = Attempt {
+            seen: None,
+            removed: false,
+            result: Registered::Registered,
+        };
+        let written: Vec<Result<(), Failure>> = plan.writes.iter().map(|_| Ok(())).collect();
+        let denied = || std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let outcome = |writes: &[Result<(), Failure>], removals: &[Result<(), Failure>]| {
+            applied(&plan, writes, removals, &attempt).retired
+        };
+
+        let unsynced = [Err(Failure::Unsynced {
+            path: OLD.into(),
+            cause: denied(),
+        })];
+        assert_eq!(
+            outcome(&written, &unsynced),
+            [(old.clone(), RetiredOutcome::Removed)]
+        );
+        let unchanged = [Err(Failure::Unchanged {
+            path: OLD.into(),
+            cause: denied(),
+        })];
+        assert_eq!(
+            outcome(&written, &unchanged),
+            [(
+                old.clone(),
+                RetiredOutcome::Failed(format!("not-removable: {OLD}: {}", denied()))
+            )]
+        );
+        let failed_write = [Err(Failure::Unchanged {
+            path: SETTINGS.into(),
+            cause: denied(),
+        })];
+        let unreached = outcome(&failed_write, &[]);
+        let [(_, RetiredOutcome::Failed(cause))] = unreached.as_slice() else {
+            panic!("an unreached removal must be a failure: {unreached:?}");
+        };
+        assert!(
+            cause.starts_with(
+                "an earlier write failed: not-writable: /home/o/.claude/settings.json"
+            ),
+            "{cause}"
+        );
     }
 }

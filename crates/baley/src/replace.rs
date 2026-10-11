@@ -1,6 +1,7 @@
 //! Whole-file replacement of a settings file (design 0003, CFG-R9): the new
 //! bytes are renamed over the old file, and the write is refused when the
-//! file on disk is not the one that was read.
+//! file on disk is not the one that was read. Removal of a file Baley placed
+//! is refused the same way.
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -156,6 +157,27 @@ pub fn replace(target: &Path, bytes: &[u8], read: Option<&str>) -> Result<(), Fa
         let _ = fs::remove_file(&temporary);
         return Err(failure);
     }
+    fs::File::open(folder)
+        .and_then(|folder| folder.sync_all())
+        .map_err(|cause| Failure::Unsynced {
+            path: target.into(),
+            cause,
+        })
+}
+
+/// Removes `target` only while the file on disk has the digest `read`, never
+/// through a link, then syncs its folder. A failed sync after the removal is
+/// `Unsynced`: the file is gone, but that may not survive a crash.
+pub fn remove(target: &Path, read: &str) -> Result<(), Failure> {
+    decide(target, Some(read), on_disk(target)?.as_deref())?;
+    fs::remove_file(target).map_err(|cause| Failure::Unchanged {
+        path: target.into(),
+        cause,
+    })?;
+    let folder = match target.parent() {
+        Some(folder) if !folder.as_os_str().is_empty() => folder,
+        _ => Path::new("."),
+    };
     fs::File::open(folder)
         .and_then(|folder| folder.sync_all())
         .map_err(|cause| Failure::Unsynced {

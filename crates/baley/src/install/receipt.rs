@@ -34,6 +34,15 @@ impl ArtifactOutcome {
     }
 }
 
+/// What the run did with a stub this binary no longer ships.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetiredOutcome {
+    /// The file Baley placed is gone.
+    Removed,
+    /// The file is still there, with the cause.
+    Failed(String),
+}
+
 /// What the settings step adds to the receipt beyond the artifact lines.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Notes {
@@ -178,8 +187,9 @@ pub(crate) fn render(
     }
 }
 
-/// Adds write and recording failures to the artifact receipt. Either failure
-/// leaves a partial outcome, including a rename whose folder was not synced.
+/// Adds a line for each retired stub after the artifact lines, then write and
+/// recording failures. A removal, write or recording failure leaves a partial
+/// outcome, including a rename whose folder was not synced.
 pub(crate) fn render_applied(
     version: &str,
     stable_path: &Path,
@@ -196,6 +206,30 @@ pub(crate) fn render_applied(
         &applied.notes,
         seed,
     );
+    let after_artifacts = 2 + placements.expected_files().len();
+    let retired: Vec<_> = applied
+        .retired
+        .iter()
+        .map(|(stub, outcome)| {
+            let text = match outcome {
+                RetiredOutcome::Removed => "removed, since this binary no longer ships it".into(),
+                RetiredOutcome::Failed(cause) => format!("not removed: {cause}"),
+            };
+            format!(
+                "{} at {}: {text}",
+                Artifact::Stub(stub.identity.clone()),
+                stub.path.display()
+            )
+        })
+        .collect();
+    let retired_lines = retired.len();
+    receipt
+        .lines
+        .splice(after_artifacts..after_artifacts, retired);
+    if !applied.all_retired_removed() {
+        receipt.lines[0] = "install outcome: partial".into();
+        receipt.code = 1;
+    }
     let mut failures = Vec::new();
     if let Some(failure) = &applied.failure {
         failures.push(failure.clone());
@@ -211,7 +245,7 @@ pub(crate) fn render_applied(
     if !failures.is_empty() {
         receipt.lines[0] = "install outcome: partial".into();
         receipt.code = 1;
-        let after_seed = 3 + placements.expected_files().len();
+        let after_seed = after_artifacts + retired_lines + 1;
         receipt.lines.splice(after_seed..after_seed, failures);
     }
     receipt
@@ -260,6 +294,7 @@ mod tests {
             notes: Notes::default(),
             registration_seen: None,
             registration_removed: false,
+            retired: Vec::new(),
         };
         let receipt = render_applied(
             "0.2.0",
@@ -457,7 +492,7 @@ mod tests {
             removed: false,
             result: Registered::Registered,
         };
-        let applied = plan::applied(&plan, &written, &registered);
+        let applied = plan::applied(&plan, &written, &[], &registered);
 
         let receipt = render_applied(
             "0.2.0",
@@ -656,6 +691,7 @@ mod tests {
                 },
                 registration_seen: None,
                 registration_removed: false,
+                retired: Vec::new(),
             };
             render_applied(
                 "0.2.0",
@@ -696,5 +732,54 @@ mod tests {
             ),
             "{line}"
         );
+    }
+
+    #[test]
+    fn a_retired_stub_removal_missing_from_the_receipt_is_caught() {
+        let installed = installed();
+        let old = super::super::plan::Retired {
+            identity: "bal-old".into(),
+            path: "/home/o/.claude/skills/bal-old/SKILL.md".into(),
+            sha256: "0".repeat(64),
+        };
+        let render_with = |outcome: RetiredOutcome| {
+            let applied = super::super::plan::Applied {
+                outcomes: outcomes(ArtifactOutcome::Unchanged),
+                failure: None,
+                notes: Notes::default(),
+                registration_seen: None,
+                registration_removed: false,
+                retired: vec![(old.clone(), outcome)],
+            };
+            render_applied(
+                "0.2.0",
+                installed.layout.stable_path(),
+                &installed.placements,
+                &applied,
+                &Ok(true),
+                &Ok(true),
+            )
+        };
+
+        let removed = render_with(RetiredOutcome::Removed);
+        assert_eq!(removed.lines[0], "install outcome: complete");
+        assert_eq!(
+            removed.lines[7],
+            "stub `bal-old` at /home/o/.claude/skills/bal-old/SKILL.md: removed, since this binary no longer ships it"
+        );
+        assert!(
+            removed.lines[8].contains("model catalog"),
+            "{:?}",
+            removed.lines
+        );
+        assert_eq!(removed.code, 0);
+
+        let left = render_with(RetiredOutcome::Failed("not-removable: denied".into()));
+        assert_eq!(left.lines[0], "install outcome: partial");
+        assert_eq!(
+            left.lines[7],
+            "stub `bal-old` at /home/o/.claude/skills/bal-old/SKILL.md: not removed: not-removable: denied"
+        );
+        assert_eq!(left.code, 1);
     }
 }
