@@ -16,6 +16,7 @@ use crate::update::installation::{Active, Occupant};
 use baley_core::catalog::Provider;
 
 use super::acknowledgement::Standing;
+use super::update_setting::Judged as UpdateSetting;
 
 /// The heading that opens the host section.
 const HEADING: &str = "Claude Code host checks";
@@ -176,6 +177,7 @@ impl Report {
             lines.push(provider_host_line(judged));
         }
         acknowledgement_lines(&findings.acknowledgements, &mut lines);
+        lines.push(update_setting_line(&findings.update_setting));
         server_lines(&findings.server, &mut lines);
         gap |= store_lines(&findings.store, &mut lines);
         gap |= guard_record_lines(&findings.guard_records, &mut lines);
@@ -235,6 +237,24 @@ fn stable_line(stable: &Stable) -> String {
         }
         Err(cause) => format!(
             "stable path: {path} could not be examined: {cause}, so the version it runs is unknown"
+        ),
+    }
+}
+
+/// The effective global `updates.auto`, as the global settings hold it now.
+/// Never a finding: update checks are the owner's choice either way.
+fn update_setting_line(judged: &UpdateSetting) -> String {
+    match judged {
+        UpdateSetting::Effective {
+            auto,
+            file: Some(file),
+        } => format!("updates.auto: {auto}, set in {}", file.display()),
+        UpdateSetting::Effective { auto, file: None } => {
+            format!("updates.auto: {auto}, the default, since the global settings do not set it")
+        }
+        UpdateSetting::Unreadable { path, text } => format!(
+            "updates.auto: unknown, because the global settings cannot be read: {text}; fix {}, then run baley doctor again",
+            path.display()
         ),
     }
 }
@@ -1730,5 +1750,43 @@ mod tests {
         assert_eq!(openai.len(), 1, "{:?}", current.lines);
         assert!(says_current(openai[0]), "{}", openai[0]);
         assert_eq!(current.code, 0, "{:?}", current.lines);
+    }
+
+    #[test]
+    fn an_update_setting_read_from_the_install_record_is_caught() {
+        let global = PathBuf::from(CONFIG).join("config.toml");
+        let mut on = installed_observation();
+        assert_eq!(
+            on.host.as_ref().unwrap().record.as_ref().unwrap()["updates"]["auto"],
+            serde_json::json!(false)
+        );
+        on.global_settings = Ok(Some(crate::settings::file(
+            &global,
+            b"[updates]\nauto = true\n".to_vec(),
+        )));
+        let on = report_of(&on);
+        assert_eq!(
+            lines_with(&on, &["updates.auto", "true"]).len(),
+            1,
+            "{:?}",
+            on.lines
+        );
+        assert!(
+            lines_with(&on, &["updates.auto", "false"]).is_empty(),
+            "{:?}",
+            on.lines
+        );
+        assert_eq!(on.code, 0, "{:?}", on.lines);
+
+        let mut absent = installed_observation();
+        absent.global_settings = Ok(None);
+        let absent = report_of(&absent);
+        assert_eq!(
+            lines_with(&absent, &["updates.auto", "false"]).len(),
+            1,
+            "{:?}",
+            absent.lines
+        );
+        assert_eq!(absent.code, 0, "{:?}", absent.lines);
     }
 }
