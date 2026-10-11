@@ -1,6 +1,7 @@
 //! Whole-file replacement of a settings file (design 0003, CFG-R9): the new
 //! bytes are renamed over the old file, and the write is refused when the
-//! file on disk is not the one that was read.
+//! file on disk is not the one that was read. Removal of a file Baley placed
+//! is refused the same way.
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -156,6 +157,27 @@ pub fn replace(target: &Path, bytes: &[u8], read: Option<&str>) -> Result<(), Fa
         let _ = fs::remove_file(&temporary);
         return Err(failure);
     }
+    fs::File::open(folder)
+        .and_then(|folder| folder.sync_all())
+        .map_err(|cause| Failure::Unsynced {
+            path: target.into(),
+            cause,
+        })
+}
+
+/// Removes `target` only while the file on disk has the digest `read`, never
+/// through a link, then syncs its folder. A failed sync after the removal is
+/// `Unsynced`: the file is gone, but that may not survive a crash.
+pub fn remove(target: &Path, read: &str) -> Result<(), Failure> {
+    decide(target, Some(read), on_disk(target)?.as_deref())?;
+    fs::remove_file(target).map_err(|cause| Failure::Unchanged {
+        path: target.into(),
+        cause,
+    })?;
+    let folder = match target.parent() {
+        Some(folder) if !folder.as_os_str().is_empty() => folder,
+        _ => Path::new("."),
+    };
     fs::File::open(folder)
         .and_then(|folder| folder.sync_all())
         .map_err(|cause| Failure::Unsynced {
@@ -331,5 +353,49 @@ mod tests {
         );
         assert_eq!(fs::read(&target).unwrap(), b"abc");
         assert_eq!(names(dir.path()), ["config.toml"]);
+    }
+
+    #[test]
+    fn a_file_still_holding_the_read_bytes_not_removed_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("SKILL.md");
+        fs::write(&target, b"abc").unwrap();
+
+        remove(&target, A).unwrap();
+        assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
+    }
+
+    #[test]
+    fn a_file_changed_since_it_was_read_removed_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("SKILL.md");
+        fs::write(&target, b"abc").unwrap();
+
+        let Err(Failure::Refused(refusal)) = remove(&target, B) else {
+            panic!("expected a refusal");
+        };
+        assert_eq!(
+            refusal,
+            Conflict::Changed {
+                path: target.clone()
+            }
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn a_linked_target_or_the_file_it_points_to_removed_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.md");
+        let link = dir.path().join("SKILL.md");
+        fs::write(&real, b"abc").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let Err(Failure::Refused(refusal)) = remove(&link, A) else {
+            panic!("expected a refusal");
+        };
+        assert_eq!(refusal, Conflict::Link { path: link.clone() });
+        assert_eq!(fs::read_link(&link).unwrap(), real);
+        assert_eq!(fs::read(&real).unwrap(), b"abc");
     }
 }

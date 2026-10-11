@@ -8,7 +8,7 @@ mod record;
 
 use baley_core::catalog::{MODEL_CATALOG_VIEW, USER_PROJECT, read_state, state_key};
 use baley_core::policy::recorded::RecordedPolicy;
-use baley_store::{Admin, Caller, Ledger, ProjectId, RequestId, StoreError, Views};
+use baley_store::{Admin, Caller, Ledger, ProjectId, Refusal, RequestId, StoreError, Views};
 
 pub use read::{Reads, build, gather};
 pub use record::{RECORD_COMMAND, record};
@@ -46,15 +46,20 @@ pub fn step(
 }
 
 /// The catalog version, read outside any transaction: 0 when the `user`
-/// project is absent. The project list is read first, so an absent project
-/// is not read as an error, and the step never creates or seeds `user`.
+/// project is absent or a newer binary has brought its views past this
+/// binary's. The project list is read first, so an absent project is not
+/// read as an error, and the step never creates or seeds `user`.
 fn observe_catalog_version(store: &(impl Admin + Views)) -> Result<u64, StoreError> {
     let user = ProjectId(USER_PROJECT.into());
     if !store.projects()?.iter().any(|(known, _)| *known == user) {
         return Ok(0);
     }
-    let state = store.get(&user, MODEL_CATALOG_VIEW, &state_key())?;
-    Ok(read_state(state.as_ref().map(|document| &document.body)).catalog_version)
+    match store.get(&user, MODEL_CATALOG_VIEW, &state_key()) {
+        Ok(state) => Ok(read_state(state.as_ref().map(|document| &document.body)).catalog_version),
+        // The fence on `user` must not reach the project being written.
+        Err(StoreError::Refused(Refusal::ProjectReadOnly { .. })) => Ok(0),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +170,44 @@ mod tests {
         .unwrap();
 
         assert_eq!(recorded_catalog_version(&store), json!(seeded[0].seq));
+    }
+
+    // A newer binary fences only `user`, so this project stays writable.
+    #[test]
+    fn a_policy_step_refused_when_user_is_at_a_newer_view_set_is_caught() {
+        use std::num::NonZeroU32;
+
+        use crate::ledger::open::{options, store as open};
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let newer = open(
+            &home,
+            T0,
+            baley_store_sqlite::Options {
+                view_set_version: NonZeroU32::new(options().view_set_version.get() + 1).unwrap(),
+                ..options()
+            },
+        )
+        .unwrap();
+        assert!(crate::models::seed(&newer, request(1), T0).unwrap());
+        drop(newer);
+        let store = open(&home, T1, options()).unwrap();
+        store
+            .create_project(&ProjectId(ID.into()), "sample", T1)
+            .unwrap();
+
+        step(
+            &store,
+            &ProjectId(ID.into()),
+            &recorded(),
+            request(2),
+            T2,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(recorded_catalog_version(&store), json!(0));
     }
 
     const SESSION: &str = "3f2b8c1e-4d5a-4e6f-8a7b-9c0d1e2f3a4b";
