@@ -240,7 +240,7 @@ pub fn gather<S: Ledger + Admin>(
         let writable = writable::locations(&map)
             .into_iter()
             .map(|location| {
-                let seen = writable::gather(&location);
+                let seen = writable::judge(writable::gather(&location));
                 (location, seen)
             })
             .collect();

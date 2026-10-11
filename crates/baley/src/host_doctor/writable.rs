@@ -16,9 +16,10 @@ use crate::host_artifacts::placement::{Artifact, PlacementMap};
 /// What asking about one location found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Seen {
-    /// This user may write into it.
+    /// It is a folder this user may write into and search.
     Writable,
-    /// It exists and this user may not write into it, with the system's text.
+    /// It exists and is not a folder this user may write into and search, with
+    /// the cause.
     NotWritable(String),
     /// Nothing is there yet.
     Absent,
@@ -58,21 +59,67 @@ pub fn locations(map: &PlacementMap) -> Vec<PathBuf> {
     found
 }
 
-/// Asks the filesystem whether this user may write into `location`, with
-/// `access(W_OK)`. Owns no rule and has no unit test of its own.
-pub fn gather(location: &Path) -> Seen {
+/// What the filesystem said about one location, before any rule is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observed {
+    /// Nothing is there yet.
+    Absent,
+    /// The system would not say what is there, with its text.
+    Unknown(String),
+    /// Something is there.
+    Present {
+        /// Whether it is a folder, following a link.
+        folder: bool,
+        /// The system's text when this user may not write into it.
+        write: Option<String>,
+        /// The system's text when this user may not search it.
+        search: Option<String>,
+    },
+}
+
+/// Asks the filesystem about `location`: whether it is a folder and, with
+/// `access`, whether this user may write and search it. Owns no rule and has
+/// no unit test of its own.
+pub fn gather(location: &Path) -> Observed {
     let Ok(text) = CString::new(location.as_os_str().as_bytes()) else {
-        return Seen::NotWritable("the path holds a NUL byte".to_owned());
+        return Observed::Unknown("the path holds a NUL byte".to_owned());
     };
-    // SAFETY: `text` is a valid NUL-terminated string that outlives the call.
-    if unsafe { libc::access(text.as_ptr(), libc::W_OK) } == 0 {
-        return Seen::Writable;
+    let metadata = match std::fs::metadata(location) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Observed::Absent,
+        Err(error) => return Observed::Unknown(error.to_string()),
+    };
+    let denied = |mode: libc::c_int| {
+        // SAFETY: `text` is a valid NUL-terminated string that outlives the call.
+        let allowed = unsafe { libc::access(text.as_ptr(), mode) } == 0;
+        (!allowed).then(|| io::Error::last_os_error().to_string())
+    };
+    Observed::Present {
+        folder: metadata.is_dir(),
+        write: denied(libc::W_OK),
+        search: denied(libc::X_OK),
     }
-    let error = io::Error::last_os_error();
-    if error.kind() == io::ErrorKind::NotFound {
-        Seen::Absent
-    } else {
-        Seen::NotWritable(error.to_string())
+}
+
+/// The rule: a location install can create things in is a folder this user
+/// may both write into and search. One that exists and is not is not
+/// writable, whatever `access(W_OK)` alone says. An absent one is not a
+/// failure, since install creates it.
+pub fn judge(observed: Observed) -> Seen {
+    match observed {
+        Observed::Absent => Seen::Absent,
+        Observed::Unknown(cause) => Seen::NotWritable(cause),
+        Observed::Present { folder: false, .. } => {
+            Seen::NotWritable("it exists but is not a folder".to_owned())
+        }
+        Observed::Present {
+            write: Some(cause), ..
+        } => Seen::NotWritable(cause),
+        Observed::Present {
+            search: Some(cause),
+            ..
+        } => Seen::NotWritable(cause),
+        Observed::Present { .. } => Seen::Writable,
     }
 }
 
@@ -141,6 +188,37 @@ mod tests {
         for default in ["/home/o/.claude", "/home/o"] {
             assert!(!paths(&found).contains(&default), "{default}");
         }
+    }
+
+    #[test]
+    fn a_location_install_cannot_create_in_judged_writable_is_caught() {
+        let present = |folder: bool, write: Option<&str>, search: Option<&str>| Observed::Present {
+            folder,
+            write: write.map(str::to_owned),
+            search: search.map(str::to_owned),
+        };
+        assert_eq!(judge(present(true, None, None)), Seen::Writable);
+        // A folder without search permission passes `access(W_OK)` yet holds nothing new.
+        let no_search = "Permission denied (os error 13)";
+        assert_eq!(
+            judge(present(true, None, Some(no_search))),
+            Seen::NotWritable(no_search.to_owned())
+        );
+        // A regular file where a folder should be passes `access(W_OK)` too.
+        assert_eq!(
+            judge(present(false, None, None)),
+            Seen::NotWritable("it exists but is not a folder".to_owned())
+        );
+        let no_write = "Read-only file system (os error 30)";
+        assert_eq!(
+            judge(present(true, Some(no_write), None)),
+            Seen::NotWritable(no_write.to_owned())
+        );
+        assert_eq!(judge(Observed::Absent), Seen::Absent);
+        assert_eq!(
+            judge(Observed::Unknown("denied".to_owned())),
+            Seen::NotWritable("denied".to_owned())
+        );
     }
 
     #[test]
