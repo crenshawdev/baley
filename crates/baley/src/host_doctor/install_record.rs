@@ -1,6 +1,7 @@
 //! What the latest install record says about the install itself: whether it
-//! finished, whether the sandbox block was held back and whether the guard
-//! hook was placed. The record is a plain JSON value and nothing is read here.
+//! finished, whether the sandbox block was held back, whether the guard hook
+//! was placed and which stubs it lists that this binary no longer ships. The
+//! record is a plain JSON value and nothing is read here.
 
 use serde_json::Value;
 
@@ -36,6 +37,33 @@ pub fn judge(record: &Value) -> Judged {
         }),
         hook_placed: !record["registered"]["hook"].is_null(),
     }
+}
+
+/// A stub the record lists that this binary no longer ships.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stale {
+    /// The front door's identity.
+    pub identity: String,
+    /// Where the record says the stub was written, when it says.
+    pub path: Option<String>,
+}
+
+/// The record's stubs whose identity `shipped` does not hold, each once, in
+/// the record's order. An entry without a string identity is skipped.
+pub fn stale(record: &Value, shipped: &[&str]) -> Vec<Stale> {
+    let mut found: Vec<Stale> = Vec::new();
+    for entry in record["stubs"].as_array().into_iter().flatten() {
+        let Some(identity) = entry["identity"].as_str() else {
+            continue;
+        };
+        if !shipped.contains(&identity) && !found.iter().any(|seen| seen.identity == identity) {
+            found.push(Stale {
+                identity: identity.to_owned(),
+                path: entry["path"].as_str().map(str::to_owned),
+            });
+        }
+    }
+    found
 }
 
 #[cfg(test)]
@@ -93,5 +121,35 @@ mod tests {
             "item": {"matcher": "Bash", "hooks": []},
         })));
         assert!(!with_hook(Value::Null));
+    }
+    #[test]
+    fn a_shipped_stub_called_stale_or_a_stale_one_listed_twice_is_caught() {
+        let entry = |identity: Value| {
+            json!({
+                "identity": identity,
+                "path": format!("/s/{}/SKILL.md", identity.as_str().unwrap_or("x")),
+                "sha256": "a".repeat(64),
+            })
+        };
+        let record = json!({"stubs": [
+            entry(json!("bal-help")),
+            entry(json!("bal-retired")),
+            entry(json!("bal-retired")),
+            entry(json!(7)),
+            entry(json!("bal-old")),
+        ]});
+        assert_eq!(
+            stale(&record, &["bal-capture", "bal-help"]),
+            [
+                Stale {
+                    identity: "bal-retired".into(),
+                    path: Some("/s/bal-retired/SKILL.md".into()),
+                },
+                Stale {
+                    identity: "bal-old".into(),
+                    path: Some("/s/bal-old/SKILL.md".into()),
+                },
+            ]
+        );
     }
 }

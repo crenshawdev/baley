@@ -89,6 +89,14 @@ impl Report {
                 ),
             });
         }
+        for stale in &findings.stale_stubs {
+            gap = true;
+            lines.push(format!(
+                "stub `{}`: {} is stale, since this binary no longer ships it; run baley install so the install record stops listing it",
+                stale.identity,
+                stale.path.as_deref().unwrap_or("its recorded path")
+            ));
+        }
         if let Some((path, gap_found)) = &findings.executable {
             gap = true;
             lines.push(format!(
@@ -1337,6 +1345,38 @@ mod tests {
         );
         assert!(
             !line_for(&report, "hook").contains("install.sh"),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(report.code, 0, "{:?}", report.lines);
+    }
+    #[test]
+    fn a_stub_the_binary_no_longer_ships_left_unreported_is_caught() {
+        let retired = "/home/o/.claude/skills/bal-retired/SKILL.md";
+        let mut record = installed_record();
+        record["stubs"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "identity": "bal-retired",
+                "path": retired,
+                "sha256": "d".repeat(64),
+            }));
+        let report = report_of(&installed_from(
+            record,
+            &crate::install::fixtures::complete_settings(),
+        ));
+        let named = lines_with(&report, &["bal-retired"]);
+        assert_eq!(named.len(), 1, "{:?}", report.lines);
+        for part in [retired, "stale", "baley install"] {
+            assert!(named[0].contains(part), "{part} missing from {}", named[0]);
+        }
+        assert!(line_for(&report, "stub `bal-help`").contains("matches"));
+        assert_eq!(report.code, 1, "{:?}", report.lines);
+
+        let report = report_of(&installed_observation());
+        assert!(
+            lines_with(&report, &["bal-retired"]).is_empty(),
             "{:?}",
             report.lines
         );

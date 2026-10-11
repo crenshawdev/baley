@@ -74,8 +74,9 @@ pub enum MapFault {
 /// a record, a stub takes its derived path when the record lists its identity,
 /// the registration when the record holds a registration, the hook when it
 /// holds a hook and the settings when it holds a sandbox entry, and the
-/// versions folder takes its derived path. A derivation refusal or a failed
-/// read of the record is the fault.
+/// versions folder takes its derived path. A recorded stub this binary does
+/// not ship gets no place; [`judge`] reports it stale. A derivation refusal or
+/// a failed read of the record is the fault.
 pub fn installed_placements(
     derived: Result<Installed, installed::Refusal>,
     record: Result<Option<Value>, StoreError>,
@@ -378,6 +379,9 @@ pub struct Findings {
     /// What the latest install record says about the install, or none when
     /// there is no record.
     pub install: Option<install_record::Judged>,
+    /// The stubs the latest install record lists that this binary no longer
+    /// ships, in the record's order.
+    pub stale_stubs: Vec<install_record::Stale>,
     /// Each artifact of the map and what was found, in artifact order.
     pub artifacts: Vec<(Artifact, ArtifactState)>,
     /// What is wrong with the executable, with its path.
@@ -419,6 +423,7 @@ pub fn judge(observation: &Observation) -> Findings {
             return Findings {
                 no_map: Some(fault.clone()),
                 install: None,
+                stale_stubs: Vec::new(),
                 artifacts: Vec::new(),
                 executable: None,
                 documents: Vec::new(),
@@ -527,10 +532,24 @@ pub fn judge(observation: &Observation) -> Findings {
         (artifact, state)
     }));
     artifacts.sort_by_key(|(artifact, _)| rank(artifact));
+    // Every manifest stub has an artifact here, placed or not installed.
+    let shipped: Vec<&str> = artifacts
+        .iter()
+        .filter_map(|(artifact, _)| match artifact {
+            Artifact::Stub(identity) => Some(identity.as_str()),
+            _ => None,
+        })
+        .collect();
+    let stale_stubs = mapped
+        .record
+        .as_ref()
+        .map(|record| install_record::stale(record, &shipped))
+        .unwrap_or_default();
 
     Findings {
         no_map: None,
         install,
+        stale_stubs,
         artifacts,
         executable: mapped
             .executable
