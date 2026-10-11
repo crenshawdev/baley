@@ -11,7 +11,11 @@ use super::store_health::{Compatibility, Judged as Store};
 use super::{ArtifactState, Findings, MapFault, Stable, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
 use crate::mcp::context::ProjectContext;
+use crate::providers::warning::WARNING_VERSION;
 use crate::update::installation::{Active, Occupant};
+use baley_core::catalog::Provider;
+
+use super::acknowledgement::Standing;
 
 /// The heading that opens the host section.
 const HEADING: &str = "Claude Code host checks";
@@ -171,6 +175,7 @@ impl Report {
         if let Some(judged) = &findings.provider_hosts {
             lines.push(provider_host_line(judged));
         }
+        acknowledgement_lines(&findings.acknowledgements, &mut lines);
         server_lines(&findings.server, &mut lines);
         gap |= store_lines(&findings.store, &mut lines);
         gap |= guard_record_lines(&findings.guard_records, &mut lines);
@@ -231,6 +236,37 @@ fn stable_line(stable: &Stable) -> String {
         Err(cause) => format!(
             "stable path: {path} could not be examined: {cause}, so the version it runs is unknown"
         ),
+    }
+}
+
+/// One line per outside provider on its acknowledgement. Never a finding:
+/// reviews and fetches are what an acknowledgement gates, not the doctor.
+fn acknowledgement_lines(
+    judged: &Result<Vec<(Provider, Standing)>, String>,
+    lines: &mut Vec<String>,
+) {
+    let standings = match judged {
+        Ok(standings) => standings,
+        Err(text) => {
+            lines.push(format!(
+                "provider acknowledgements: they could not be read: {text}; run baley doctor again once the ledger can be read"
+            ));
+            return;
+        }
+    };
+    for (provider, standing) in standings {
+        let name = provider.name();
+        lines.push(match standing {
+            Standing::Current => format!(
+                "provider acknowledgement `{name}`: current, recorded for warning version {WARNING_VERSION} and its wording"
+            ),
+            Standing::NotCurrent { version } => format!(
+                "provider acknowledgement `{name}`: not current, recorded for warning version {version} or other wording, while this binary shows warning version {WARNING_VERSION}; run baley config interview to read the warning and acknowledge it again"
+            ),
+            Standing::NoneRecorded => {
+                format!("provider acknowledgement `{name}`: none is recorded")
+            }
+        });
     }
 }
 
@@ -1641,5 +1677,58 @@ mod tests {
             assert!(!line.contains(version), "{version} in {line}");
         }
         assert_eq!(report.code, 0, "{:?}", report.lines);
+    }
+
+    #[test]
+    fn an_acknowledgement_of_an_older_warning_reported_current_is_caught() {
+        use serde_json::json;
+        use sha2::{Digest, Sha256};
+
+        // Design 0003 section 5's warning, word for word.
+        let warning = "Baley never reads your API keys. Keys live in your environment, where every program Claude Code starts can see them, agents and subagents included. Nothing scrubs a key a command prints. Your code goes to the chosen provider under its terms.";
+        let digest: String = Sha256::digest(warning.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let stored_at = |version: u64| {
+            let mut observation = installed_observation();
+            observation.acknowledgements = Ok(vec![json!({
+                "providers": ["openai"],
+                "warning_version": version,
+                "warning_sha256": digest,
+                "owner": "o",
+                "acknowledged_at": "2026-10-11T09:00:00Z",
+            })]);
+            report_of(&observation)
+        };
+        let says_current = |line: &str| line.contains("current") && !line.contains("not current");
+
+        let older = stored_at(0);
+        let openai = lines_with(&older, &["openai", "acknowledgement"]);
+        assert_eq!(openai.len(), 1, "{:?}", older.lines);
+        for part in ["not current", "0", "1", "baley config interview"] {
+            assert!(
+                openai[0].contains(part),
+                "{part} missing from {}",
+                openai[0]
+            );
+        }
+        assert!(
+            !lines_with(&older, &["openai", "acknowledgement"])
+                .iter()
+                .any(|line| says_current(line)),
+            "{:?}",
+            older.lines
+        );
+        let deepseek = lines_with(&older, &["deepseek", "acknowledgement"]);
+        assert_eq!(deepseek.len(), 1, "{:?}", older.lines);
+        assert!(deepseek[0].contains("none is recorded"), "{}", deepseek[0]);
+        assert_eq!(older.code, 0, "{:?}", older.lines);
+
+        let current = stored_at(1);
+        let openai = lines_with(&current, &["openai", "acknowledgement"]);
+        assert_eq!(openai.len(), 1, "{:?}", current.lines);
+        assert!(says_current(openai[0]), "{}", openai[0]);
+        assert_eq!(current.code, 0, "{:?}", current.lines);
     }
 }

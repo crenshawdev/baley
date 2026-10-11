@@ -30,8 +30,11 @@
 //! judges whether the placed hook and settings still hold Baley's entries,
 //! those install renders over the derived placements and those the record
 //! holds. [`provider_hosts`] lists the review providers whose API host the
-//! settings document allows.
+//! settings document allows. [`acknowledgement`] judges whether a current
+//! acknowledgement covers each outside provider. The stable path is judged
+//! by `update::installation::judge_active`, from the link alone.
 
+pub mod acknowledgement;
 pub mod drift;
 pub mod guard_records;
 pub mod install_record;
@@ -46,6 +49,7 @@ pub mod store_health;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use baley_core::catalog::Provider;
 use baley_core::policy::Host;
 use baley_store::{Admin, Health, Ledger, ProjectId, StoreError, Views};
 use serde_json::Value;
@@ -189,6 +193,9 @@ pub struct Observation {
     pub prerequisites: prerequisites::Observed,
     /// The last server call the ledger records.
     pub server: server_context::Observed,
+    /// Every stored provider acknowledgement payload, oldest first, or the
+    /// store's text when they could not be read.
+    pub acknowledgements: Result<Vec<Value>, String>,
     /// What the store's doctor returned, which the compatibility and
     /// folder lines are judged from.
     pub health: Health,
@@ -197,7 +204,7 @@ pub struct Observation {
 /// The ledger side of the gather: the store to read history from and the
 /// projects the doctor already listed.
 pub struct Stored<'a, S> {
-    /// The store, read through the storage port's history only.
+    /// The store, read through its project list and history only.
     pub store: &'a S,
     /// Every project in the ledger, in id order.
     pub projects: &'a [ProjectId],
@@ -207,11 +214,11 @@ pub struct Stored<'a, S> {
 
 /// Gathers the observation for a placement map: reads each expected file
 /// once, asks the filesystem about the executable and pages through the
-/// ledger's history for the last server call. Nothing is written, opened for
-/// writing or run. It owns no rule and has no unit test of its own; one
-/// integration check runs it whole and asserts only that nothing was
-/// written.
-pub fn gather<S: Ledger>(
+/// ledger's history for the last server call and the stored provider
+/// acknowledgements. Nothing is written, opened for writing or run. It owns
+/// no rule and has no unit test of its own; one integration check runs it
+/// whole and asserts only that nothing was written.
+pub fn gather<S: Ledger + Admin>(
     placement: Result<PlacementMap, MapFault>,
     folders: Folders,
     checkout_file: Option<PathBuf>,
@@ -245,6 +252,9 @@ pub fn gather<S: Ledger>(
         checkout_file,
         prerequisites: prerequisites::gather(path, os),
         server: server_context::gather(stored.store, stored.projects),
+        acknowledgements: crate::providers::record::read(stored.store)
+            .map(|stored| stored.payloads)
+            .map_err(|error| error.to_string()),
         health: stored.health.clone(),
     }
 }
@@ -461,6 +471,9 @@ pub struct Findings {
     /// The review providers whose API host the settings document allows, or
     /// why that was not judged. None when there is no map.
     pub provider_hosts: Option<provider_hosts::Judged>,
+    /// Each outside provider and where its acknowledgement stands, or the
+    /// store's text when the acknowledgements could not be read.
+    pub acknowledgements: Result<Vec<(Provider, acknowledgement::Standing)>, String>,
 }
 
 /// The stable path and what it runs.
@@ -488,6 +501,17 @@ fn stable(observation: &Observation) -> Option<Stable> {
             .map(|found| installation::judge_active(&seen.layout, found))
             .map_err(Clone::clone),
     })
+}
+
+/// Judges the stored acknowledgements, or carries why they could not be read.
+fn acknowledgements(
+    observation: &Observation,
+) -> Result<Vec<(Provider, acknowledgement::Standing)>, String> {
+    observation
+        .acknowledgements
+        .as_deref()
+        .map(acknowledgement::judge)
+        .map_err(Clone::clone)
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -521,6 +545,7 @@ pub fn judge(observation: &Observation) -> Findings {
                 store: store_health::judge(&observation.health, &observation.folders),
                 guard_records: guard_records::judge(&observation.health),
                 provider_hosts: None,
+                acknowledgements: acknowledgements(observation),
             };
         }
     };
@@ -687,6 +712,7 @@ pub fn judge(observation: &Observation) -> Findings {
         )),
         nine_tools: protection::nine_tools(&mapped.map, &documents),
         provider_hosts: Some(provider_hosts),
+        acknowledgements: acknowledgements(observation),
         prerequisites,
         server: server_context::judge(&observation.server),
         store: store_health::judge(&observation.health, &observation.folders),
@@ -888,6 +914,7 @@ pub(crate) mod fixtures {
             checkout_file: None,
             prerequisites: linux_with_both(),
             server: server_context::Observed::NoCall,
+            acknowledgements: Ok(Vec::new()),
             health: clean_health(),
         }
     }
@@ -914,6 +941,7 @@ pub(crate) mod fixtures {
             checkout_file: None,
             prerequisites: linux_with_both(),
             server: server_context::Observed::NoCall,
+            acknowledgements: Ok(Vec::new()),
             health: clean_health(),
         }
     }
