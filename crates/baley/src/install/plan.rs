@@ -4,6 +4,7 @@
 //! evidence when a write or launch cannot finish.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use baley_core::policy::Host;
@@ -95,6 +96,10 @@ pub struct Plan {
     /// Stubs this binary no longer ships whose files could not be read, with
     /// the cause. They stay recorded, since they may still be Baley's.
     pub unreadable: Vec<(Retired, String)>,
+    /// Stubs this binary no longer ships that the record places anywhere but
+    /// their own stub path here, such as under an earlier Claude folder. They
+    /// are never read or touched and stay recorded as they were.
+    pub carried: Vec<Retired>,
 }
 
 /// A stub the latest record lists that this binary does not place.
@@ -108,44 +113,70 @@ pub struct Retired {
     pub sha256: String,
 }
 
-/// The stubs the latest record lists that this binary does not place, each
-/// recorded at exactly the path a stub of its identity takes under
-/// `claude_folder`. Any other recorded path is never touched, so a record
-/// cannot point a removal at a file outside a stub's own folder.
+/// The stubs the latest record lists that this binary does not place.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RetiredStubs {
+    /// Recorded at exactly the path a stub of its identity takes under the
+    /// current Claude folder, which is no placed file's path: judged, and
+    /// removed when it is still Baley's.
+    pub own: Vec<Retired>,
+    /// Recorded anywhere else. Never read or touched, so a record cannot
+    /// point a removal outside a stub's own file, and kept in the record.
+    pub elsewhere: Vec<Retired>,
+}
+
+/// Sorts the stubs the latest record lists that this binary does not place
+/// by whether they sit at their own stub path under `claude_folder`. The
+/// identity must be one path name spelled exactly, so `bal-capture/` cannot
+/// stand for `bal-capture`.
 pub(crate) fn retired(
     latest: Option<&Value>,
     placements: &PlacementMap,
     claude_folder: &Path,
-) -> Vec<Retired> {
+) -> RetiredStubs {
     let placed = placements.expected_files();
+    let mut found = RetiredStubs::default();
     let Some(stubs) = latest
         .and_then(|record| record.get("stubs"))
         .and_then(Value::as_array)
     else {
-        return Vec::new();
+        return found;
     };
-    stubs
-        .iter()
-        .filter_map(|stub| {
-            let field = |name| stub.get(name).and_then(Value::as_str);
-            let retired = Retired {
-                identity: field("identity")?.into(),
-                path: PathBuf::from(field("path")?),
-                sha256: field("sha256")?.into(),
-            };
-            let shipped = placed.iter().any(|file| {
-                file.stub
-                    .is_some_and(|entry| entry.identity == retired.identity)
-            });
-            let mut parts = Path::new(&retired.identity).components();
-            let plain = matches!(
-                (parts.next(), parts.next()),
-                (Some(Component::Normal(_)), None)
-            );
-            let own = retired.path == stub_path(claude_folder, &retired.identity);
-            (plain && own && !shipped).then_some(retired)
-        })
-        .collect()
+    for stub in stubs {
+        let field = |name| stub.get(name).and_then(Value::as_str);
+        let (Some(identity), Some(path), Some(sha256)) =
+            (field("identity"), field("path"), field("sha256"))
+        else {
+            continue;
+        };
+        let retired = Retired {
+            identity: identity.into(),
+            path: PathBuf::from(path),
+            sha256: sha256.into(),
+        };
+        if placed.iter().any(|file| {
+            file.stub
+                .is_some_and(|entry| entry.identity == retired.identity)
+        }) {
+            continue;
+        }
+        let mut parts = Path::new(&retired.identity).components();
+        let plain = matches!(
+            (parts.next(), parts.next()),
+            (Some(Component::Normal(name)), None) if name == OsStr::new(&retired.identity)
+        );
+        // A second guard: whatever the identity says, a placed file is
+        // never a retired one.
+        let own = plain
+            && retired.path == stub_path(claude_folder, &retired.identity)
+            && placed.iter().all(|file| file.path != retired.path);
+        if own {
+            found.own.push(retired);
+        } else {
+            found.elsewhere.push(retired);
+        }
+    }
+    found
 }
 
 /// What install does with a retired stub's file.
@@ -333,7 +364,8 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
     // where it is and refuses nothing.
     let mut removals = Vec::new();
     let mut unreadable = Vec::new();
-    for stub in retired(gathered.latest, placements, gathered.claude_folder) {
+    let found = retired(gathered.latest, placements, gathered.claude_folder);
+    for stub in found.own {
         match retiring(&stub, &observed(&stub.path)) {
             Retiring::Remove => removals.push(stub),
             Retiring::Keep(cause) => unreadable.push((stub, cause)),
@@ -349,6 +381,7 @@ pub(crate) fn judge(gathered: &Gathered<'_>) -> Result<Plan, Render> {
         wiring,
         removals,
         unreadable,
+        carried: found.elsewhere,
     })
 }
 
@@ -367,16 +400,18 @@ pub struct Applied {
     /// Whether a remove launch succeeded after that read.
     pub registration_removed: bool,
     /// Each planned removal of a retired stub, in plan order, with what
-    /// became of it, then each retired stub that could not be read.
+    /// became of it, then each retired stub that could not be read, then
+    /// each one recorded away from its own stub path.
     pub retired: Vec<(Retired, RetiredOutcome)>,
 }
 
 impl Applied {
-    /// Whether every planned removal of a retired stub happened.
-    pub fn all_retired_removed(&self) -> bool {
-        self.retired
+    /// Whether no retired stub this run judged was left behind.
+    pub fn no_retired_left(&self) -> bool {
+        !self
+            .retired
             .iter()
-            .all(|(_, outcome)| *outcome == RetiredOutcome::Removed)
+            .any(|(_, outcome)| matches!(outcome, RetiredOutcome::Failed(_)))
     }
 }
 
@@ -473,6 +508,11 @@ pub(crate) fn applied(
             .retired
             .push((stub.clone(), RetiredOutcome::Failed(cause.clone())));
     }
+    for stub in &plan.carried {
+        applied
+            .retired
+            .push((stub.clone(), RetiredOutcome::Carried));
+    }
     let registration = match &attempt.result {
         Registered::Unchanged => ArtifactOutcome::Unchanged,
         Registered::Registered => ArtifactOutcome::Written,
@@ -556,13 +596,14 @@ pub(crate) fn facts(
                 })
             }
         })
-        // A retired stub still on disk stays recorded, so the next install
-        // can still prove it is Baley's and remove it.
+        // A retired stub still on disk, or recorded under another Claude
+        // folder, stays recorded, so a later install can still prove it is
+        // Baley's and remove it.
         .chain(
             applied
                 .retired
                 .iter()
-                .filter(|(_, outcome)| matches!(outcome, RetiredOutcome::Failed(_)))
+                .filter(|(_, outcome)| *outcome != RetiredOutcome::Removed)
                 .map(|(stub, _)| event::Stub {
                     identity: stub.identity.clone(),
                     path: stub.path.to_string_lossy().into_owned(),
@@ -581,7 +622,7 @@ pub(crate) fn facts(
         binary_version: version.into(),
         binary_path: placements.executable().as_str().into(),
         complete: applied.failure.is_none()
-            && applied.all_retired_removed()
+            && applied.no_retired_left()
             && complete(placements, &applied.outcomes, &applied.notes, seed),
         registration,
         hook,
@@ -1419,23 +1460,41 @@ mod tests {
 
     #[test]
     fn a_retired_stub_recorded_outside_its_own_stub_path_planned_for_removal_is_caught() {
-        let bytes = b"old stub";
-        for (case, identity, path) in [
-            ("another file", "bal-old", "/home/o/notes.md"),
+        let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+        let capture = &manifest[0];
+        assert_eq!(capture.identity, "bal-capture");
+        let old: &[u8] = b"old stub";
+        for (case, identity, path, bytes) in [
+            ("another file", "bal-old", "/home/o/notes.md", old),
             (
                 "an alias through ..",
                 "bal-old",
                 "/home/o/.claude/skills/bal-help/../bal-old/SKILL.md",
+                old,
             ),
             (
                 "an identity naming a parent",
                 "../bal-old",
                 "/home/o/.claude/skills/../bal-old/SKILL.md",
+                old,
+            ),
+            (
+                "an identity with a trailing slash",
+                "bal-old/",
+                "/home/o/.claude/skills/bal-old/SKILL.md",
+                old,
+            ),
+            (
+                "a shipped identity with a trailing slash",
+                "bal-capture/",
+                CAPTURE,
+                &capture.bytes,
             ),
             (
                 "another Claude folder",
                 "bal-old",
                 "/home/o/other/skills/bal-old/SKILL.md",
+                old,
             ),
         ] {
             let stub = Retired {
@@ -1449,6 +1508,19 @@ mod tests {
             );
             assert!(plan.removals.is_empty(), "{case}: {:?}", plan.removals);
             assert!(plan.unreadable.is_empty(), "{case}: {:?}", plan.unreadable);
+            // Never touched, but kept, so a later install can still act on it.
+            assert_eq!(plan.carried, std::slice::from_ref(&stub), "{case}");
+            let written: Vec<Result<(), Failure>> = plan.writes.iter().map(|_| Ok(())).collect();
+            let attempt = Attempt {
+                seen: None,
+                removed: false,
+                result: Registered::Registered,
+            };
+            assert_eq!(
+                applied(&plan, &written, &[], &attempt).retired,
+                [(stub, RetiredOutcome::Carried)],
+                "{case}"
+            );
         }
     }
 
@@ -1570,6 +1642,11 @@ mod tests {
             }
         );
         assert!(!left.complete);
+
+        // Recorded under another Claude folder: kept, and nothing failed.
+        let carried = build(RetiredOutcome::Carried);
+        assert_eq!(identities(&carried), ["bal-capture", "bal-help", "bal-old"]);
+        assert!(carried.complete);
     }
 
     #[test]

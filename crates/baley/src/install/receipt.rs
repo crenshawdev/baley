@@ -41,6 +41,9 @@ pub enum RetiredOutcome {
     Removed,
     /// The file is still there, with the cause.
     Failed(String),
+    /// Recorded away from its own stub path under this Claude folder, so it
+    /// was not touched and stays recorded.
+    Carried,
 }
 
 /// What the settings step adds to the receipt beyond the artifact lines.
@@ -210,23 +213,24 @@ pub(crate) fn render_applied(
     let retired: Vec<_> = applied
         .retired
         .iter()
-        .map(|(stub, outcome)| {
+        .filter_map(|(stub, outcome)| {
             let text = match outcome {
                 RetiredOutcome::Removed => "removed, since this binary no longer ships it".into(),
                 RetiredOutcome::Failed(cause) => format!("not removed: {cause}"),
+                RetiredOutcome::Carried => return None,
             };
-            format!(
+            Some(format!(
                 "{} at {}: {text}",
                 Artifact::Stub(stub.identity.clone()),
                 stub.path.display()
-            )
+            ))
         })
         .collect();
     let retired_lines = retired.len();
     receipt
         .lines
         .splice(after_artifacts..after_artifacts, retired);
-    if !applied.all_retired_removed() {
+    if !applied.no_retired_left() {
         receipt.lines[0] = "install outcome: partial".into();
         receipt.code = 1;
     }
@@ -782,5 +786,16 @@ mod tests {
             "stub `bal-old` at /home/o/.claude/skills/bal-old/SKILL.md: not removed: not-removable: denied"
         );
         assert_eq!(left.code, 1);
+
+        // A stub kept under another Claude folder was not touched, so it
+        // gets no line and leaves the outcome complete.
+        let carried = render_with(RetiredOutcome::Carried);
+        assert_eq!(carried.lines[0], "install outcome: complete");
+        assert!(
+            carried.lines[7].contains("model catalog"),
+            "{:?}",
+            carried.lines
+        );
+        assert_eq!(carried.code, 0);
     }
 }

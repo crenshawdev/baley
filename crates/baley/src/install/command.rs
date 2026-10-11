@@ -144,11 +144,14 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
                 .or_insert_with(|| observe(file.path));
         }
     }
+    // Only a retired stub at its own stub path is ever read.
     for stub in plan::retired(
         latest_payload,
         &installed.placements,
         &installed.claude_folder,
-    ) {
+    )
+    .own
+    {
         observations
             .entry(stub.path.clone())
             .or_insert_with(|| observe(&stub.path));
