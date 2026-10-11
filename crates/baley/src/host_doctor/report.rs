@@ -15,6 +15,7 @@ use super::update_setting::Judged as UpdateSetting;
 use super::writable::{self, Seen};
 use super::{ArtifactState, Findings, MapFault, Stable, server_context};
 use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
+use crate::host_artifacts::security::Unrendered;
 use crate::mcp::context::ProjectContext;
 use crate::providers::warning::WARNING_VERSION;
 use crate::update::installation::{Active, Occupant};
@@ -41,10 +42,10 @@ impl Report {
             gap = true;
             lines.push(match fault {
                 MapFault::Placements(reason) => format!(
-                    "artifact placements: {reason}, so no artifact can be checked"
+                    "artifact placements: {reason}, so no artifact can be checked; run baley doctor again once that is fixed"
                 ),
                 MapFault::Record(cause) => format!(
-                    "install record: it could not be read: {cause}, so an installation cannot be told from none"
+                    "install record: it could not be read: {cause}, so an installation cannot be told from none; run baley doctor again once the ledger can be read"
                 ),
             });
         }
@@ -57,14 +58,21 @@ impl Report {
                 ArtifactState::NotInstalled => {
                     format!("{artifact}: not installed, no placement is known")
                 }
-                ArtifactState::NotRead { path } => {
-                    format!("{artifact}: {} was not read", path.display())
-                }
+                ArtifactState::NotRead { path } => format!(
+                    "{artifact}: {} was not read; run baley doctor again",
+                    path.display()
+                ),
                 ArtifactState::Missing { path } => {
-                    format!("{artifact}: missing, nothing is at {}", path.display())
+                    format!(
+                        "{artifact}: missing, nothing is at {}; run baley install again",
+                        path.display()
+                    )
                 }
                 ArtifactState::Fault { path, fault } => {
-                    format!("{artifact}: {} {fault}", path.display())
+                    format!(
+                        "{artifact}: {} {fault}; fix it or move it aside, then run baley install again",
+                        path.display()
+                    )
                 }
                 ArtifactState::Read { path } => format!("{artifact}: read {}", path.display()),
                 ArtifactState::StubMatches { path, digest } => format!(
@@ -76,7 +84,7 @@ impl Report {
                     expected,
                     found,
                 } => format!(
-                    "{artifact}: {} differs from the stub Baley renders: expected sha256 {expected}, found sha256 {found}",
+                    "{artifact}: {} differs from the stub Baley renders: expected sha256 {expected}, found sha256 {found}; move it aside, then run baley install again",
                     path.display()
                 ),
                 ArtifactState::RegistrationMatches { path } => format!(
@@ -84,12 +92,12 @@ impl Report {
                     path.display()
                 ),
                 ArtifactState::RegistrationMissing { path } => format!(
-                    "{artifact}: {} has no mcpServers entry under the key {}",
+                    "{artifact}: {} has no mcpServers entry under the key {}; run baley install again",
                     path.display(),
                     crate::host_artifacts::registration::KEY
                 ),
                 ArtifactState::RegistrationDiffers { path, found } => format!(
-                    "{artifact}: {} differs from the entry Baley renders (another command, other arguments or environment entries): {found}",
+                    "{artifact}: {} differs from the entry Baley renders (another command, other arguments or environment entries): {found}; remove it with `claude mcp remove --scope user baley` if it is yours to remove, then run baley install again",
                     path.display()
                 ),
                 ArtifactState::EntriesHeld { path } => format!(
@@ -127,7 +135,7 @@ impl Report {
         if let Some((path, gap_found)) = &findings.executable {
             gap = true;
             lines.push(format!(
-                "executable {path} {gap_found}, and the hook and the registration run it"
+                "executable {path} {gap_found}, and the hook and the registration run it; run install.sh, or place the baley binary or a link to it at that path"
             ));
         }
         gap |= prerequisite_lines(&findings.prerequisites, &mut lines);
@@ -156,7 +164,7 @@ impl Report {
             if let Some(disabled) = &nine.disabled_in {
                 gap = true;
                 lines.push(format!(
-                    "guard hook: disableAllHooks is true in {}, so no hook runs the guard for any tool",
+                    "guard hook: disableAllHooks is true in {}, so no hook runs the guard for any tool; remove it or set it to false",
                     disabled.display()
                 ));
             }
@@ -170,7 +178,7 @@ impl Report {
                 gap = true;
                 let names: Vec<&str> = nine.missing.iter().map(|tool| tool.name()).collect();
                 lines.push(format!(
-                    "guard hook: no PreToolUse item in {hook} runs the guard for {}",
+                    "guard hook: no PreToolUse item in {hook} runs the guard for {}; run baley install to write the matcher again",
                     names.join(", ")
                 ));
             }
@@ -451,7 +459,7 @@ fn prerequisite_lines(judged: &Prerequisites, lines: &mut Vec<String>) -> bool {
             lines.push("sandbox: macOS uses the built-in Seatbelt and needs no program".to_owned())
         }
         Kind::Other => lines.push(format!(
-            "sandbox: {} is a platform where Claude Code's sandbox does not run",
+            "sandbox: {} is a platform where Claude Code's sandbox does not run; the sandbox runs on Linux or macOS",
             judged.os
         )),
         Kind::Linux => {
@@ -560,14 +568,17 @@ fn verdict_text(verdict: &Verdict, rules: &str, settings: &Path, hook: &Path) ->
 fn cause_text(cause: &Cause, settings: &Path, hook: &Path) -> String {
     let (s, h) = (settings.display(), hook.display());
     match cause {
-        Cause::Unsupported(mechanism) => format!(
-            "{} cannot run on this machine",
-            match mechanism {
-                Mechanism::Sandbox => "the sandbox",
-                Mechanism::PermissionRules => "the permission rules",
-                Mechanism::Hook => "the guard hook",
-            }
-        ),
+        Cause::Unsupported(mechanism) => {
+            let (name, fix) = match mechanism {
+                Mechanism::Sandbox => (
+                    "the sandbox",
+                    "fix what the sandbox line above names, then run baley install again",
+                ),
+                Mechanism::PermissionRules => ("the permission rules", "run baley install again"),
+                Mechanism::Hook => ("the guard hook", "run baley install again"),
+            };
+            format!("{name} cannot run on this machine ({fix})")
+        }
         Cause::SandboxSetting(key) => {
             let secure = if *key == "allowUnsandboxedCommands" || *key == "filesystem.disabled" {
                 "false"
@@ -586,13 +597,25 @@ fn cause_text(cause: &Cause, settings: &Path, hook: &Path) -> String {
             "remove {entry} from sandbox.filesystem.{list} in {s}, since it re-opens a protected path"
         ),
         Cause::Unjudged { list, entry } => format!(
-            "{entry} in sandbox.filesystem.{list} in {s} does not start with / and cannot be judged"
+            "{entry} in sandbox.filesystem.{list} in {s} does not start with / and cannot be judged (write it as an absolute path outside Baley's folders, or remove it)"
         ),
         Cause::NoRule(rule) => format!("add {rule} to permissions.deny in {s}"),
-        Cause::NoGuard => format!("no PreToolUse item in {h} runs the guard for it"),
-        Cause::HooksDisabled if settings == hook => format!("disableAllHooks is true in {h}"),
-        Cause::HooksDisabled => format!("disableAllHooks is true in {h} or {s}"),
-        Cause::Unrendered(report) => report.to_string(),
+        Cause::NoGuard => format!(
+            "no PreToolUse item in {h} runs the guard for it (run baley install to write it)"
+        ),
+        Cause::HooksDisabled if settings == hook => {
+            format!("disableAllHooks is true in {h} (remove it or set it to false)")
+        }
+        Cause::HooksDisabled => {
+            format!("disableAllHooks is true in {h} or {s} (remove it or set it to false)")
+        }
+        Cause::Unrendered(report) => {
+            let fix = match report {
+                Unrendered::MissingPrerequisite { .. } => "use an absolute UTF-8 path",
+                Unrendered::UnsupportedCharacter { .. } => "use a path without that character",
+            };
+            format!("{report} ({fix})")
+        }
     }
 }
 
@@ -1852,5 +1875,314 @@ mod tests {
             open.lines
         );
         assert_eq!(open.code, 0, "{:?}", open.lines);
+    }
+
+    /// The observation with the read of `path` replaced by `state`.
+    fn reading(mut observation: Observation, path: &str, state: FileState) -> Observation {
+        let read = observation
+            .host
+            .as_mut()
+            .unwrap()
+            .reads
+            .iter_mut()
+            .find(|read| read.path.as_path() == Path::new(path))
+            .unwrap();
+        read.state = state;
+        observation
+    }
+
+    /// The installed fixture with its settings document edited by `edit`.
+    fn settings_edited(edit: impl FnOnce(&mut serde_json::Value)) -> Observation {
+        let mut settings = crate::install::fixtures::complete_settings();
+        edit(&mut settings);
+        installed_from(installed_record(), &settings)
+    }
+
+    /// The installed fixture with its install record edited by `edit`.
+    fn record_edited(edit: impl FnOnce(&mut serde_json::Value)) -> Observation {
+        let mut record = installed_record();
+        edit(&mut record);
+        installed_from(record, &crate::install::fixtures::complete_settings())
+    }
+
+    #[test]
+    fn a_host_finding_without_its_fix_is_caught() {
+        use super::super::placed::ExecutableGap;
+        use serde_json::json;
+
+        type Case<'a> = (
+            &'a str,
+            Observation,
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        let versions_rule = "Edit(//home/o/.local/lib/crenshawdev/baley/versions/**)";
+        let matcher_without_bash = "Monitor|PowerShell|Read|Grep|Glob|Write|Edit|NotebookEdit";
+        const DENIED: &str = "Permission denied (os error 13)";
+        let socat_only = || {
+            let mut observation = installed_observation();
+            observation.prerequisites = found_on("linux", &["socat"]);
+            observation
+        };
+        let freebsd = || {
+            let mut observation = installed_observation();
+            observation.prerequisites = found_on("freebsd", &[]);
+            observation
+        };
+        let manifest = stubs::manifest(&stubs::front_doors()).unwrap();
+        let home = Environment {
+            home: Some("/home/o".into()),
+            ..Environment::default()
+        };
+        let no_home = resolve(&Environment::default(), None, &manifest).unwrap_err();
+        let bad_config = resolve(&home, Some("claude".into()), &manifest).unwrap_err();
+
+        let mut cases: Vec<Case> = Vec::new();
+        cases.push((
+            "HOME not set",
+            unmapped(installed_placements(Err(no_home), Ok(None)).unwrap_err()),
+            &["HOME is not set"],
+            &["set it", "baley doctor"],
+        ));
+        cases.push((
+            "CLAUDE_CONFIG_DIR relative",
+            unmapped(installed_placements(Err(bad_config), Ok(None)).unwrap_err()),
+            &["CLAUDE_CONFIG_DIR is not absolute"],
+            &["set it", "baley doctor"],
+        ));
+        cases.push((
+            "install record unreadable",
+            unmapped(
+                installed_placements(Ok(installed()), Err(baley_store::StoreError::Busy))
+                    .unwrap_err(),
+            ),
+            &["store busy"],
+            &["baley doctor"],
+        ));
+        cases.push((
+            "settings missing",
+            reading(installed_observation(), SETTINGS, FileState::Absent),
+            &["missing, nothing is at", SETTINGS],
+            &["baley install"],
+        ));
+        cases.push((
+            "settings not JSON",
+            reading(
+                installed_observation(),
+                SETTINGS,
+                FileState::Bytes(b"{".to_vec()),
+            ),
+            &["is not JSON"],
+            &["is not JSON", "baley install"],
+        ));
+        cases.push((
+            "settings unreadable",
+            reading(
+                installed_observation(),
+                SETTINGS,
+                FileState::Fault(Fault::Unreadable(DENIED.into())),
+            ),
+            &["cannot be read", DENIED],
+            &["baley install"],
+        ));
+        cases.push((
+            "stub differs",
+            reading(
+                installed_observation(),
+                HELP,
+                FileState::Bytes(changed_stub_bytes()),
+            ),
+            &["bal-help", "differs"],
+            &["move it aside", "baley install"],
+        ));
+        cases.push((
+            "registration without the entry",
+            reading(
+                installed_observation(),
+                REGISTRATION,
+                FileState::Bytes(b"{}".to_vec()),
+            ),
+            &["no mcpServers entry"],
+            &["baley install"],
+        ));
+        cases.push((
+            "registration differs",
+            reading(
+                installed_observation(),
+                REGISTRATION,
+                FileState::Bytes(
+                    serde_json::to_vec(&json!({
+                        "mcpServers": {"baley": {"command": STABLE, "args": ["serve", "--x"]}},
+                    }))
+                    .unwrap(),
+                ),
+            ),
+            &["differs from the entry Baley renders"],
+            &["claude mcp remove --scope user baley", "baley install"],
+        ));
+        cases.push((
+            "executable missing",
+            {
+                let mut observation = installed_observation();
+                observation.host.as_mut().unwrap().executable = Some(ExecutableGap::Missing);
+                observation
+            },
+            &[STABLE, "does not exist"],
+            &["install.sh"],
+        ));
+        cases.push((
+            "bwrap not found",
+            socat_only(),
+            &["bwrap", "missing from PATH"],
+            &["apt-get install bubblewrap socat"],
+        ));
+        cases.push((
+            "sandbox cannot run, bwrap not found",
+            socat_only(),
+            &["the sandbox cannot run on this machine"],
+            &["sandbox line above", "baley install"],
+        ));
+        cases.push((
+            "platform freebsd",
+            freebsd(),
+            &["freebsd"],
+            &["Linux or macOS"],
+        ));
+        cases.push((
+            "sandbox cannot run, platform freebsd",
+            freebsd(),
+            &["the sandbox cannot run on this machine"],
+            &["sandbox line above", "baley install"],
+        ));
+        cases.push((
+            "sandbox off",
+            settings_edited(|settings| settings["sandbox"]["enabled"] = json!(false)),
+            &["configured with a gap", "sandbox.enabled"],
+            &["set sandbox.enabled to true"],
+        ));
+        cases.push((
+            "relative allowWrite entry",
+            settings_edited(|settings| {
+                settings["sandbox"]["filesystem"]["allowWrite"] = json!(["relative/path"]);
+            }),
+            &["relative/path"],
+            &["absolute path"],
+        ));
+        cases.push((
+            "pattern character in a Baley folder",
+            {
+                let mut observation = installed_observation();
+                observation.folders.home = PathBuf::from("/home/o/.local/share/crenshawdev/b*ley");
+                observation
+            },
+            &["would read as a pattern"],
+            &["use a path without that character"],
+        ));
+        cases.push((
+            "Bash dropped from the matcher",
+            settings_edited(|settings| {
+                settings["hooks"]["PreToolUse"][0]["matcher"] = json!(matcher_without_bash);
+            }),
+            &["no PreToolUse item"],
+            &["baley install"],
+        ));
+        cases.push((
+            "hooks disabled",
+            settings_edited(|settings| settings["disableAllHooks"] = json!(true)),
+            &["disableAllHooks"],
+            &["remove it or set it to false"],
+        ));
+        cases.push((
+            "ledger one epoch newer",
+            {
+                let mut observation = installed_observation();
+                observation.health.epoch = baley_store_sqlite::EPOCH + 1;
+                observation
+            },
+            &["newer than this binary's epoch"],
+            &["a build at epoch"],
+        ));
+        cases.push((
+            "user views behind",
+            {
+                let mut observation = installed_observation();
+                observation.health = user_health(true);
+                observation
+            },
+            &["guard records", "behind"],
+            &["baley rebuild user"],
+        ));
+        cases.push((
+            "settings drift",
+            settings_edited(|settings| {
+                without(settings, &["/permissions/deny"], |rule| {
+                    rule == versions_rule
+                });
+            }),
+            &["differs from Baley's entries"],
+            &["baley install"],
+        ));
+        cases.push((
+            "partial install",
+            record_edited(|record| record["complete"] = json!(false)),
+            &["partial"],
+            &["baley install"],
+        ));
+        cases.push((
+            "sandbox held back",
+            record_edited(|record| {
+                record["sandbox"]["held_back"] = json!("socat missing from PATH");
+            }),
+            &["socat missing from PATH", SETTINGS],
+            &["baley install"],
+        ));
+        cases.push((
+            "stub the binary no longer ships",
+            record_edited(|record| {
+                record["stubs"].as_array_mut().unwrap().push(json!({
+                    "identity": "bal-retired",
+                    "path": "/home/o/.claude/skills/bal-retired/SKILL.md",
+                    "sha256": "d".repeat(64),
+                }));
+            }),
+            &["bal-retired"],
+            &["baley install"],
+        ));
+        cases.push((
+            "hook not placed",
+            record_edited(|record| {
+                record["complete"] = json!(false);
+                record["registered"]["hook"] = serde_json::Value::Null;
+            }),
+            &["placed none"],
+            &["install.sh"],
+        ));
+        cases.push((
+            "installed location not writable",
+            {
+                let mut observation = installed_observation();
+                observation.host.as_mut().unwrap().writable[0].1 =
+                    super::super::writable::Seen::NotWritable(DENIED.into());
+                observation
+            },
+            &["not writable", DENIED],
+            &["writable", "baley install"],
+        ));
+
+        for (name, observation, finding, fixes) in cases {
+            let report = report_of(&observation);
+            assert_eq!(report.code, 1, "{name}: {:?}", report.lines);
+            let found = lines_with(&report, finding);
+            assert!(
+                !found.is_empty(),
+                "{name}: no line holds {finding:?}: {:?}",
+                report.lines
+            );
+            for line in found {
+                for fix in fixes {
+                    assert!(line.contains(fix), "{name}: {fix} missing from {line}");
+                }
+            }
+        }
     }
 }
