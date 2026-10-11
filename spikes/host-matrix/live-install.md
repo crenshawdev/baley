@@ -174,7 +174,7 @@ Sessions:
 
 - `protect` (project one) takes the Bash, Read, Write and Edit rows and the first two network rows. Press nothing special: the launch sets the mode that asks. Before each request look at the prompt and note it.
 - `search-tools` (project one, launched with `--allowedTools Grep,Glob`) takes the Grep and Glob rows. The flag brings those two tools into a session and allows them without a prompt. The deny rules and the hook still apply to them. Ask first: `Which of Grep and Glob are in your tool list right now?` If neither is, mark the eight Grep and Glob rows unavailable as a host limit and write the answer.
-- `bypass` (project one, launched with `--permission-mode bypassPermissions`) takes the two bypass rows. Claude Code may ask once to confirm the mode. Accept it and note it.
+- `bypass` (project one, launched with `--permission-mode bypassPermissions`) takes the three bypass rows. Claude Code may ask once to confirm the mode. Accept it and note it.
 - `network-project` takes the last two network rows after you place project one's own settings file (below).
 
 After each request, in a second terminal, look at the folder: `ls -l` and `cat` the file concerned. A refused read looks like a missing file. A refused write either errors or exits 0 with nothing landing. Mark pass when the row's mechanism held, fail when it did not and unavailable when the tool cannot run. Keep a failed row as failed.
@@ -229,7 +229,13 @@ After the rows above, from your shell:
 - `sha256sum $VERSIONS/0.0.2/baley` against line 2 of `$ART/base/<os>-<arch>/manifest`: equal means nothing wrote the staged binary through the link (row `prot.stable.staged-intact`, host question 2).
 - `ls -l $VERSIONS`: no `agent-bash.txt` or `agent-write.txt`, and `seed.txt` unchanged (row `prot.versions.no-stray`).
 
-Bypass-permissions mode (host question 1: whether deny rules and hooks still apply in this mode). In session `bypass`, ask: `Read $BHOME/seed.txt with the Read tool.` and `Run echo bash > $BHOME/agent-bypass.txt in Bash.`, with the paths written out. Expect both refused, by the `Read` rule and by the sandbox. Rows `prot.bypass.read-home` and `prot.bypass.bash-write-home`. If either goes through, the protection does not hold in this mode: mark fail and say so.
+Bypass-permissions mode (host question 1: whether the deny rules, the sandbox and the hook each still apply in this mode). In session `bypass`, ask three things, with the paths written out:
+
+- `Read $BHOME/seed.txt with the Read tool.` Expect it refused by the `Read` deny rule (row `prot.bypass.read-home`). The deny rule refuses this by itself, with no hook, so this probe settles the deny rule and says nothing about the hook.
+- `Run echo bash > $BHOME/agent-bypass.txt in Bash.` Expect it refused by the sandbox (row `prot.bypass.bash-write-home`). The sandbox refuses this by itself, so this probe settles the sandbox and says nothing about the hook.
+- `Run git push origin main in Bash.` Write down the time first (`date -u +%Y-%m-%dT%H:%M:%SZ`). Project one has no remote, so nothing leaves the machine if it runs. No deny rule and no sandbox entry covers this command, and only the hook answers it, with an ask (design 0010 GRD-R4). Answer no if a prompt appears. Then read the ledger: `q "select seq, recorded_at, json_extract(payload_json,'\$.outcome') as outcome, json_extract(payload_json,'\$.tool') as tool, json_extract(caller,'\$.form') as form from event where project_id='user' and type='guard.answered' order by seq"`. Expect a new `ask` for `Bash` with form `hook`, recorded after the time you wrote down (row `prot.bypass.hook-push`). That event is the hook running in this mode. With no such event the hook did not run: mark the row fail and say so, whatever the other two rows show.
+
+If the first or second goes through, that protection does not hold in this mode: mark fail and say so.
 
 Network (host questions 4 and 5). The sandbox's `network.allowedDomains` is a list of hosts Claude Code pre-approves. The user settings file lists one owner host, `example.com`. Design 0012 section 5 (Sandbox and provider access) says install keeps every host the file holds and adds none. Whether a present list only pre-approves its hosts, or makes the sandbox allow-list only, is not stated, and these four rows record it. In session `protect`:
 
@@ -247,7 +253,7 @@ Start `network-project` and ask the same two kinds of request: `Run curl -sSI --
 
 Evidence to keep: the `ls -l` or `cat` output for each row, the digest comparison, and for the guard rows the matching line of the guard answers in the post-run reads.
 
-Rows filled: the twenty-eight `prot.<place>.<tool>` rows above, `prot.stable.staged-intact`, `prot.versions.no-stray`, `prot.bypass.read-home`, `prot.bypass.bash-write-home`, `prot.net.user-listed`, `prot.net.unlisted`, `prot.net.project-owner-host`, `prot.net.project-own-host`.
+Rows filled: the twenty-eight `prot.<place>.<tool>` rows above, `prot.stable.staged-intact`, `prot.versions.no-stray`, `prot.bypass.read-home`, `prot.bypass.bash-write-home`, `prot.bypass.hook-push`, `prot.net.user-listed`, `prot.net.unlisted`, `prot.net.project-owner-host`, `prot.net.project-own-host`.
 
 ## Part 6: the opt-in update
 
@@ -361,7 +367,7 @@ Rows filled: `post.verify-user`, `post.views-user`, `post.verify-one`, `post.vie
 
 These are the questions the documentation leaves open. The sheet's rows answer them, and the record should state each plainly. Each is named in the step of the rows listed.
 
-1. Whether Claude Code's `permissions.deny` rules and `PreToolUse` hooks still apply in bypass-permissions mode (`prot.bypass.read-home`, `prot.bypass.bash-write-home`). If not, installed protection does not hold for this owner, and a launch that skips permissions can skip the guard.
+1. Whether Claude Code's `permissions.deny` rules, its sandbox and its `PreToolUse` hooks each still apply in bypass-permissions mode. `prot.bypass.read-home` settles the `Read` deny rule only and `prot.bypass.bash-write-home` settles the sandbox only: each is refused with no hook involved, so neither says anything about hooks. `prot.bypass.hook-push` settles the hook, because no deny rule or sandbox entry covers that command and only the hook answers it. If a row fails, that mechanism does not hold in this mode, and when the hook row is the one that fails a launch that skips permissions skips the guard.
 2. Whether `denyWrite` on the versions folder and the `Edit(//<folder>/**)` rule hold for a file reached through the symbolic stable path (`prot.stable.bash-write`, `prot.stable.write`, `prot.stable.edit`, `prot.stable.staged-intact`). If not, an agent can write a staged binary through the link.
 3. Whether `claude mcp add-json --scope user` honours `CLAUDE_CONFIG_DIR` in the Claude Code version on the run day (`inst.register.stored`, `inst.register.real-unchanged`). If not, the isolated run registers into the owner's real configuration.
 4. Whether a present `sandbox.network.allowedDomains` list only pre-approves the hosts it lists and does not make sandboxed Bash allow-list only (`prot.net.unlisted`). If it does make Bash allow-list only, the doctor's provider-host wording and the interview summary must say every other host is cut off.
