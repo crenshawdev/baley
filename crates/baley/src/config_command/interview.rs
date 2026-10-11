@@ -1,11 +1,17 @@
 //! `baley config interview` (design 0003 section 5). It gathers both settings
-//! files and HEAD's copy as `show` does, asks for each role's model and effort
-//! and for `escalate_on_failure` in the terminal, then asks which outside review
-//! providers to use and takes a typed `yes` to the warning for each one chosen.
-//! The conversation opens no store and runs no policy step itself, and its one
-//! seam is the process that reads git's `user.name`. Only after the final `yes`
-//! does the command open the per-user ledger to record the acknowledgement, and
-//! then write the answers through one `set::apply`.
+//! files, HEAD's copy and Claude Code's settings file, asks for each role's
+//! model and effort and for `escalate_on_failure` in the terminal, then asks
+//! which outside review providers to use and takes a typed `yes` to the warning
+//! for each one chosen. A summary lists every write and every file it can
+//! change, and one final `yes` confirms it.
+//!
+//! The conversation opens no store and writes no file, and its one seam is the
+//! process that reads git's `user.name`. Only after the final `yes` do the
+//! writes run, in order and each only when it has something to change: the
+//! acknowledgement in the per-user ledger, the providers' API hosts in Claude
+//! Code's settings file, the global `review.reviewers` list, then the settings
+//! through `set::apply`. A failing step stops the run, and the report names its
+//! code and the writes already done.
 
 use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
@@ -17,43 +23,26 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 mod providers;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview runs the steps once the ordered writes are wired"
-    )
-)]
 mod report;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview prints the summary once the ordered writes are wired"
-    )
-)]
 mod summary;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview runs the plan once the ordered writes are wired"
-    )
-)]
 mod writes;
 
-use self::providers::{Acknowledge, Refusal, Staged};
+use self::providers::{Ready, Refusal, Staged};
+use self::report::{Done, Step};
+use self::summary::Where;
+use self::writes::{Ack, Input, Plan, Refused, Stream};
 use super::reviewers::{self, Selection};
 use super::set;
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
+use crate::install::hosts::{self, ClaudeSettings};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
 use crate::policy_step::{self, Reads};
 use crate::process::Process;
-use crate::providers::{record, warning};
+use crate::providers::record;
 use crate::settings;
 
 /// Asks the questions on `input` and `output`, then writes the answers.
@@ -105,6 +94,7 @@ fn attempt(
         }
     };
     let start = begin(Schema::standard(), file, host, seen)?;
+    let claude = hosts::read();
 
     let questions = questions(&start.policy);
     let failed = |error: io::Error| Render {
@@ -123,8 +113,12 @@ fn attempt(
             target: &start.target,
             layer: start.layer,
             host,
+            global: &start.global_path,
+            home: &folders.home,
+            in_project: start.in_project,
         },
-        &start.selection,
+        &start.stored,
+        &claude,
         &mut crate::process::System,
         input,
         output,
@@ -136,70 +130,84 @@ fn attempt(
         Outcome::Unchanged => {
             Render::line("Nothing changed: every answer kept the value in force.", 0)
         }
-        Outcome::Send(request) => {
-            let recorded = match &request.acknowledgement {
-                Some(acknowledgement) => Some(acknowledge(&folders.home, acknowledgement)?),
-                None => None,
-            };
-            let mut render = if request.pairs.is_empty() {
-                Render::line("", 0)
-            } else {
-                set::apply(
-                    request.layer,
-                    request.host,
-                    &request.pairs,
-                    Some(&set::Expected {
-                        path: start.target,
-                        digest: start.digest,
-                    }),
-                )
-            };
-            // The recorded line leads, so a refused write still shows what was done.
-            match recorded {
-                Some(line) if request.pairs.is_empty() => render.lines = vec![line],
-                Some(line) => render.lines.insert(0, line),
-                None => {}
-            }
-            render
-        }
+        Outcome::Send(request) => execute(*request, &folders, &start),
     })
 }
 
-/// Records the acknowledgement in the per-user ledger unless a current one
-/// covers it, and says which. A store failure is the ledger step's own line
-/// with exit 3, and nothing else is written after it.
-fn acknowledge(home: &Path, acknowledgement: &Acknowledge) -> Result<String, Render> {
-    let stopped = |error: StoreError| {
-        let mut render = record::failure(&error);
-        render.lines.push("Nothing else was written.".to_owned());
-        render
-    };
+/// Runs the confirmed steps in order after the final `yes`, each only when the
+/// plan holds it, and stops at the first failure. The report names that
+/// failure's code, the writes already done and the steps never started.
+fn execute(request: Request, folders: &Folders, start: &Start) -> Render {
+    let Request { layer, host, plan } = request;
+    let mut outcomes: Vec<report::Outcome> = Vec::new();
+    // What the settings step expects of its target: the file as the interview
+    // showed it, until the reviewer step has written the global file.
+    let mut settings_digest = start.digest.clone();
+    while let Some(step) = report::next(&plan, &outcomes) {
+        let outcome = match step {
+            Step::Acknowledgement => {
+                acknowledge(&folders.home, planned(&plan.acknowledgement).who())
+            }
+            Step::Hosts => {
+                let step = planned(&plan.hosts);
+                hosts::write(&step.path, &step.allowance).map(|note| Done::Hosts { note })
+            }
+            Step::Reviewers => {
+                let shown = set::Expected {
+                    path: start.global_path.clone(),
+                    digest: start.global_digest.clone(),
+                };
+                set::apply_list(planned(&plan.reviewers), &shown).map(|written| {
+                    if layer == FileLayer::Global {
+                        settings_digest = Some(written.digest);
+                    }
+                    Done::Reviewers {
+                        version: written.version,
+                    }
+                })
+            }
+            Step::Settings => {
+                let shown = set::Expected {
+                    path: start.target.clone(),
+                    digest: settings_digest.clone(),
+                };
+                let render = set::apply(layer, host, &plan.settings, Some(&shown));
+                if render.code == 0 {
+                    Ok(Done::Settings(render.lines))
+                } else {
+                    Err(render)
+                }
+            }
+        };
+        outcomes.push(outcome);
+    }
+    report::report(&plan, &start.global_path, &outcomes)
+}
+
+/// The step a run reaches, which the plan holds because the run follows the plan.
+fn planned<T>(step: &Option<T>) -> &T {
+    step.as_ref()
+        .expect("a step in the run is a step in the plan")
+}
+
+/// Opens the per-user ledger, reads the `providers` stream and records the
+/// acknowledgement unless a current one covers it. A store failure is the
+/// step's failure, with its ledger code.
+fn acknowledge(home: &Path, who: &providers::Acknowledge) -> report::Outcome {
     let at = SystemClock::now();
-    let store = open::store(home, &at, open::options()).map_err(stopped)?;
-    let seen = record::read(&store).map_err(stopped)?;
-    let names: Vec<&str> = acknowledgement
-        .providers
-        .iter()
-        .map(|provider| provider.name())
-        .collect();
-    let version = warning::WARNING_VERSION;
-    match record::judge(
-        &seen.payloads,
-        &acknowledgement.providers,
-        &acknowledgement.owner,
-        &at,
-    ) {
-        None => Ok(format!(
-            "The acknowledgement of {} at warning version {version} was already recorded.",
-            names.join(", ")
-        )),
-        Some(event) => {
-            record::append(&store, event, seen.version, new_request_id(), &at).map_err(stopped)?;
-            Ok(format!(
-                "The acknowledgement of {} at warning version {version} was recorded.",
-                names.join(", ")
-            ))
+    let store = open::store(home, &at, open::options()).map_err(|error| record::failure(&error))?;
+    let seen = record::read(&store).map_err(|error| record::failure(&error))?;
+    let stream = Stream {
+        payloads: &seen.payloads,
+        at: &at,
+    };
+    match writes::settle(who, &stream) {
+        Ack::Record(_, event) => {
+            record::append(&store, *event, seen.version, new_request_id(), &at)
+                .map_err(|error| record::failure(&error))?;
+            Ok(Done::Acknowledgement { recorded: true })
         }
+        Ack::Reused(_) | Ack::Requested(_) => Ok(Done::Acknowledgement { recorded: false }),
     }
 }
 
@@ -228,9 +236,24 @@ struct Start {
     /// The pending note, set when the target is the project file and the
     /// working-tree file holds changes HEAD's copy does not.
     note: Option<String>,
-    /// The outside providers the global file stores, shown before the
-    /// provider question.
+    /// What the global file stores for the reviewer list.
+    stored: Stored,
+    /// The global file's path.
+    global_path: PathBuf,
+    /// The global file's own read, bound before the first question, which the
+    /// reviewer write checks.
+    global_digest: Option<String>,
+    /// Whether the working directory is in a managed project.
+    in_project: bool,
+}
+
+/// What the global file stores for `review.reviewers`.
+struct Stored {
+    /// The outside providers, shown before the provider question.
     selection: Selection,
+    /// The names the file lists at its top level, or none when it writes no
+    /// such value.
+    names: Option<Vec<String>>,
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
@@ -272,6 +295,15 @@ fn begin(
     )
     .map_err(|refusal| Render::refusal(refusal.to_string()))?;
     let layer = file.unwrap_or_else(|| default_layer(layers.global.as_ref()));
+    let in_project = project_file.is_some();
+    let global_path = seen.global_path.clone();
+    let global_digest = seen
+        .reads
+        .global
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .map(|file| file.digest.clone());
     let target = match (layer, project_file) {
         (FileLayer::Project, Some(path)) => path,
         (FileLayer::Project, None) => return Err(not_a_project()),
@@ -285,7 +317,13 @@ fn begin(
         .map_err(|refusal| Render::refusal(refusal.to_string()))?
         .map(|file| file.digest);
     Ok(Start {
-        selection: reviewers::stored(layers.global.as_ref()),
+        stored: Stored {
+            selection: reviewers::stored(layers.global.as_ref()),
+            names: reviewers::written(layers.global.as_ref()),
+        },
+        global_path,
+        global_digest,
+        in_project,
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
         layer,
         target,
@@ -471,15 +509,13 @@ fn read_answer(input: &mut impl BufRead) -> io::Result<Option<String>> {
 /// What an interview sends once the owner has typed the final `yes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Request {
-    /// The file to write.
+    /// The file the settings answers go to.
     layer: FileLayer,
     /// The host section to write into, `None` for the top level.
     host: Option<Host>,
-    /// The non-blank answers as name and value, in question order. Empty when
-    /// only providers were confirmed.
-    pairs: Vec<(String, String)>,
-    /// The providers to record an acknowledgement for, with the owner's name.
-    acknowledgement: Option<Acknowledge>,
+    /// The confirmed steps: the acknowledgement, the hosts, the reviewer list
+    /// and the settings answers.
+    plan: Plan,
 }
 
 /// What the interview does with the answers.
@@ -491,44 +527,8 @@ enum Outcome {
     Unchanged,
     /// The owner identity is missing, so the interview stops before its summary.
     Refused(Refusal),
-    /// Write these answers through `config set` and record this acknowledgement.
-    Send(Request),
-}
-
-/// The lines that say what is about to be written and where. Providers come
-/// first, so the settings block stays last.
-fn summary(
-    target: &Path,
-    host: Option<Host>,
-    pairs: &[(String, String)],
-    acknowledgement: Option<&Acknowledge>,
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(acknowledgement) = acknowledgement {
-        let names: Vec<&str> = acknowledgement
-            .providers
-            .iter()
-            .map(|provider| provider.name())
-            .collect();
-        lines.push(format!(
-            "Outside review providers confirmed: {} (warning version {})",
-            names.join(", "),
-            warning::WARNING_VERSION
-        ));
-    }
-    if !pairs.is_empty() {
-        let section = host.map_or_else(String::new, |host| format!(" [host.{}]", host.name()));
-        lines.push(format!(
-            "The interview will write to {}{section}",
-            target.display()
-        ));
-        lines.extend(
-            pairs
-                .iter()
-                .map(|(name, value)| format!("  {name}={value}")),
-        );
-    }
-    lines
+    /// Run these steps.
+    Send(Box<Request>),
 }
 
 /// Only the word `yes` confirms, so a blank line, `y` and a closed input all
@@ -539,14 +539,12 @@ fn accepts(answer: Option<&str>) -> bool {
 
 /// Lists what will be written and asks once. Whether the owner typed `yes`.
 fn confirm(
-    target: &Path,
-    host: Option<Host>,
-    pairs: &[(String, String)],
-    acknowledgement: Option<&Acknowledge>,
+    plan: &Plan,
+    at: &Where<'_>,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> io::Result<bool> {
-    for line in summary(target, host, pairs, acknowledgement) {
+    for line in summary::lines(plan, at) {
         writeln!(output, "{line}")?;
     }
     write!(output, "Write these values? Type yes to write: ")?;
@@ -559,22 +557,30 @@ fn confirm(
     Ok(accepts(answer.as_deref()))
 }
 
-/// Where the answers will be written, as the owner is told.
+/// Where the writes will land, as the owner is told.
 struct Destination<'a> {
-    /// The file's path.
+    /// The settings file's path.
     target: &'a Path,
     /// Which file it is.
     layer: FileLayer,
     /// The host section, `None` for the top level.
     host: Option<Host>,
+    /// The global settings file, which holds the reviewer list.
+    global: &'a Path,
+    /// Baley's home, which holds the ledger.
+    home: &'a Path,
+    /// Whether the working directory is in a managed project.
+    in_project: bool,
 }
 
-/// Asks every question, then the provider question, confirms, and decides what
-/// to send. It touches no file and no store, and its one seam is `process`.
+/// Asks every question, then the provider question, plans the writes, confirms
+/// them and decides what to send. It touches no file and no store, and its one
+/// seam is `process`.
 fn converse(
     questions: &[Question],
     destination: &Destination<'_>,
-    stored: &Selection,
+    stored: &Stored,
+    claude: &Result<ClaudeSettings, String>,
     process: &mut dyn Process,
     input: &mut impl BufRead,
     output: &mut impl Write,
@@ -583,34 +589,49 @@ fn converse(
         target,
         layer,
         host,
+        global,
+        home,
+        in_project,
     } = *destination;
     let Collected::Answers(pairs) = ask(questions, input, output)? else {
         return Ok(Outcome::Declined);
     };
-    let acknowledgement = match providers::stage(stored, process, input, output)? {
+    let Ready {
+        answer,
+        acknowledgement,
+    } = match providers::stage(&stored.selection, process, input, output)? {
         Staged::Declined => return Ok(Outcome::Declined),
         Staged::Refused(refusal) => return Ok(Outcome::Refused(refusal)),
-        Staged::Ready(acknowledgement) => acknowledgement,
+        Staged::Ready(ready) => ready,
     };
-    if pairs.is_empty() && acknowledgement.is_none() {
+    // A settings file that cannot take the hosts refuses here, before the
+    // summary, so nothing has been written when the owner is told.
+    let plan = match writes::plan(&Input {
+        answer: &answer,
+        acknowledgement: acknowledgement.as_ref(),
+        stored: stored.names.as_deref(),
+        claude,
+        stream: None,
+        settings: &pairs,
+    }) {
+        Ok(plan) => plan,
+        Err(Refused(line)) => return Ok(Outcome::Refused(Refusal(Render::refusal(line)))),
+    };
+    if !plan.writes() {
         return Ok(Outcome::Unchanged);
     }
-    if !confirm(
+    let at = Where {
+        home,
+        global,
         target,
-        host,
-        &pairs,
-        acknowledgement.as_ref(),
-        input,
-        output,
-    )? {
-        return Ok(Outcome::Declined);
-    }
-    Ok(Outcome::Send(Request {
         layer,
         host,
-        pairs,
-        acknowledgement,
-    }))
+        in_project,
+    };
+    if !confirm(&plan, &at, input, output)? {
+        return Ok(Outcome::Declined);
+    }
+    Ok(Outcome::Send(Box::new(Request { layer, host, plan })))
 }
 
 #[cfg(test)]
@@ -726,23 +747,44 @@ mod tests {
         converse_with(input, host, &Selection::none(), &mut Recorded::new())
     }
 
-    /// Runs the conversation with a stored selection and a scripted process.
+    /// Runs the conversation with a stored selection and a scripted process,
+    /// over a Claude settings file that is absent.
     fn converse_with(
         input: &str,
         host: Option<Host>,
         stored: &Selection,
         process: &mut Recorded,
     ) -> (Outcome, String) {
+        let absent = Ok(ClaudeSettings {
+            path: "/home/o/.claude/settings.json".into(),
+            current: crate::install::settings::Current {
+                document: serde_json::json!({}),
+                symbolic_link: false,
+                read_digest: None,
+            },
+        });
         let asked = questions(&policy(None, None, None));
         let mut output = Vec::new();
+        let names = (stored.layer == "global").then(|| {
+            std::iter::once("host".to_owned())
+                .chain(stored.providers.iter().map(|p| p.name().to_owned()))
+                .collect()
+        });
         let outcome = converse(
             &asked,
             &Destination {
                 target: Path::new(GLOBAL),
                 layer: FileLayer::Global,
                 host,
+                global: Path::new(GLOBAL),
+                home: Path::new("/h"),
+                in_project: false,
             },
-            stored,
+            &Stored {
+                selection: stored.clone(),
+                names,
+            },
+            &absent,
             process,
             &mut input.as_bytes(),
             &mut output,
@@ -772,7 +814,8 @@ mod tests {
     fn pairs_of(outcome: &Outcome) -> Vec<(&str, &str)> {
         match outcome {
             Outcome::Send(request) => request
-                .pairs
+                .plan
+                .settings
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.as_str()))
                 .collect(),
@@ -829,15 +872,19 @@ mod tests {
 
         assert_eq!(
             outcome,
-            Outcome::Send(Request {
+            Outcome::Send(Box::new(Request {
                 layer: FileLayer::Global,
                 host: Some(Host::ClaudeCode),
-                pairs: vec![
-                    ("roles.analyzer.effort".to_owned(), "max".to_owned()),
-                    ("escalate_on_failure".to_owned(), "true".to_owned()),
-                ],
-                acknowledgement: None,
-            })
+                plan: Plan {
+                    acknowledgement: None,
+                    hosts: None,
+                    reviewers: None,
+                    settings: vec![
+                        ("roles.analyzer.effort".to_owned(), "max".to_owned()),
+                        ("escalate_on_failure".to_owned(), "true".to_owned()),
+                    ],
+                },
+            }))
         );
         assert!(
             output.contains("roles.analyzer.effort is high from default: "),
@@ -1364,6 +1411,7 @@ mod tests {
         assert_eq!(start.ok().unwrap().note, None);
     }
 
+    use self::providers::Acknowledge;
     use crate::providers::fixtures::DESIGN_WARNING;
     use baley_core::catalog::Provider;
 
@@ -1385,7 +1433,7 @@ mod tests {
 
     fn acknowledgement_of(outcome: &Outcome) -> Option<&Acknowledge> {
         match outcome {
-            Outcome::Send(request) => request.acknowledgement.as_ref(),
+            Outcome::Send(request) => request.plan.acknowledgement.as_ref().map(Ack::who),
             _ => None,
         }
     }

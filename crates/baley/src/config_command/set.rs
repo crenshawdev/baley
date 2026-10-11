@@ -65,7 +65,6 @@ fn refusal(text: impl ToString) -> Render {
 
 /// What a reviewer-list write did.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(dead_code, reason = "the interview's ordered writes call it")]
 pub(crate) struct ListWritten {
     /// The SHA-256 of the bytes written, which the settings step binds to when
     /// it writes the same file.
@@ -80,7 +79,6 @@ pub(crate) struct ListWritten {
 /// working directory is in a project the ledger lists. It reuses `config set`'s
 /// judgements and file write, but never goes through `judge_pairs`, so
 /// `list-not-settable` does not apply to it.
-#[expect(dead_code, reason = "the interview's ordered writes call it")]
 pub(crate) fn apply_list(pair: &TypedPair, expected: &Expected) -> Result<ListWritten, Render> {
     let folders = Folders::resolve(Platform::current(), &Environment::read()).map_err(refusal)?;
     let found = found_project()?;
@@ -141,7 +139,6 @@ pub(crate) fn apply_list(pair: &TypedPair, expected: &Expected) -> Result<ListWr
 /// link, every other key is kept, and a missing config folder is created
 /// private. Returns the SHA-256 of the bytes written. It takes its paths and
 /// reads as values, so a test runs it in a folder of its own.
-#[cfg_attr(not(test), expect(dead_code, reason = "apply_list calls it"))]
 fn replace_list(
     prepared: &Prepared,
     expected: &Expected,

@@ -19,7 +19,7 @@ use crate::ledger::display::Render;
 use crate::replace::{self, Failure};
 
 /// The settings document the host step writes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Allowance {
     /// The document with the hosts added.
     pub document: Value,
@@ -132,10 +132,6 @@ pub struct ClaudeSettings {
 /// Reads Claude Code's settings file where `baley install` places it, from
 /// the environment and `CLAUDE_CONFIG_DIR`. The refusal is the line that says
 /// why the path or the file cannot be used.
-#[expect(
-    dead_code,
-    reason = "the interview calls it once the ordered writes are wired"
-)]
 pub(crate) fn read() -> Result<ClaudeSettings, String> {
     let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
     let placed_at = installed::resolve(
@@ -158,13 +154,6 @@ pub(crate) fn read() -> Result<ClaudeSettings, String> {
 /// made first when it is missing, with the process's default mode since it is
 /// Claude Code's folder. The note is the sync failure's text when the file was
 /// replaced but its folder could not be synced.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview calls it once the ordered writes are wired"
-    )
-)]
 pub(crate) fn write(path: &Path, allowance: &Allowance) -> Result<Option<String>, Render> {
     let folder = match path.parent() {
         Some(folder) if !folder.as_os_str().is_empty() => folder,
@@ -183,13 +172,6 @@ pub(crate) fn write(path: &Path, allowance: &Allowance) -> Result<Option<String>
 /// `install-settings-conflict` with exit 2, a file or folder that could not be
 /// written is `not-writable` with exit 3, and a file replaced but not synced
 /// counts as written and keeps the sync failure's text.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the interview reaches it through write once the ordered writes are wired"
-    )
-)]
 pub(crate) fn written(result: Result<(), Failure>) -> Result<Option<String>, Render> {
     match result {
         Ok(()) => Ok(None),

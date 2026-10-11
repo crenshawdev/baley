@@ -104,9 +104,7 @@ fn list_text(names: &[String]) -> String {
 /// and last the settings block when there are settings answers.
 pub(super) fn lines(plan: &Plan, at: &Where<'_>) -> Vec<String> {
     let mut lines = Vec::new();
-    if let Some(Ack::Requested(who) | Ack::Record(who, _) | Ack::Reused(who)) =
-        &plan.acknowledgement
-    {
+    if let Some(who) = plan.acknowledgement.as_ref().map(Ack::who) {
         let names: Vec<&str> = who
             .providers
             .iter()

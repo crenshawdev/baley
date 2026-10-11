@@ -17,7 +17,7 @@ use crate::install::hosts::{self, Allowance, ClaudeSettings};
 use crate::providers::record;
 
 /// What the acknowledgement step does.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Ack {
     /// The providers were confirmed, and the `providers` stream is not read
     /// yet, which is so until the owner's final `yes`.
@@ -29,8 +29,17 @@ pub(super) enum Ack {
     Reused(Acknowledge),
 }
 
+impl Ack {
+    /// The providers and the owner the acknowledgement is for.
+    pub(super) fn who(&self) -> &Acknowledge {
+        match self {
+            Ack::Requested(who) | Ack::Record(who, _) | Ack::Reused(who) => who,
+        }
+    }
+}
+
 /// The host step: the allowance to write into Claude Code's settings file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Hosts {
     /// The settings file's path.
     pub(super) path: PathBuf,
@@ -63,7 +72,7 @@ pub(super) struct Input<'a> {
 }
 
 /// The steps to run, each present only when it has something to change.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Plan {
     /// Step 1.
     pub(super) acknowledgement: Option<Ack>,
@@ -75,9 +84,36 @@ pub(super) struct Plan {
     pub(super) settings: Vec<(String, String)>,
 }
 
+impl Plan {
+    /// Whether any step still writes something: a reused acknowledgement does
+    /// not.
+    pub(super) fn writes(&self) -> bool {
+        matches!(
+            self.acknowledgement,
+            Some(Ack::Requested(_) | Ack::Record(..))
+        ) || self.hosts.is_some()
+            || self.reviewers.is_some()
+            || !self.settings.is_empty()
+    }
+}
+
 /// Why the interview stops before its summary, as the line the owner sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Refused(pub(super) String);
+
+/// Judges the acknowledgement against the stream read after the final `yes`:
+/// recorded as a new event, or reused when a stored one covers it.
+pub(super) fn settle(acknowledgement: &Acknowledge, stream: &Stream<'_>) -> Ack {
+    match record::judge(
+        stream.payloads,
+        &acknowledgement.providers,
+        &acknowledgement.owner,
+        stream.at,
+    ) {
+        Some(event) => Ack::Record(acknowledgement.clone(), Box::new(event)),
+        None => Ack::Reused(acknowledgement.clone()),
+    }
+}
 
 /// Plans the confirmed writes. A Claude settings file that cannot be read or
 /// cannot take the hosts refuses the whole interview when a provider was
@@ -106,15 +142,7 @@ pub(super) fn plan(input: &Input<'_>) -> Result<Plan, Refused> {
         .acknowledgement
         .map(|acknowledgement| match &input.stream {
             None => Ack::Requested(acknowledgement.clone()),
-            Some(stream) => match record::judge(
-                stream.payloads,
-                &acknowledgement.providers,
-                &acknowledgement.owner,
-                stream.at,
-            ) {
-                Some(event) => Ack::Record(acknowledgement.clone(), Box::new(event)),
-                None => Ack::Reused(acknowledgement.clone()),
-            },
+            Some(stream) => settle(acknowledgement, stream),
         });
     let choice = match input.answer {
         Answer::Choose(chosen) => Some(chosen.as_slice()),

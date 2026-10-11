@@ -12,10 +12,6 @@ use baley_core::policy::{ParsedLayer, Value};
 const SETTING: &str = "review.reviewers";
 
 /// The host's own reviewer, which the list keeps as it finds it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "only the list decision reads it")
-)]
 const HOST: &str = "host";
 
 /// The outside providers in force and the layer they came from.
@@ -85,10 +81,6 @@ pub(super) fn stored(global: Option<&ParsedLayer>) -> Selection {
 /// `review.reviewers` as written, `None` for no value, which means the default
 /// `["host"]`. `chosen` is the owner's explicit choice, `None` for a blank
 /// answer, which writes nothing.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the interview's write plan calls it")
-)]
 pub(super) fn decide(stored: Option<&[String]>, chosen: Option<&[Provider]>) -> Option<TypedPair> {
     let chosen = chosen?;
     let default = [HOST.to_owned()];

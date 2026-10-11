@@ -41,9 +41,19 @@ pub(super) enum Staged {
     Declined,
     /// The owner identity is missing, so the interview stops before its summary.
     Refused(Refusal),
-    /// Every warning shown was accepted. The request is `None` when no
-    /// provider was chosen explicitly.
-    Ready(Option<Acknowledge>),
+    /// Every warning shown was accepted.
+    Ready(Ready),
+}
+
+/// The owner's answer to the provider question and, when providers were
+/// chosen, what to acknowledge.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Ready {
+    /// What the owner answered.
+    pub(super) answer: Answer,
+    /// The confirmed providers with the owner's name, `None` when no provider
+    /// was chosen explicitly.
+    pub(super) acknowledgement: Option<Acknowledge>,
 }
 
 /// What the owner answered to the provider question.
@@ -127,13 +137,21 @@ pub(super) fn stage(
             return Ok(Staged::Declined);
         };
         match parse_answer(&answer) {
-            Ok(Answer::Keep) => return Ok(Staged::Ready(None)),
+            Ok(Answer::Keep) => {
+                return Ok(Staged::Ready(Ready {
+                    answer: Answer::Keep,
+                    acknowledgement: None,
+                }));
+            }
             Ok(Answer::Choose(chosen)) => break chosen,
             Err(line) => writeln!(output, "{line}")?,
         }
     };
     if chosen.is_empty() {
-        return Ok(Staged::Ready(None));
+        return Ok(Staged::Ready(Ready {
+            answer: Answer::Choose(chosen),
+            acknowledgement: None,
+        }));
     }
     for provider in &chosen {
         let name = provider.name();
@@ -150,10 +168,13 @@ pub(super) fn stage(
         }
     }
     Ok(match identity::read(process) {
-        Ok(owner) => Staged::Ready(Some(Acknowledge {
-            providers: chosen,
-            owner,
-        })),
+        Ok(owner) => Staged::Ready(Ready {
+            acknowledgement: Some(Acknowledge {
+                providers: chosen.clone(),
+                owner,
+            }),
+            answer: Answer::Choose(chosen),
+        }),
         Err(render) => Staged::Refused(Refusal(render)),
     })
 }

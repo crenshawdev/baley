@@ -93,9 +93,7 @@ fn unwritten(step: Step) -> &'static str {
 fn written(plan: &Plan, global: &Path, done: &Done) -> Vec<String> {
     match done {
         Done::Acknowledgement { recorded } => {
-            let Some(Ack::Requested(who) | Ack::Record(who, _) | Ack::Reused(who)) =
-                &plan.acknowledgement
-            else {
+            let Some(who) = plan.acknowledgement.as_ref().map(Ack::who) else {
                 return Vec::new();
             };
             let names: Vec<&str> = who
