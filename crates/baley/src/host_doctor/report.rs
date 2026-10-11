@@ -84,6 +84,21 @@ impl Report {
                     "{artifact}: {} differs from the entry Baley renders (another command, other arguments or environment entries): {found}",
                     path.display()
                 ),
+                ArtifactState::EntriesHeld { path } => format!(
+                    "{artifact}: {} holds every Baley entry that install writes and the install record holds",
+                    path.display()
+                ),
+                ArtifactState::EntriesMissing { path, missing } => {
+                    let missing: Vec<String> = missing
+                        .iter()
+                        .map(|missing| format!("{} lacks {}", missing.list, missing.entry))
+                        .collect();
+                    format!(
+                        "{artifact}: {} differs from Baley's entries: {}; run baley install to write them again",
+                        path.display(),
+                        missing.join("; ")
+                    )
+                }
                 ArtifactState::NotPlaced { executable } => format!(
                     "{artifact}: the latest baley install placed none, and it places the hook only while something runnable is at {executable}; run install.sh, or place the baley binary or a link to it at that path, then run baley install again"
                 ),
@@ -1381,5 +1396,60 @@ mod tests {
             report.lines
         );
         assert_eq!(report.code, 0, "{:?}", report.lines);
+    }
+    /// The installed fixture with its settings document edited by `edit`.
+    fn installed_settings(edit: impl FnOnce(&mut serde_json::Value)) -> Report {
+        let mut settings = crate::install::fixtures::complete_settings();
+        edit(&mut settings);
+        report_of(&installed_from(installed_record(), &settings))
+    }
+
+    #[test]
+    fn a_hook_or_settings_file_missing_an_entry_install_renders_reported_as_read_is_caught() {
+        let versions = "/home/o/.local/lib/crenshawdev/baley/versions";
+        let versions_rule = "Edit(//home/o/.local/lib/crenshawdev/baley/versions/**)";
+
+        let no_rule = installed_settings(|settings| {
+            without(settings, &["/permissions/deny"], |rule| {
+                rule == versions_rule
+            });
+        });
+        let line = line_for(&no_rule, "settings");
+        for part in [SETTINGS, "differs", versions_rule, "baley install"] {
+            assert!(line.contains(part), "{part} missing from {line}");
+        }
+        assert_eq!(no_rule.code, 1, "{:?}", no_rule.lines);
+
+        let slower = installed_settings(|settings| {
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = serde_json::json!(30);
+        });
+        let line = line_for(&slower, "hook");
+        for part in ["differs", "baley install"] {
+            assert!(line.contains(part), "{part} missing from {line}");
+        }
+        assert!(
+            line_for(&slower, "guard hook:").contains("all nine tools"),
+            "{:?}",
+            slower.lines
+        );
+        assert_eq!(slower.code, 1, "{:?}", slower.lines);
+
+        let writable = installed_settings(|settings| {
+            without(settings, &["/sandbox/filesystem/denyWrite"], |path| {
+                path == versions
+            });
+        });
+        let line = line_for(&writable, "settings");
+        for part in [SETTINGS, "differs", versions, "baley install"] {
+            assert!(line.contains(part), "{part} missing from {line}");
+        }
+        assert_eq!(writable.code, 1, "{:?}", writable.lines);
+
+        let unchanged = installed_settings(|_| {});
+        for name in ["hook", "settings"] {
+            let line = line_for(&unchanged, name);
+            assert!(!line.contains("differs"), "{line}");
+        }
+        assert_eq!(unchanged.code, 0, "{:?}", unchanged.lines);
     }
 }

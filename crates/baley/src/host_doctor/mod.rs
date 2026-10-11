@@ -25,9 +25,13 @@
 //! unknown is reported as not installed, and that alone never raises the exit
 //! status. The one exception is the hook when a record exists: install
 //! withheld it, which is a gap. [`observe`] reads the record beside the map,
-//! and [`install_record`] judges whether that install finished and whether
-//! it held the sandbox block back.
+//! and [`install_record`] judges whether that install finished, whether it
+//! held the sandbox block back and which recorded stubs are stale. [`drift`]
+//! judges whether the placed hook and settings still hold Baley's entries,
+//! those install renders over the derived placements and those the record
+//! holds.
 
+pub mod drift;
 pub mod guard_records;
 pub mod install_record;
 pub mod placed;
@@ -149,6 +153,11 @@ pub struct Mapped {
     /// The latest install record the map was built from, or none when there
     /// is none or the map was supplied without one.
     pub record: Option<Value>,
+    /// The placements `baley install` itself renders for, derived from `HOME`
+    /// and `CLAUDE_CONFIG_DIR` whatever the record lists, or none when the map
+    /// was supplied without them. The hook and settings are judged for drift
+    /// against them.
+    pub derived: Option<PlacementMap>,
 }
 
 /// What was gathered about the host.
@@ -210,6 +219,7 @@ pub fn gather<S: Ledger>(
             executable,
             reads,
             record: None,
+            derived: None,
         }
     });
     Observation {
@@ -237,8 +247,9 @@ pub struct Process<'a> {
 /// Gathers the observation the doctor judges for `host`: derives the
 /// installed paths from `process`, reads the host's latest install record,
 /// builds the placement map from both and gathers as [`gather`] does, with
-/// the record kept beside the map. Every read the host checks make starts
-/// here. It owns no rule and has no unit test of its own.
+/// the record and the derived placements kept beside the map. Every read the
+/// host checks make starts here. It owns no rule and has no unit test of its
+/// own.
 pub fn observe<S: Ledger + Admin + Views>(
     process: Process<'_>,
     folders: Folders,
@@ -250,6 +261,10 @@ pub fn observe<S: Ledger + Admin + Views>(
     let derived = installed::resolve(process.env, process.claude_config_dir, &manifest);
     let record = install::record::read(stored.store, host.name());
     let latest = record.as_ref().ok().cloned().flatten();
+    let placements = derived
+        .as_ref()
+        .ok()
+        .map(|installed| installed.placements.clone());
     let mut observation = gather(
         installed_placements(derived, record),
         folders,
@@ -260,6 +275,7 @@ pub fn observe<S: Ledger + Admin + Views>(
     );
     if let Ok(mapped) = &mut observation.host {
         mapped.record = latest;
+        mapped.derived = placements;
     }
     observation
 }
@@ -325,6 +341,19 @@ pub enum ArtifactState {
         /// The entry found.
         found: serde_json::Value,
     },
+    /// The hook or settings document holds every Baley entry expected of it.
+    EntriesHeld {
+        /// The place.
+        path: PathBuf,
+    },
+    /// The hook or settings document lacks Baley entries that install
+    /// renders or the latest record holds.
+    EntriesMissing {
+        /// The place.
+        path: PathBuf,
+        /// Each entry it lacks, in the order expected.
+        missing: Vec<drift::Missing>,
+    },
     /// The latest install record holds no guard hook, so install placed none.
     NotPlaced {
         /// The stable path the hook runs.
@@ -342,6 +371,7 @@ impl ArtifactState {
                 | ArtifactState::Read { .. }
                 | ArtifactState::StubMatches { .. }
                 | ArtifactState::RegistrationMatches { .. }
+                | ArtifactState::EntriesHeld { .. }
         )
     }
 }
@@ -464,6 +494,10 @@ pub fn judge(observation: &Observation) -> Findings {
         });
     }
 
+    let ours = mapped
+        .derived
+        .as_ref()
+        .map(|derived| install::settings::ours(derived, &observation.folders));
     let mut artifacts: Vec<(Artifact, ArtifactState)> = Vec::new();
     for file in mapped.map.expected_files() {
         let path = file.path.to_path_buf();
@@ -491,7 +525,22 @@ pub fn judge(observation: &Observation) -> Findings {
                         }
                     }
                 }
-                Content::Object(_) => ArtifactState::Read { path },
+                Content::Object(value) => match (&file.artifact, &ours) {
+                    (Artifact::Hook | Artifact::Settings, Some(ours)) => {
+                        let record = mapped.record.as_ref();
+                        let missing = if file.artifact == Artifact::Hook {
+                            drift::hook(value, ours, record)
+                        } else {
+                            drift::settings(value, ours, record)
+                        };
+                        if missing.is_empty() {
+                            ArtifactState::EntriesHeld { path }
+                        } else {
+                            ArtifactState::EntriesMissing { path, missing }
+                        }
+                    }
+                    _ => ArtifactState::Read { path },
+                },
             },
             None => match read(file.path) {
                 None => ArtifactState::NotRead { path },
@@ -782,6 +831,7 @@ pub(crate) mod fixtures {
                     })
                     .collect(),
                 record: None,
+                derived: None,
             }),
             folders: folders(),
             checkout_file: None,
@@ -886,7 +936,9 @@ pub(crate) mod fixtures {
                 .map(|(path, state)| (path.as_str(), state.clone())),
         );
         let mut observation = observed(map, reads);
-        observation.host.as_mut().unwrap().record = Some(record);
+        let mapped = observation.host.as_mut().unwrap();
+        mapped.record = Some(record);
+        mapped.derived = Some(crate::install::fixtures::installed().placements);
         observation.health = user_health(false);
         observation
     }
