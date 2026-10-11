@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the three unsigned development artifact trees the installed qualification uses and lays them out
-# the way install.sh reads them. Nothing is published: putting the trees on an HTTPS host is the owner's step.
+# the way install.sh reads them. Nothing is published: pushing the trees to a throwaway branch of this repository
+# is the owner's step, in the procedure's Part 0.
 #
 #   older  the T14 merge, version 0.0.1. It has no install command and predates the view set raised to 8.
 #   base   the commit being qualified, version 0.0.2.
@@ -210,9 +211,9 @@ build_one newer "$QUALIFIED" "" locked || exit 1
 } > "$ART/artifacts.txt" || exit 1
 
 echo
-echo "Built at $QUALIFIED, left unpublished. Publish each tree over HTTPS from a domain you control, with a publicly trusted certificate, for this run only:"
+echo "Built at $QUALIFIED, left unpublished. Push each tree to a throwaway branch of this repository for this run only, as the procedure's Part 0 says:"
 for LABEL in $LABELS; do
-  echo "  $ART/$LABEL/$PLATFORM/  (manifest and baley)  ->  https://<your domain>/<path>/$LABEL/$PLATFORM/"
+  echo "  $ART/$LABEL/$PLATFORM/  (manifest and baley)  ->  <branch>:$LABEL/$PLATFORM/"
 done
-echo "The sources the procedure uses are https://<your domain>/<path>/older, /base and /newer."
+echo "The sources the procedure uses are https://raw.githubusercontent.com/<owner>/<repository>/<branch>/older, /base and /newer."
 echo "The versions, digests, commits and local edits are in $ART/artifacts.txt."

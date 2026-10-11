@@ -69,7 +69,18 @@ Ids 21 and 22 are expected to be recorded in project two. Ids 31 to 36 and 41 to
 ## Part 0: before the run
 
 1. Build the artifacts at the commit you are qualifying: `sh spikes/host-matrix/live-install-artifacts.sh <commit> <absolute build folder>`. It takes several minutes, builds three release binaries one after another and prints the three trees to publish. Read `~/.local/share/baley-install-artifacts/artifacts.txt`: each artifact's version, SHA-256, source commit and local edits, the marker sentence, and the manifest of `base` and of `newer`.
-2. Publish the three trees for this run only, from a domain you control over a publicly trusted certificate: `<source>/<os>-<arch>/manifest` and `<source>/<os>-<arch>/baley` for each of `<older source>`, `<base source>` and `<newer source>`, for example `https://<your domain>/<path>/older`. The installer and the updater use HTTPS only, with `curl -q --proto '=https' --tlsv1.2 -fsSL` and the updater's bundled roots, and no proxy (design 0012 section 5, Installer and baley install, and baley update). Nothing is signed.
+2. Publish the three trees for this run only on a throwaway branch of this repository that holds nothing else, served by GitHub's raw file host over HTTPS. The repository must be public, since the installer and the updater send no credentials. From the repository root, with `<branch>` a name no other branch uses, such as `live-install-artifacts`, and `<scratch>` a folder that does not exist yet:
+
+   ```
+   git worktree add --orphan -b <branch> <scratch>
+   cp -R ~/.local/share/baley-install-artifacts/older ~/.local/share/baley-install-artifacts/base ~/.local/share/baley-install-artifacts/newer <scratch>/
+   git -C <scratch> add older base newer
+   git -C <scratch> commit -m "chore: publish unsigned development artifacts for one installed run"
+   git -C <scratch> push origin <branch>
+   git worktree remove <scratch>
+   ```
+
+   The sources are then `https://raw.githubusercontent.com/<owner>/<repository>/<branch>/older`, `/base` and `/newer`, each serving `<source>/<os>-<arch>/manifest` and `<source>/<os>-<arch>/baley`. The installer and the updater use HTTPS only, with `curl -q --proto '=https' --tlsv1.2 -fsSL` and the updater's bundled roots, and no proxy (design 0012 section 5, Installer and baley install, and baley update). Nothing is signed, and while the branch exists the unsigned binaries are public.
 3. In the shell you will use, run `unset BALEY_HOME`. Both scripts refuse to run while it is set, even empty. Unset any `GIT_` variable too (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_CONFIG_GLOBAL` and the like): the scripts clear them for their own commands, but the sessions inherit your shell.
 4. From the repository root, run `sh spikes/host-matrix/live-install.sh`. It prints the root, the prefix, the commands and every session launch. Keep that output open. Run it before the login, because it clears the tree and the login with it. If it stops, it says why and has repaired nothing.
 5. Check each source from a shell: `curl -q --proto '=https' --tlsv1.2 -fsSL <source>/<os>-<arch>/manifest`. Expect two lines, `version <v>` and `sha256 <64 digits>`, with `0.0.1` for older, `0.0.2` for base and the crate's own version for newer. Rows `pre.source-older`, `pre.source-base` and `pre.source-newer`. This settles host question 8.
@@ -326,7 +337,7 @@ Rows filled: `exit.r1.signal`, `exit.r1.in-flight`, `exit.r1.answered`, `exit.r1
 Every session has exited: `pgrep -f 'debug-file .*baley-install-live'` prints nothing. Do not run `live-install.sh` again: it clears the tree, results included.
 
 1. `sh spikes/host-matrix/live-install-reads.sh > $OUT/reads.txt`. It opens the ledger read-only. Read `reads.txt` and fill the rows below from it.
-2. Keep `$ROOT` and `$ART` as they are until the record is committed. Then take the three trees off your domain.
+2. Keep `$ROOT` and `$ART` as they are until the record is committed. Then delete the throwaway branch: `git push origin --delete <branch>` and `git branch -D <branch>`. GitHub can still serve the files by commit id for a while after the branch is gone.
 
 | Rows | Read from `reads.txt` |
 |---|---|
@@ -351,4 +362,4 @@ These are the questions the documentation leaves open. The sheet's rows answer t
 5. Whether a project's `allowedDomains` adds to the user file's list rather than replacing it (`prot.net.project-owner-host`, `prot.net.project-own-host`). If it replaces, the interview's hosts have no effect in a project with its own list.
 6. Whether Claude Code ends a stdio MCP server's input, or signals it, while a tool call is running when a session ends (`exit.r1.in-flight`, `exit.r1.server-end`, `exit.condition`). If the condition cannot be created, the in-flight exit is recorded unverified with the reason.
 7. Whether Claude Code discovers newly written or replaced skill stubs only in new sessions (`inst.old-session.stub`, `inst.after.stubs`). If not, the session boundary this procedure assumes is wrong and it must say when stubs load.
-8. Whether a domain the owner controls can serve the development artifacts over a publicly trusted certificate on the run day (`pre.source-older`, `pre.source-base`, `pre.source-newer`). If not, the install, rerun and both update parts cannot run until a host exists.
+8. Whether GitHub's raw file host serves the development artifacts from the throwaway branch, over a publicly trusted certificate, to the installer's `curl` and the updater's bundled roots on the run day (`pre.source-older`, `pre.source-base`, `pre.source-newer`). If not, the install, rerun and both update parts cannot run until a host exists.

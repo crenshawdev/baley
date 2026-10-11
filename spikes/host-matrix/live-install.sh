@@ -329,7 +329,7 @@ Baley commit (pins.txt): $PINS_COMMIT
 Artifact older (artifacts.txt): $(art_line older)
 Artifact base (artifacts.txt): $(art_line base)
 Artifact newer (artifacts.txt): $(art_line newer)
-Artifact source, base address (https://<owner domain>/<path>):
+Artifact source, base address (https://raw.githubusercontent.com/<owner>/<repository>/<branch>):
 
 The procedure is $GUIDE. Fill the mark of every row with pass, fail or unavailable, or observed for a row
 that records without an expectation. Actual outcome is what a file, the ledger or a receipt showed
@@ -339,7 +339,7 @@ Approve every permission prompt unless a part says otherwise, and note on the ro
 A host question in a step is one of the eight in the procedure's last section.
 EOF
   section "Before the run" "The artifact source, the version of Claude Code and the login into the isolated configuration."
-  row pre.source-older "curl -q --proto '=https' --tlsv1.2 -fsSL <older source>/<os>-<arch>/manifest (host question 8)" "Two lines, version $OLDER_V and a 64-digit sha256, each ending in a newline, served over a publicly trusted certificate (design 0012 section 5, Installer and baley install). Host question 8: a domain the owner controls can serve the artifacts"
+  row pre.source-older "curl -q --proto '=https' --tlsv1.2 -fsSL <older source>/<os>-<arch>/manifest (host question 8)" "Two lines, version $OLDER_V and a 64-digit sha256, each ending in a newline, served over a publicly trusted certificate (design 0012 section 5, Installer and baley install). Host question 8: the throwaway branch serves the artifacts"
   row pre.source-base "The same request for <base source> (host question 8)" "Two lines, version $BASE_V and a 64-digit sha256 (design 0012 section 5, Installer and baley install). Host question 8"
   row pre.source-newer "The same request for <newer source> (host question 8)" "Two lines, version $NEWER_V and a 64-digit sha256 (design 0012 section 5, Installer and baley install). Host question 8"
   row pre.claude-version "claude --version, before any session" "Prints a version; recorded in the header" observed
