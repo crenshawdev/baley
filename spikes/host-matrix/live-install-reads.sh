@@ -1,8 +1,10 @@
 #!/bin/sh
 # Post-run reads for the installed qualification. It reads what live-install.sh prepared and the sessions left
-# behind, opens the ledger read-only and changes nothing but a scratch folder it removes. Its baley commands
-# run through the disposable stable path with the same environment prefix live-install.sh printed. The output
-# is pasted into the post-run rows of the observation sheet:
+# behind. Its own sqlite3 queries open the ledger read-only, but the baley verify and doctor runs can first
+# bring views behind that binary's up to the current set, which writes the ledger, so it runs after the sessions.
+# Apart from that it changes nothing but a scratch folder it removes. Its baley commands run through the
+# disposable stable path with the same environment prefix live-install.sh printed. The output is pasted into
+# the post-run rows of the observation sheet:
 #   sh live-install-reads.sh > <root>/results/reads.txt
 set -u
 

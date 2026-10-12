@@ -249,13 +249,15 @@ The repeat is owed at the next raise of the view set. It belongs to the task tha
 
 These are recorded as found. No code changed for them and none has a ruling yet.
 
-1. The expected text of `rerun.dropped-stub-file` and `rerun.settings-diff` in `live-install.md` and in the row text that `live-install.sh` writes says the design states nothing about removing a stub file the manifest no longer ships. Since #259 it does, in design 0012 section 5 under Ownership. The rows are marked against the design as it stands. The expected text in `live-install.md` is corrected in the commit that adds this sheet. The same text in `live-install.sh` is not, and stays open.
+1. The expected text of `rerun.dropped-stub-file` and `rerun.settings-diff` in `live-install.md` and in the row text that `live-install.sh` writes says the design states nothing about removing a stub file the manifest no longer ships. Since #259 it does, in design 0012 section 5 under Ownership. The rows are marked against the design as it stands. The expected text in `live-install.md` is corrected in the commit that adds this sheet. The same text in `live-install.sh` was corrected after the repeat, together with the receipt's expected text (see "Rules changed after the repeat").
 2. The doctor's stale line for `bal-help` still reads "run baley install so the install record stops listing it". Since #259 install also removes the file, so the line is true and no longer says everything the fix does.
 3. The rerun leaves the empty `skills/bal-help` folder, as design 0012 and PR #261 say.
 
 ### Rules changed after the repeat
 
 Part 8 step 6 of `live-install.md` now says the retired stub's file is expected to be gone, with its empty folder left, as design 0012 states. The rows above were judged against the design as it stands and are recorded as marked.
+
+After the repeat, the expected text of `rerun.receipt` was corrected in `live-install.md` Part 8 step 3 and in `live-install.sh`. It had said install prints no line for `bal-help`. Since #259 install prints ``stub `bal-help` at <path>: removed, since this binary no longer ships it``, and the row above was marked pass against that removed line, not against the expected text as it stood. The row is recorded as marked. The row text `live-install.sh` writes for `rerun.dropped-stub-file` and `rerun.settings-diff` was corrected in the same change to match Part 8 step 6. The Part 5 heading in `live-install.sh` now says seven checks for each protected place, since Bash is one tool and not two. Those two rows' expected text and the Protection section's heading ("seven tools each") in this sheet stay as the repeat wrote them.
 
 ## Cited evidence
 
