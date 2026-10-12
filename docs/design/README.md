@@ -23,7 +23,6 @@ Bug fixes, refactors inside one module and dependency updates do not.
 | Decision records (ADRs) | [`../adr/`](../adr/) | One architectural decision each: its context, the options and why one was chosen |
 | Glossary | [`CONTEXT.md`](../../CONTEXT.md) | One term for each concept across every document, with its meaning, the section that owns it and the words to avoid for it; it changes with the document that changes a term |
 | C4 model | [`c4/workspace.dsl`](c4/workspace.dsl) | The one model of Baley's structure; every structure diagram is exported from it |
-| Architecture overview | `../architecture/` | The system as it is built today, updated with the code that changes it |
 
 Numbers are four digits, assigned in order and never reused.
 
