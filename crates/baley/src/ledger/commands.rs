@@ -13,8 +13,6 @@ use super::{
 use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders};
-use crate::host_artifacts::{installed, stubs};
-use crate::install::record as install_record;
 use crate::{host_doctor, init, policy_step, settings};
 use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, ProjectIdentity, Unavailable};
@@ -38,9 +36,10 @@ fn require_remote(forge: &mut Forge, name: &str) -> Result<(), Render> {
 
 /// Wires one owner command to the core and storage port. The config folder
 /// is where `purge`'s policy step finds the global file; `doctor` also takes
-/// the ledger home.
+/// the ledger home and the host `begin` selected.
 pub(super) fn dispatch(
     command: LedgerCommand,
+    host: Option<Host>,
     store: Arc<SqliteStore>,
     cwd: PathBuf,
     folders: &Folders,
@@ -56,7 +55,9 @@ pub(super) fn dispatch(
         } => command_plan::verify_form(project.as_deref(), local_only, views)
             .map_err(Render::refusal)
             .and_then(|form| verify(&store, &mut forge, config, &cwd, form)),
-        LedgerCommand::Doctor => doctor(&store, &mut forge, folders, &cwd),
+        LedgerCommand::Doctor { .. } => host
+            .ok_or_else(unexpected_plan)
+            .and_then(|host| doctor(&store, &mut forge, folders, &cwd, host)),
         LedgerCommand::Export { project, to } => export(&store, &ProjectId(project), &to),
         LedgerCommand::Purge {
             project,
@@ -123,6 +124,7 @@ fn doctor(
     forge: &mut Forge,
     folders: &Folders,
     cwd: &Path,
+    selected: Host,
 ) -> Result<Render, Render> {
     let config = folders.config.as_path();
     let projects = store
@@ -156,31 +158,40 @@ fn doctor(
         .as_ref()
         .map(|file| file.path.clone());
     let ids: Vec<ProjectId> = projects.iter().map(|(id, _)| id.clone()).collect();
-    let host = host_report(folders.clone(), checkout_file, store, &ids, &health);
+    let host = host_report(
+        folders.clone(),
+        checkout_file,
+        store,
+        &ids,
+        &health,
+        selected,
+    );
     Ok(display::with_host(rendered, &host))
 }
 
-/// The host section: the stable path and the artifacts the latest install
-/// record shows `baley install` wrote, each reported as not installed when the
-/// record does not show it, and the server's context from the last server
-/// call the ledger holds.
+/// The host section for `host`. Only the process environment is read here;
+/// `host_doctor::observe` gathers the rest.
 fn host_report(
     folders: Folders,
     checkout_file: Option<PathBuf>,
     store: &SqliteStore,
     projects: &[ProjectId],
     health: &Health,
+    host: Host,
 ) -> host_doctor::Report {
     let env = Environment::read();
-    let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
-    let derived = installed::resolve(&env, std::env::var_os("CLAUDE_CONFIG_DIR"), &manifest);
-    let record = install_record::read(store, Host::ClaudeCode.name());
-    let observation = host_doctor::gather(
-        host_doctor::installed_placements(derived, record),
+    let path = std::env::var_os("PATH");
+    let process = host_doctor::Process {
+        env: &env,
+        claude_config_dir: std::env::var_os("CLAUDE_CONFIG_DIR"),
+        path: path.as_deref(),
+        os: std::env::consts::OS,
+    };
+    let observation = host_doctor::observe(
+        process,
         folders,
         checkout_file,
-        std::env::var_os("PATH").as_deref(),
-        std::env::consts::OS,
+        host,
         host_doctor::Stored {
             store,
             projects,

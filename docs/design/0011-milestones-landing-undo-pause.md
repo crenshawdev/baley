@@ -23,7 +23,7 @@ This area decides how finished work leaves the checkout and how work in flight i
 
 It does not decide when a phase is complete ([0007](0007-verification.md)); what the guard does with a push an agent attempts ([0010](0010-guard.md)); reviews a landing waits on ([0008](0008-review.md)); the forge mirror of stories and phases (`Backlog`, [0005](0005-context-plans-and-acceptance.md) PLN-R22); or how Baley itself is released ([#14](https://github.com/crenshawdev/baley/issues/14), its own design).
 
-Hand-offs: 0007 completes phases; this area lands them. 0006's `phase.undone` is this area's undo. 0004's project start offers the forge creation this area performs. 0008's filing and 0009's anchors go through this area's forge adapter.
+Hand-offs: 0007 completes phases; this area lands them. 0004 withdraws a started phase only after this area's `phase.undone`. 0004's project start offers the forge creation this area performs. 0008's filing and 0009's anchors go through this area's forge adapter.
 
 In the component view of [0002](0002-system-design.md) (Figure 4) this area is one of the domain areas, and the forge adapter is one of the ports.
 

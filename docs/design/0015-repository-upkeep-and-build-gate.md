@@ -112,13 +112,13 @@ The retained historical passages are:
 | Passage | Current location | Treatment |
 |---|---|---|
 | Product boundary | [PRD:148](prd/baley.md#L148) | Keep the distinction between the predecessor's behavior and Baley's requirements |
-| No record import | [PRD:169](prd/baley.md#L169) | Keep the explicit exclusion |
-| Heritage | [PRD:173](prd/baley.md#L173) | Keep the explanation of the working loop's origin |
+| No record import | [PRD:170](prd/baley.md#L170) | Keep the explicit exclusion |
+| Heritage | [PRD:174](prd/baley.md#L174) | Keep the explanation of the working loop's origin |
 | Story design context | [ADR 0017:14](../adr/0017-stories-and-sprints.md#L14) | Keep the accepted decision's body |
 | Review design context | [ADR 0019:14](../adr/0019-reviews-adjudicated-and-ruled.md#L14) | Keep the accepted decision's body |
 | README lineage | [README lineage](../../README.md#lineage) | Keep the name, repository link and attribution before the `baley-start` tag |
 
-Outside this document, a case-insensitive tracked-content search for `cadence` finds eight occurrences on six lines in four files: the five passages in `docs` above and three occurrences on the README lineage line. `crates` and `.github` contain zero matches; `scripts` is absent. The old `cad-` instruction prefix has zero matches outside this document. This document's explanatory mentions and registration boundary are also permitted, without establishing aliases. No active identifier is exempted as history.
+Outside this document, a case-insensitive tracked-content search for `cadence` finds eleven occurrences on nine lines in seven files: the five passages in `docs` above, three occurrences on the README lineage line, and one on line 24 of each of the three dated live-run sheets `spikes/host-matrix/claude-live-2026-10-08-run1.md` to `run3.md`, which record the owner's Cadence plugin hook seen in those sessions. `crates` and `.github` contain zero matches; `scripts` is absent. The old `cad-` instruction prefix has zero matches outside this document. This document's explanatory mentions and registration boundary are also permitted, without establishing aliases. No active identifier is exempted as history.
 
 The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its [non-goals](0001-evidence-ledger.md#L57), [performance account](0001-evidence-ledger.md#performance) and [compatibility rule](0001-evidence-ledger.md#compatibility-and-migration). The profile is [baseline-store.json](../../spikes/evidence-ledger-bench/profile/baseline-store.json), identified by the benchmark [README:30](../../spikes/evidence-ledger-bench/README.md#L30) and [loader:558](../../spikes/evidence-ledger-bench/src/main.rs#L558). Those figures describe the replaced store, not the current test suite.
 
@@ -258,16 +258,16 @@ The workflow pins nextest 0.9.144 at [test.yml:55](../../.github/workflows/test.
 
 ### Static test counts
 
-These counts include only Rust source lines containing actual `#[test]` or `#[tokio::test]` attributes, with or without arguments, under `crates`. Each matching line counts once, including attributes in macro definitions; mentions in strings or comments are excluded. They are not discovered or executed test counts.
+These counts include only Rust source lines containing actual `#[test]` or `#[tokio::test]` attributes, with or without arguments, under `crates`. Each matching line counts once, including attributes in macro definitions; mentions in strings or comments are excluded. They were counted over the tree at commit `f73988fa`. They are not discovered or executed test counts.
 
 | Crate | Test-attribute lines | Files containing those lines |
 |---|---:|---:|
-| `baley` | 2,263 | 177 |
-| `baley-core` | 430 | 14 |
+| `baley` | 2,619 | 232 |
+| `baley-core` | 467 | 15 |
 | `baley-store` | 105 | 11 |
 | `baley-store-sqlite` | 305 | 12 |
 | `baley-bench` | 5 | 2 |
-| Total | 3,108 | 216 |
+| Total | 3,501 | 272 |
 
 The count does not expand macros or resolve binary membership. For example, [ledger/tests.rs:16-22](../../crates/baley/src/ledger/tests.rs#L16) defines an attribute inside a macro, and the store's [conformance macro:249-352](../../crates/baley-store/src/conformance/mod.rs#L249) generates adapter cases. The test count and timing figures in older issues are not measurements of this tree. No compilation, formatter, test, lint or dependency-check execution is claimed by this document's static evidence.
 

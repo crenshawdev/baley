@@ -91,10 +91,48 @@ rejects!(export_requires_a_destination, &["export", "P"]);
 rejects!(purge_requires_a_reason, &["purge", "P", &"ab".repeat(32)]);
 rejects!(purge_requires_hashes, &["purge", "P", "--reason", "r"]);
 #[test]
-fn doctor_takes_no_flags_and_parses_bare() {
-    assert!(matches!(parse(&["doctor"]).unwrap(), LedgerCommand::Doctor));
+fn a_doctor_host_argument_refused_by_clap_or_old_flags_accepted_is_caught() {
+    for (args, expected) in [
+        (&["doctor"][..], "claude-code"),
+        (&["doctor", "--host", "codex"], "codex"),
+        (&["doctor", "--host", "claude-code"], "claude-code"),
+    ] {
+        assert!(
+            matches!(parse(args).unwrap(), LedgerCommand::Doctor { host } if host == expected),
+            "{args:?}"
+        );
+    }
     assert_eq!(exit_code(&["doctor", "--remote", "P=o"]), 2);
     assert_eq!(exit_code(&["doctor", "--local-only", "Q"]), 2);
+}
+#[test]
+fn a_doctor_for_an_unknown_host_refused_after_the_ledger_opens_is_caught() {
+    for name in ["codex", "Claude-Code"] {
+        let mut opened = 0;
+        let refused = begin(&parse(&["doctor", "--host", name]).unwrap(), || {
+            opened += 1;
+            Ok(())
+        })
+        .expect_err("a host Baley does not support");
+        assert_eq!(
+            refused.lines,
+            [format!(
+                "unknown-host: {name} is not a host Baley supports; supported: claude-code"
+            )]
+        );
+        assert_eq!(refused.code, 2);
+        assert!(refused.error);
+        assert_eq!(opened, 0, "{name}");
+    }
+    for args in [&["doctor"][..], &["doctor", "--host", "claude-code"]] {
+        let mut opened = 0;
+        let begun = begin(&parse(args).unwrap(), || {
+            opened += 1;
+            Ok(())
+        });
+        assert!(begun.is_ok(), "{args:?}");
+        assert_eq!(opened, 1, "{args:?}");
+    }
 }
 #[test]
 fn purge_parses_all_hash_bytes() {

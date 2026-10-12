@@ -8,13 +8,13 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use baley_core::catalog::USER_PROJECT;
-use baley_core::policy::{FileLayer, Host, Schema, Value, merge, parse_layer};
+use baley_core::policy::Host;
 use clap::Args;
 
 use crate::folders::{self, Environment, Folders, Platform};
 use crate::host_artifacts::placement::Artifact;
 use crate::host_artifacts::{installed, stubs};
-use crate::host_doctor::{placed, prerequisites};
+use crate::host_doctor::{placed, prerequisites, update_setting};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
@@ -42,7 +42,9 @@ pub fn run(args: InstallArgs) -> ExitCode {
     ))
 }
 
-fn select_host(name: &str) -> Result<Host, Render> {
+/// The host named by `--host`, or the `unknown-host` refusal that install and
+/// the doctor share.
+pub(crate) fn select_host(name: &str) -> Result<Host, Render> {
     Host::parse(name).ok_or_else(|| {
         let supported = Host::ALL.map(Host::name).join(", ");
         Render::refusal(format!(
@@ -185,19 +187,7 @@ fn install(args: InstallArgs) -> Result<Render, Render> {
     );
     let seed = models::seed(&store, new_request_id(), &SystemClock::now());
 
-    let schema = Schema::standard();
-    let global = settings::read(&settings::global_path(&folders)).and_then(|file| {
-        file.as_ref()
-            .map(|file| parse_layer(file, FileLayer::Global, schema))
-            .transpose()
-    });
-    let auto = global.ok().and_then(|global| {
-        let policy = merge(schema, None, global.as_ref(), None);
-        match policy.settings["updates.auto"].value {
-            Some(Value::Bool(value)) => Some(value),
-            _ => None,
-        }
-    });
+    let auto = update_setting::judge(settings::read(&settings::global_path(&folders))).auto();
     let staged_version = installation::gather_stable(&installed.layout)
         .ok()
         .and_then(

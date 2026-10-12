@@ -75,7 +75,7 @@ pub(crate) fn read(store: &(impl Admin + Ledger)) -> Result<Stored, StoreError> 
 /// The providers one stored payload covers at the compiled warning: none
 /// unless it carries the current version and digest and lists its providers
 /// as text. Its owner and time are history and decide nothing.
-fn covered_by<'a>(payload: &'a Value, digest: &str) -> Vec<&'a str> {
+pub(crate) fn covered_by<'a>(payload: &'a Value, digest: &str) -> Vec<&'a str> {
     let (Some(version), Some(sha), Some(listed)) = (
         payload["warning_version"].as_u64(),
         payload["warning_sha256"].as_str(),

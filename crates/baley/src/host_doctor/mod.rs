@@ -23,29 +23,50 @@
 //! Nothing here writes a file, the ledger or Claude Code's settings, and
 //! nothing guesses where an artifact belongs: an artifact whose placement is
 //! unknown is reported as not installed, and that alone never raises the exit
-//! status.
+//! status. The one exception is the hook when a record exists: install
+//! withheld it, which is a gap. [`observe`] reads the record beside the map,
+//! and [`install_record`] judges whether that install finished, whether it
+//! held the sandbox block back and which recorded stubs are stale. [`drift`]
+//! judges whether the placed hook and settings still hold Baley's entries,
+//! those install renders over the derived placements and those the record
+//! holds. [`provider_hosts`] lists the review providers whose API host the
+//! settings document allows. [`acknowledgement`] judges whether a current
+//! acknowledgement covers each outside provider. The stable path is judged
+//! by `update::installation::judge_active`, from the link alone. [`update_setting`]
+//! judges the effective global `updates.auto` the way install records it.
 
+pub mod acknowledgement;
+pub mod drift;
 pub mod guard_records;
+pub mod install_record;
 pub mod placed;
 pub mod prerequisites;
 pub mod protection;
+pub mod provider_hosts;
 pub mod report;
 pub mod server_context;
 pub mod store_health;
+pub mod update_setting;
+pub mod writable;
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use baley_store::{Health, Ledger, ProjectId, StoreError};
+use baley_core::catalog::Provider;
+use baley_core::policy::{Host, SettingsFile, Unavailable};
+use baley_store::{Admin, Health, Ledger, ProjectId, StoreError, Views};
 use serde_json::Value;
 
 pub use report::Report;
 
 use placed::{ExecutableGap, FileState, RegistrationJudgement, StubJudgement};
 
-use crate::folders::Folders;
+use crate::folders::{Environment, Folders};
 use crate::host_artifacts::installed::{self, Installed};
 use crate::host_artifacts::placement::{Artifact, Placement, PlacementMap};
+use crate::host_artifacts::stubs;
+use crate::install;
+use crate::update::installation::{self as installation, Active, Layout, StablePath};
 
 /// Why no placement map could be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +88,9 @@ pub enum MapFault {
 /// a record, a stub takes its derived path when the record lists its identity,
 /// the registration when the record holds a registration, the hook when it
 /// holds a hook and the settings when it holds a sandbox entry, and the
-/// versions folder takes its derived path. A derivation refusal or a failed
-/// read of the record is the fault.
+/// versions folder takes its derived path. A recorded stub this binary does
+/// not ship gets no place; [`judge`] reports it stale. A derivation refusal or
+/// a failed read of the record is the fault.
 pub fn installed_placements(
     derived: Result<Installed, installed::Refusal>,
     record: Result<Option<Value>, StoreError>,
@@ -138,6 +160,27 @@ pub struct Mapped {
     pub executable: Option<ExecutableGap>,
     /// Every distinct path of the map's expected files, read once.
     pub reads: Vec<PlacedRead>,
+    /// The latest install record the map was built from, or none when there
+    /// is none or the map was supplied without one.
+    pub record: Option<Value>,
+    /// The placements `baley install` itself renders for, derived from `HOME`
+    /// and `CLAUDE_CONFIG_DIR` whatever the record lists, or none when the map
+    /// was supplied without them. The hook and settings are judged for drift
+    /// against them.
+    pub derived: Option<PlacementMap>,
+    /// Each folder install writes into, in [`writable::locations`] order,
+    /// and what asking whether this user may write into it found.
+    pub writable: Vec<(PathBuf, writable::Seen)>,
+}
+
+/// The stable path as a look at it found it, with the layout it is judged
+/// against. No program is started to learn a version.
+#[derive(Debug, Clone)]
+pub struct StableSeen {
+    /// The installation's paths, derived from `HOME`.
+    pub layout: Layout,
+    /// What the look found, or the system's text when it failed.
+    pub seen: Result<StablePath, String>,
 }
 
 /// What was gathered about the host.
@@ -145,6 +188,9 @@ pub struct Mapped {
 pub struct Observation {
     /// What was found for the placement map, or why none could be built.
     pub host: Result<Mapped, MapFault>,
+    /// The stable path, or none when `HOME` and `CLAUDE_CONFIG_DIR` could
+    /// not place the installation.
+    pub stable: Option<StableSeen>,
     /// Baley's resolved folders, which the coverage judge protects.
     pub folders: Folders,
     /// The discovered checkout's `baley.toml`, which is write-only too.
@@ -153,6 +199,12 @@ pub struct Observation {
     pub prerequisites: prerequisites::Observed,
     /// The last server call the ledger records.
     pub server: server_context::Observed,
+    /// The global settings file as `settings::read` found it, which the
+    /// effective `updates.auto` is judged from.
+    pub global_settings: Result<Option<SettingsFile>, Unavailable>,
+    /// Every stored provider acknowledgement payload, oldest first, or the
+    /// store's text when they could not be read.
+    pub acknowledgements: Result<Vec<Value>, String>,
     /// What the store's doctor returned, which the compatibility and
     /// folder lines are judged from.
     pub health: Health,
@@ -161,7 +213,7 @@ pub struct Observation {
 /// The ledger side of the gather: the store to read history from and the
 /// projects the doctor already listed.
 pub struct Stored<'a, S> {
-    /// The store, read through the storage port's history only.
+    /// The store, read through its project list and history only.
     pub store: &'a S,
     /// Every project in the ledger, in id order.
     pub projects: &'a [ProjectId],
@@ -171,11 +223,11 @@ pub struct Stored<'a, S> {
 
 /// Gathers the observation for a placement map: reads each expected file
 /// once, asks the filesystem about the executable and pages through the
-/// ledger's history for the last server call. Nothing is written, opened for
-/// writing or run. It owns no rule and has no unit test of its own; one
-/// integration check runs it whole and asserts only that nothing was
-/// written.
-pub fn gather<S: Ledger>(
+/// ledger's history for the last server call and the stored provider
+/// acknowledgements. Nothing is written, opened for writing or run. It owns
+/// no rule and has no unit test of its own; one integration check runs it
+/// whole and asserts only that nothing was written.
+pub fn gather<S: Ledger + Admin>(
     placement: Result<PlacementMap, MapFault>,
     folders: Folders,
     checkout_file: Option<PathBuf>,
@@ -185,6 +237,13 @@ pub fn gather<S: Ledger>(
 ) -> Observation {
     let host = placement.map(|map| {
         let executable = placed::observe_executable(Path::new(map.executable().as_str()));
+        let writable = writable::locations(&map)
+            .into_iter()
+            .map(|location| {
+                let seen = writable::judge(writable::gather(&location));
+                (location, seen)
+            })
+            .collect();
         let mut reads: Vec<PlacedRead> = Vec::new();
         for file in map.expected_files() {
             if !reads.iter().any(|read| read.path == file.path) {
@@ -198,16 +257,78 @@ pub fn gather<S: Ledger>(
             map,
             executable,
             reads,
+            record: None,
+            derived: None,
+            writable,
         }
     });
+    let global_settings = crate::settings::read(&crate::settings::global_path(&folders));
     Observation {
         host,
+        stable: None,
         folders,
         checkout_file,
         prerequisites: prerequisites::gather(path, os),
         server: server_context::gather(stored.store, stored.projects),
+        global_settings,
+        acknowledgements: crate::providers::record::read(stored.store)
+            .map(|stored| stored.payloads)
+            .map_err(|error| error.to_string()),
         health: stored.health.clone(),
     }
+}
+
+/// The values the host checks take from the process, supplied by the caller.
+pub struct Process<'a> {
+    /// `HOME` and the folder variables, which place the stable path.
+    pub env: &'a Environment,
+    /// `CLAUDE_CONFIG_DIR`, which places Claude Code's files when set.
+    pub claude_config_dir: Option<OsString>,
+    /// `PATH`, searched for the sandbox's programs.
+    pub path: Option<&'a OsStr>,
+    /// The target OS, as `std::env::consts::OS` names it.
+    pub os: &'a str,
+}
+
+/// Gathers the observation the doctor judges for `host`: derives the
+/// installed paths from `process`, reads the host's latest install record,
+/// builds the placement map from both and gathers as [`gather`] does, with
+/// the record and the derived placements kept beside the map. Every read the
+/// host checks make starts here. It owns no rule and has no unit test of its
+/// own.
+pub fn observe<S: Ledger + Admin + Views>(
+    process: Process<'_>,
+    folders: Folders,
+    checkout_file: Option<PathBuf>,
+    host: Host,
+    stored: Stored<'_, S>,
+) -> Observation {
+    let manifest = stubs::manifest(&stubs::front_doors()).expect("unique compiled front doors");
+    let derived = installed::resolve(process.env, process.claude_config_dir, &manifest);
+    let record = install::record::read(stored.store, host.name());
+    let latest = record.as_ref().ok().cloned().flatten();
+    let placements = derived
+        .as_ref()
+        .ok()
+        .map(|installed| installed.placements.clone());
+    let stable = derived.as_ref().ok().map(|installed| StableSeen {
+        layout: installed.layout.clone(),
+        seen: installation::gather_stable(&installed.layout).map_err(|error| error.to_string()),
+    });
+    let mut observation = gather(
+        installed_placements(derived, record),
+        folders,
+        checkout_file,
+        process.path,
+        process.os,
+        stored,
+    );
+    if let Ok(mapped) = &mut observation.host {
+        mapped.record = latest;
+        mapped.derived = placements;
+    }
+    observation.stable = stable;
+    observation
 }
 
 /// What the judgement found out about one artifact.
@@ -244,13 +365,24 @@ pub enum ArtifactState {
         /// The manifest entry's SHA-256, which the bytes found share.
         digest: String,
     },
-    /// The stub differs from the manifest entry.
+    /// The stub differs from the manifest entry and is not one Baley placed.
     StubDiffers {
         /// The place.
         path: PathBuf,
         /// The manifest entry's SHA-256.
         expected: String,
         /// The SHA-256 of the bytes found.
+        found: String,
+    },
+    /// The stub differs from the manifest entry, and its SHA-256 is one the
+    /// latest install record holds for this identity: an older stub Baley
+    /// placed, which `baley install` replaces.
+    StubOlder {
+        /// The place.
+        path: PathBuf,
+        /// The manifest entry's SHA-256.
+        expected: String,
+        /// The SHA-256 of the bytes found, which the record holds.
         found: String,
     },
     /// The registration document holds the entry Baley renders.
@@ -271,6 +403,24 @@ pub enum ArtifactState {
         /// The entry found.
         found: serde_json::Value,
     },
+    /// The hook or settings document holds every Baley entry expected of it.
+    EntriesHeld {
+        /// The place.
+        path: PathBuf,
+    },
+    /// The hook or settings document lacks Baley entries that install
+    /// renders or the latest record holds.
+    EntriesMissing {
+        /// The place.
+        path: PathBuf,
+        /// Each entry it lacks, in the order expected.
+        missing: Vec<drift::Missing>,
+    },
+    /// The latest install record holds no guard hook, so install placed none.
+    NotPlaced {
+        /// The stable path the hook runs.
+        executable: String,
+    },
 }
 
 impl ArtifactState {
@@ -283,6 +433,7 @@ impl ArtifactState {
                 | ArtifactState::Read { .. }
                 | ArtifactState::StubMatches { .. }
                 | ArtifactState::RegistrationMatches { .. }
+                | ArtifactState::EntriesHeld { .. }
         )
     }
 }
@@ -317,6 +468,16 @@ pub struct Document {
 pub struct Findings {
     /// Why no map exists, when none could be built.
     pub no_map: Option<MapFault>,
+    /// The version the stable path runs, or why Baley manages none there,
+    /// or the cause when it could not be examined. None when the
+    /// installation could not be placed.
+    pub stable: Option<Stable>,
+    /// What the latest install record says about the install, or none when
+    /// there is no record.
+    pub install: Option<install_record::Judged>,
+    /// The stubs the latest install record lists that this binary no longer
+    /// ships, in the record's order.
+    pub stale_stubs: Vec<install_record::Stale>,
     /// Each artifact of the map and what was found, in artifact order.
     pub artifacts: Vec<(Artifact, ArtifactState)>,
     /// What is wrong with the executable, with its path.
@@ -337,6 +498,93 @@ pub struct Findings {
     pub store: store_health::Judged,
     /// Whether the guard's per-user records were behind at the start.
     pub guard_records: guard_records::Judged,
+    /// The review providers whose API host the settings document allows, or
+    /// why that was not judged. None when there is no map.
+    pub provider_hosts: Option<provider_hosts::Judged>,
+    /// The effective global `updates.auto`, or why the global settings
+    /// give none.
+    pub update_setting: update_setting::Judged,
+    /// Each folder install writes into and what asking about it found, in
+    /// [`writable::locations`] order. Empty with no map or no record.
+    pub writable: Vec<(PathBuf, writable::Seen)>,
+    /// Each outside provider and where its acknowledgement stands, or the
+    /// store's text when the acknowledgements could not be read.
+    pub acknowledgements: Result<Vec<(Provider, acknowledgement::Standing)>, String>,
+}
+
+/// The stable path and what it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stable {
+    /// The stable path.
+    pub path: PathBuf,
+    /// The folder a staged version lives under.
+    pub versions: PathBuf,
+    /// The version it links to, or why Baley manages none there, or the
+    /// system's text when it could not be examined.
+    pub active: Result<Active, String>,
+}
+
+/// Judges the stable path by the rule `baley update` uses: a version only
+/// when the link's stored target is that version's binary under this
+/// installation's own versions folder.
+fn stable(observation: &Observation) -> Option<Stable> {
+    observation.stable.as_ref().map(|seen| Stable {
+        path: seen.layout.stable_path().to_path_buf(),
+        versions: seen.layout.versions_folder().to_path_buf(),
+        active: seen
+            .seen
+            .as_ref()
+            .map(|found| installation::judge_active(&seen.layout, found))
+            .map_err(Clone::clone),
+    })
+}
+
+/// Judges the stored acknowledgements, or carries why they could not be read.
+fn acknowledgements(
+    observation: &Observation,
+) -> Result<Vec<(Provider, acknowledgement::Standing)>, String> {
+    observation
+        .acknowledgements
+        .as_deref()
+        .map(acknowledgement::judge)
+        .map_err(Clone::clone)
+}
+
+/// The SHA-256 values the latest install record holds for a stub identity,
+/// read as `install::stubs::judge` reads them.
+fn recorded_hashes<'a>(record: Option<&'a Value>, identity: &str) -> Vec<&'a str> {
+    record
+        .and_then(|record| record.get("stubs"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|stub| stub.get("identity").and_then(Value::as_str) == Some(identity))
+        .filter_map(|stub| stub.get("sha256").and_then(Value::as_str))
+        .collect()
+}
+
+/// Judges a stub whose bytes are not the rendered ones. A stub whose digest
+/// is a hash the record holds for its identity is an older one Baley placed,
+/// which install replaces. Any other digest is not Baley's to replace.
+fn differing_stub(
+    path: PathBuf,
+    expected: String,
+    found: String,
+    recorded: &[&str],
+) -> ArtifactState {
+    if recorded.contains(&found.as_str()) {
+        ArtifactState::StubOlder {
+            path,
+            expected,
+            found,
+        }
+    } else {
+        ArtifactState::StubDiffers {
+            path,
+            expected,
+            found,
+        }
+    }
 }
 
 /// Where an artifact sits in the order the report lists them: the stubs,
@@ -357,6 +605,9 @@ pub fn judge(observation: &Observation) -> Findings {
         Err(fault) => {
             return Findings {
                 no_map: Some(fault.clone()),
+                stable: stable(observation),
+                install: None,
+                stale_stubs: Vec::new(),
                 artifacts: Vec::new(),
                 executable: None,
                 documents: Vec::new(),
@@ -366,6 +617,10 @@ pub fn judge(observation: &Observation) -> Findings {
                 server: server_context::judge(&observation.server),
                 store: store_health::judge(&observation.health, &observation.folders),
                 guard_records: guard_records::judge(&observation.health),
+                provider_hosts: None,
+                acknowledgements: acknowledgements(observation),
+                update_setting: update_setting::judge(observation.global_settings.clone()),
+                writable: Vec::new(),
             };
         }
     };
@@ -397,6 +652,10 @@ pub fn judge(observation: &Observation) -> Findings {
         });
     }
 
+    let ours = mapped
+        .derived
+        .as_ref()
+        .map(|derived| install::settings::ours(derived, &observation.folders));
     let mut artifacts: Vec<(Artifact, ArtifactState)> = Vec::new();
     for file in mapped.map.expected_files() {
         let path = file.path.to_path_buf();
@@ -424,7 +683,22 @@ pub fn judge(observation: &Observation) -> Findings {
                         }
                     }
                 }
-                Content::Object(_) => ArtifactState::Read { path },
+                Content::Object(value) => match (&file.artifact, &ours) {
+                    (Artifact::Hook | Artifact::Settings, Some(ours)) => {
+                        let record = mapped.record.as_ref();
+                        let missing = if file.artifact == Artifact::Hook {
+                            drift::hook(value, ours, record)
+                        } else {
+                            drift::settings(value, ours, record)
+                        };
+                        if missing.is_empty() {
+                            ArtifactState::EntriesHeld { path }
+                        } else {
+                            ArtifactState::EntriesMissing { path, missing }
+                        }
+                    }
+                    _ => ArtifactState::Read { path },
+                },
             },
             None => match read(file.path) {
                 None => ArtifactState::NotRead { path },
@@ -439,11 +713,12 @@ pub fn judge(observation: &Observation) -> Findings {
                             path,
                             digest: entry.digest.clone(),
                         },
-                        StubJudgement::Differs { found_digest } => ArtifactState::StubDiffers {
+                        StubJudgement::Differs { found_digest } => differing_stub(
                             path,
-                            expected: entry.digest.clone(),
-                            found: found_digest,
-                        },
+                            entry.digest.clone(),
+                            found_digest,
+                            &recorded_hashes(mapped.record.as_ref(), &entry.identity),
+                        ),
                     },
                     None => ArtifactState::Read { path },
                 },
@@ -451,17 +726,54 @@ pub fn judge(observation: &Observation) -> Findings {
         };
         artifacts.push((file.artifact, state));
     }
-    artifacts.extend(
-        mapped
-            .map
-            .not_installed()
-            .into_iter()
-            .map(|artifact| (artifact, ArtifactState::NotInstalled)),
-    );
+    let install = mapped.record.as_ref().map(install_record::judge);
+    // With a record, an unknown hook placement means install withheld it.
+    let withheld = install.as_ref().is_some_and(|install| !install.hook_placed);
+    artifacts.extend(mapped.map.not_installed().into_iter().map(|artifact| {
+        let state = if withheld && artifact == Artifact::Hook {
+            ArtifactState::NotPlaced {
+                executable: mapped.map.executable().as_str().to_owned(),
+            }
+        } else {
+            ArtifactState::NotInstalled
+        };
+        (artifact, state)
+    }));
     artifacts.sort_by_key(|(artifact, _)| rank(artifact));
+    // Every manifest stub has an artifact here, placed or not installed.
+    let shipped: Vec<&str> = artifacts
+        .iter()
+        .filter_map(|(artifact, _)| match artifact {
+            Artifact::Stub(identity) => Some(identity.as_str()),
+            _ => None,
+        })
+        .collect();
+    let stale_stubs = mapped
+        .record
+        .as_ref()
+        .map(|record| install_record::stale(record, &shipped))
+        .unwrap_or_default();
+    let provider_hosts = match documents
+        .iter()
+        .find(|document| document.artifacts.contains(&Artifact::Settings))
+    {
+        None => provider_hosts::Judged::Unknown,
+        Some(Document {
+            path,
+            content: Content::Object(value),
+            ..
+        }) => provider_hosts::Judged::Allowed {
+            settings: path.clone(),
+            providers: provider_hosts::allowed(value),
+        },
+        Some(_) => provider_hosts::Judged::Unusable,
+    };
 
     Findings {
         no_map: None,
+        stable: stable(observation),
+        install,
+        stale_stubs,
         artifacts,
         executable: mapped
             .executable
@@ -475,6 +787,10 @@ pub fn judge(observation: &Observation) -> Findings {
             &prerequisites.unsupported(),
         )),
         nine_tools: protection::nine_tools(&mapped.map, &documents),
+        provider_hosts: Some(provider_hosts),
+        acknowledgements: acknowledgements(observation),
+        update_setting: update_setting::judge(observation.global_settings.clone()),
+        writable: mapped.writable.clone(),
         prerequisites,
         server: server_context::judge(&observation.server),
         store: store_health::judge(&observation.health, &observation.folders),
@@ -671,10 +987,13 @@ pub(crate) mod fixtures {
     pub(crate) fn unmapped(fault: MapFault) -> Observation {
         Observation {
             host: Err(fault),
+            stable: None,
             folders: folders(),
             checkout_file: None,
             prerequisites: linux_with_both(),
             server: server_context::Observed::NoCall,
+            acknowledgements: Ok(Vec::new()),
+            global_settings: Ok(None),
             health: clean_health(),
         }
     }
@@ -693,13 +1012,148 @@ pub(crate) mod fixtures {
                         state,
                     })
                     .collect(),
+                record: None,
+                derived: None,
+                writable: Vec::new(),
             }),
+            stable: None,
             folders: folders(),
             checkout_file: None,
             prerequisites: linux_with_both(),
             server: server_context::Observed::NoCall,
+            acknowledgements: Ok(Vec::new()),
+            global_settings: Ok(None),
             health: clean_health(),
         }
+    }
+    /// The stable path for `HOME` `/home/o`.
+    pub(crate) const STABLE: &str = "/home/o/.local/bin/baley";
+
+    /// A complete install record for `HOME` `/home/o`, written by hand in the
+    /// shape of design 0012 section 6's `install.recorded` table, over the
+    /// settings document `install::fixtures::complete_settings` holds.
+    pub(crate) fn installed_record() -> Value {
+        use crate::install::fixtures::{complete_settings, hook_item};
+        let settings = complete_settings();
+        let stubs: Vec<Value> = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "identity": entry.identity,
+                    "path": format!("/home/o/.claude/skills/{}/SKILL.md", entry.identity),
+                    "sha256": entry.digest,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "host": "claude-code",
+            "binary_version": "0.1.0",
+            "binary_path": STABLE,
+            "complete": true,
+            "registered": {
+                "registration": {
+                    "path": REGISTRATION,
+                    "entry": {"command": STABLE, "args": ["serve"]},
+                },
+                "hook": {"path": SETTINGS, "item": hook_item()},
+            },
+            "stubs": stubs,
+            "sandbox": {
+                "settings_path": SETTINGS,
+                "sha256": crate::store::model::digest(&serde_json::to_vec(&settings).unwrap()),
+                "home": HOME,
+                "config": CONFIG,
+                "write_only_files": [
+                    STABLE,
+                    SETTINGS,
+                    REGISTRATION,
+                    HELP,
+                    "/home/o/.claude/skills/bal-capture/SKILL.md",
+                ],
+                "write_only_folders": ["/home/o/.local/lib/crenshawdev/baley/versions"],
+                "permissions_deny": settings["permissions"]["deny"],
+                "deny_read": settings["sandbox"]["filesystem"]["denyRead"],
+                "deny_write": settings["sandbox"]["filesystem"]["denyWrite"],
+                "held_back": null,
+            },
+            "defaults": {},
+            "updates": {"auto": false, "staged_version": null},
+        })
+    }
+
+    /// A host installed for `HOME` `/home/o` as `record` says, its settings
+    /// file holding `settings`: the map `installed_placements` builds, the
+    /// registration file holding Baley's entry, each stub its manifest bytes,
+    /// a runnable executable, both sandbox programs found on Linux and the
+    /// views of `user` current.
+    pub(crate) fn installed_from(record: Value, settings: &Value) -> Observation {
+        let map = installed_placements(
+            Ok(crate::install::fixtures::installed()),
+            Ok(Some(record.clone())),
+        )
+        .unwrap();
+        let registration = serde_json::json!({
+            "mcpServers": {"baley": {"command": STABLE, "args": ["serve"]}},
+        });
+        let stub_reads: Vec<(String, FileState)> = stubs::manifest(&stubs::front_doors())
+            .unwrap()
+            .into_iter()
+            .map(|entry| {
+                (
+                    format!("/home/o/.claude/skills/{}/SKILL.md", entry.identity),
+                    FileState::Bytes(entry.bytes),
+                )
+            })
+            .collect();
+        let mut reads = vec![
+            (
+                SETTINGS,
+                FileState::Bytes(serde_json::to_vec(settings).unwrap()),
+            ),
+            (
+                REGISTRATION,
+                FileState::Bytes(serde_json::to_vec(&registration).unwrap()),
+            ),
+        ];
+        reads.extend(
+            stub_reads
+                .iter()
+                .map(|(path, state)| (path.as_str(), state.clone())),
+        );
+        let mut observation = observed(map, reads);
+        let mapped = observation.host.as_mut().unwrap();
+        mapped.record = Some(record);
+        mapped.derived = Some(crate::install::fixtures::installed().placements);
+        mapped.writable = writable::locations(&mapped.map)
+            .into_iter()
+            .map(|location| (location, writable::Seen::Writable))
+            .collect();
+        observation.stable = Some(stable_link(
+            "/home/o/.local/lib/crenshawdev/baley/versions/0.1.0/baley",
+        ));
+        observation.health = user_health(false);
+        observation
+    }
+
+    /// The stable path for `HOME` `/home/o` seen as a link whose stored
+    /// target is `target` and leads to a regular file.
+    pub(crate) fn stable_link(target: &str) -> StableSeen {
+        StableSeen {
+            layout: crate::install::fixtures::installed().layout,
+            seen: Ok(StablePath::Link {
+                target: target.into(),
+                followed: installation::Followed::RegularFile,
+            }),
+        }
+    }
+
+    /// The installed fixture: a complete install whose report has code 0.
+    pub(crate) fn installed_observation() -> Observation {
+        installed_from(
+            installed_record(),
+            &crate::install::fixtures::complete_settings(),
+        )
     }
 }
 
@@ -710,6 +1164,48 @@ mod tests {
     use crate::host_artifacts::compose::compose;
     use crate::host_artifacts::coverage::{Access, Cause, Mechanism, Tool, Verdict};
     use crate::host_artifacts::{hook, security};
+
+    #[test]
+    fn an_older_stub_baley_placed_called_foreign_by_the_doctor_is_caught() {
+        let record = serde_json::json!({"stubs": [
+            {"identity": "bal-capture", "path": "/s/bal-capture/SKILL.md", "sha256": "old1"},
+            {"identity": "bal-help", "path": "/s/bal-help/SKILL.md", "sha256": "other"},
+        ]});
+        let judged = |identity: &str, found: &str| {
+            differing_stub(
+                PathBuf::from("/s/SKILL.md"),
+                "new".to_owned(),
+                found.to_owned(),
+                &recorded_hashes(Some(&record), identity),
+            )
+        };
+        let older = ArtifactState::StubOlder {
+            path: PathBuf::from("/s/SKILL.md"),
+            expected: "new".to_owned(),
+            found: "old1".to_owned(),
+        };
+        // The digest the record holds for this identity is Baley's own.
+        assert_eq!(judged("bal-capture", "old1"), older);
+        assert!(older.is_gap());
+        // A digest the record holds for another identity, one it holds for
+        // none, and no record at all are not Baley's.
+        let foreign = |found: &str| ArtifactState::StubDiffers {
+            path: PathBuf::from("/s/SKILL.md"),
+            expected: "new".to_owned(),
+            found: found.to_owned(),
+        };
+        assert_eq!(judged("bal-capture", "other"), foreign("other"));
+        assert_eq!(judged("bal-capture", "edited"), foreign("edited"));
+        assert_eq!(
+            differing_stub(
+                PathBuf::from("/s/SKILL.md"),
+                "new".to_owned(),
+                "old1".to_owned(),
+                &recorded_hashes(None, "bal-capture"),
+            ),
+            foreign("old1")
+        );
+    }
 
     #[test]
     fn a_missing_program_left_out_of_the_coverage_verdicts_is_caught() {
@@ -1083,5 +1579,65 @@ mod integration {
         assert_eq!(heads(&store), heads_before);
         assert_eq!(listing(&home), ledger_before);
         assert_eq!(heads_before.len(), 2);
+    }
+
+    #[test]
+    fn a_host_check_that_creates_user_or_appends_on_a_fresh_ledger_is_caught() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (ledger, config) = (root.join("ledger"), root.join("config"));
+        let (home, bin) = (root.join("h"), root.join("bin"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+
+        let store =
+            crate::ledger::open::store(&ledger, T0, crate::ledger::open::options()).unwrap();
+        // The command runs the store's own doctor before the host checks.
+        let health = Admin::doctor(&store, T0, &BTreeMap::new()).unwrap();
+        let projects = Admin::projects(&store).unwrap();
+        assert!(projects.is_empty(), "{projects:?}");
+
+        let ledger_before = listing(&ledger);
+        let home_before = listing(&home);
+        let env = Environment {
+            home: Some(home.clone().into_os_string()),
+            ..Environment::default()
+        };
+        let search: OsString = bin.into();
+        let process = Process {
+            env: &env,
+            claude_config_dir: None,
+            path: Some(search.as_os_str()),
+            os: "linux",
+        };
+        let observation = observe(
+            process,
+            Folders {
+                home: ledger.clone(),
+                config,
+            },
+            None,
+            Host::ClaudeCode,
+            Stored {
+                store: &store,
+                projects: &[],
+                health: &health,
+            },
+        );
+        let report = Report::new(&judge(&observation));
+
+        // The acknowledgement read ran and found nothing, so the assertions
+        // below are about a read that happened.
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("none is recorded")),
+            "{:?}",
+            report.lines
+        );
+        assert_eq!(Admin::projects(&store).unwrap(), projects);
+        assert_eq!(listing(&ledger), ledger_before);
+        assert_eq!(listing(&home), home_before);
     }
 }
