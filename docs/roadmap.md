@@ -1,10 +1,10 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T16 merged (T16 is [#257](https://github.com/crenshawdev/baley/pull/257)) and T17 in progress on this branch, based on main `e9df9854`, dated 2026-10-12, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The integration check design [#229](https://github.com/crenshawdev/baley/issues/229) is recorded as landed on 2026-10-08 in [ADR 0042](adr/0042-mocked-boundary-integration-checks.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T17 is in progress. Its installed run is recorded in `spikes/host-matrix` (`install-live-2026-10-11-run1.md` and a repeat of the install rerun, `install-live-2026-10-11-run2.md`), and what the run left open is listed in the Build 3 table and notes below, so Build 3 is not complete. Removal of the built key reader, `baley exec --key` and HTTPS model lister belongs to Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)). Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T16 merged (T16 is [#257](https://github.com/crenshawdev/baley/pull/257)) and T17 in progress on this branch, based on main `28f79d21`, dated 2026-10-12, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The integration check design [#229](https://github.com/crenshawdev/baley/issues/229) is recorded as landed on 2026-10-08 in [ADR 0042](adr/0042-mocked-boundary-integration-checks.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T17 is in progress. Its installed run is recorded in `spikes/host-matrix` (`install-live-2026-10-11-run1.md` and a repeat of the install rerun, `install-live-2026-10-11-run2.md`), and what the run left open is listed in the Build 3 table and notes below, so Build 3 is not complete. Removal of the built key reader, `baley exec --key` and HTTPS model lister belongs to Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)). Each build pull request updates this roadmap.
 
 ## The path to the first release
 
-Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 issues [#190](https://github.com/crenshawdev/baley/issues/190), [#203](https://github.com/crenshawdev/baley/issues/203), [#214](https://github.com/crenshawdev/baley/issues/214), [#219](https://github.com/crenshawdev/baley/issues/219), [#220](https://github.com/crenshawdev/baley/issues/220), [#221](https://github.com/crenshawdev/baley/issues/221), [#227](https://github.com/crenshawdev/baley/issues/227), [#235](https://github.com/crenshawdev/baley/issues/235) and [#238](https://github.com/crenshawdev/baley/issues/238) to [#249](https://github.com/crenshawdev/baley/issues/249), which GitHub does not link to it.
+Builds 1 to 9 run in order, and on GitHub each build issue is blocked by the one before it. All nine are in the milestone Evidence. The release design ([#14](https://github.com/crenshawdev/baley/issues/14)) waits on all nine builds and on every other open issue except the Build 3 issues [#190](https://github.com/crenshawdev/baley/issues/190), [#203](https://github.com/crenshawdev/baley/issues/203), [#214](https://github.com/crenshawdev/baley/issues/214), [#219](https://github.com/crenshawdev/baley/issues/219), [#220](https://github.com/crenshawdev/baley/issues/220), [#221](https://github.com/crenshawdev/baley/issues/221), [#227](https://github.com/crenshawdev/baley/issues/227), [#235](https://github.com/crenshawdev/baley/issues/235), [#238](https://github.com/crenshawdev/baley/issues/238) to [#249](https://github.com/crenshawdev/baley/issues/249), [#251](https://github.com/crenshawdev/baley/issues/251), [#252](https://github.com/crenshawdev/baley/issues/252) and [#254](https://github.com/crenshawdev/baley/issues/254) to [#256](https://github.com/crenshawdev/baley/issues/256), which GitHub does not link to it.
 
 ```mermaid
 flowchart TB
@@ -37,7 +37,7 @@ flowchart TB
     class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
-Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the twenty-two open Build 3 issues are listed below but have no GitHub dependency link to it.
+Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the twenty-five open Build 3 issues are listed below but have no GitHub dependency link to it.
 
 | Status | Meaning |
 |---|---|
@@ -333,7 +333,7 @@ Removes the old JSON record, the intent journal, participants, root binding, the
 
 The tag gate (on main, CI green, version matches the crate). Static, reproducible Linux and macOS archives, refused if a checksum differs from the committed pin. Signed artifacts and provenance attestations. Release notes and whether a CHANGELOG starts. How releases relate to forge anchors and tag rules. This work owns the signed checksum manifest's signature format and trust root, both verifier implementations (the installer's available before Baley exists and the updater's), and their qualification. It fills T14's named `verify_download` seam between download and staging in both delivery paths. T14 and T17 will have built and qualified delivery with unsigned development artifacts only; no release exists before #14 completes verification. Installation follows [ADR 0038](adr/0038-installer-and-opt-in-updates.md): one installer command, binary-written wiring at the stable path, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. Provider access follows [ADR 0039](adr/0039-session-owned-provider-credentials.md), with no Baley key file or provider call. #14 must name any new signature-verification dependency; none is selected yet. It also picks the first version number.
 
-Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220, #221, #227, #235, #238 to #249, #251 and #252.
+Blocked by Builds 1 to 9 and by every issue in [Other open issues](#other-open-issues) except the Build 3 issues #190, #203, #214, #219, #220, #221, #227, #235, #238 to #249, #251, #252 and #254 to #256.
 
 ### R2. Live acceptance run on Claude Code
 
@@ -345,7 +345,7 @@ Planned. Publish Baley and install it on a machine for Claude Code. Milestone Tr
 
 ## Other open issues
 
-Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the twenty-two Build 3 issues to #14. "Carried by" means that build does the fix.
+Every issue here except the Build 3 issues blocks the release design #14. GitHub links none of the twenty-five Build 3 issues to #14. "Carried by" means that build does the fix.
 
 ### Upkeep and docs
 
@@ -359,10 +359,10 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#40](https://github.com/crenshawdev/baley/issues/40) | Read a command's cheap git facts inside the write transaction | Evidence | Carried by Build 4 |
-| [#68](https://github.com/crenshawdev/baley/issues/68) | Git error text is stored and shown unredacted (URL credentials) | None | Carried by Build 4 |
-| [#69](https://github.com/crenshawdev/baley/issues/69) | `model.escalate_on_failure` never applies to automatic retries | None | Carried by Build 4 |
-| [#72](https://github.com/crenshawdev/baley/issues/72) | The provider schema accepts whitespace-only text the validator refuses | None | Carried by Build 4 |
-| [#93](https://github.com/crenshawdev/baley/issues/93) | The audit admits any bold span as a requirement id and skips unreadable rows | None | Carried by Build 9 |
+| [#68](https://github.com/crenshawdev/baley/issues/68) | Git error text is stored and shown unredacted (URL credentials) | Evidence | Carried by Build 4 |
+| [#69](https://github.com/crenshawdev/baley/issues/69) | `model.escalate_on_failure` never applies to automatic retries | Evidence | Carried by Build 4 |
+| [#72](https://github.com/crenshawdev/baley/issues/72) | The provider schema accepts whitespace-only text the validator refuses | Evidence | Carried by Build 4 |
+| [#93](https://github.com/crenshawdev/baley/issues/93) | The audit admits any bold span as a requirement id and skips unreadable rows | Evidence | Carried by Build 9 |
 | [#70](https://github.com/crenshawdev/baley/issues/70) | Forgejo tracker calls pass the host as tea's `--login` name | None | No build carries it |
 
 ### Build 3 issues
@@ -391,18 +391,21 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 | [#249](https://github.com/crenshawdev/baley/issues/249) | `install.sh`'s temporary-link check strips trailing newlines from `readlink`, so a crafted directory link can pass it | None | Its text names no build |
 | [#251](https://github.com/crenshawdev/baley/issues/251) | Between install's recheck of `mcpServers.baley` and `claude mcp remove`, another writer can change the entry, so the removal can delete an entry install did not judge | None | Its text names no build |
 | [#252](https://github.com/crenshawdev/baley/issues/252) | With nothing runnable at the stable path, install withholds the new guard hook but still removes a recorded older hook | None | Its text names no build |
+| [#254](https://github.com/crenshawdev/baley/issues/254) | The interview's test for no write and no store open before the owner confirms calls only the conversation step, not the command, so it cannot catch either | None | Its text names no build |
+| [#255](https://github.com/crenshawdev/baley/issues/255) | A rerun of the interview cannot finish a reviewer-list step that failed after the global file was replaced | None | Its text names no build |
+| [#256](https://github.com/crenshawdev/baley/issues/256) | A failed sync of the settings file's folder after the provider-host write is reported as success, so the later writes go ahead | None | Its text names no build |
 
 ## Milestones
 
-Counts from GitHub on 2026-10-09. #238 to #249 have no milestone, and neither do #251 and #252 (checked 2026-10-10). Evidence shows 43 closed and 21 open issues, and Encyclopedists six closed and one open.
+Counts from GitHub on 2026-10-12. #238 to #249, #251, #252 and #254 to #256 have no milestone. Evidence shows 45 closed and 21 open issues, and Encyclopedists six closed and one open.
 
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
-| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 43 | 21 | Builds 3 to 9, bug #40, #44, #68, #69, #72, #93 and Build 3 issues #190, #203, #214, #219, #220, #221, #227 and #235 | Open |
+| [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 45 | 21 | Builds 3 to 9, bug #40, #44, #68, #69, #72, #93 and Build 3 issues #190, #203, #214, #219, #220, #221, #227 and #235 | Open |
 | [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 6 | 1 | #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for Claude Code, after a live run of the whole loop. | 0 | 1 | #14 | Open |
-| [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
-| [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its stories, revise a truth or a story, keeping every earlier version on record. | 1 | 0 | None | Closed |
+| [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first requirements and roadmap. | 1 | 0 | None | Closed |
+| [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its requirements, revise a truth or a requirement, keeping every earlier version on record. | 1 | 0 | None | Closed |
 | [Little Lost Robot](https://github.com/crenshawdev/baley/milestone/6) | What an agent may touch: how a task's file lease is enforced, and whether Baley edits source itself. | 2 | 0 | None | Closed |
 | [Terminus](https://github.com/crenshawdev/baley/milestone/2) | Open the repository to the public: a README for visitors, a security policy, issue templates, and branch protection with no bypass. | 2 | 0 | None | Closed |
 
