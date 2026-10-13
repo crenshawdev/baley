@@ -318,9 +318,6 @@ mod tests {
             Category::Unauthorized,
             Category::RateLimited,
             Category::Http(503),
-            Category::KeysFileExposed,
-            Category::KeysFileInvalid,
-            Category::KeysFileUnreadable,
         ];
         for (n, category) in (3..).zip(categories) {
             let recording =

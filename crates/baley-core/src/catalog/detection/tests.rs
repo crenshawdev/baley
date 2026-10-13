@@ -186,9 +186,6 @@ fn each_category_is_recorded_under_exactly_its_name() {
         (Category::Unauthorized, "unauthorized"),
         (Category::RateLimited, "rate-limited"),
         (Category::Http(503), "http-503"),
-        (Category::KeysFileExposed, "keys-file-exposed"),
-        (Category::KeysFileInvalid, "keys-file-invalid"),
-        (Category::KeysFileUnreadable, "keys-file-unreadable"),
     ];
     for (category, name) in cases {
         assert_eq!(category.name(), name);

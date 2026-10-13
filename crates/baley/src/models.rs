@@ -955,6 +955,20 @@ mod tests {
         assert!(!accepts(&store, "gpt-x"));
     }
 
+    // Older ledgers hold failures under categories since removed. The
+    // projector never reads `category`, so they replay with no upcaster.
+    #[test]
+    fn an_old_keys_file_detection_failure_still_rebuilds_the_catalog() {
+        let (_dir, store) = store();
+        let failed =
+            json!({"provider": "openai", "category": "keys-file-exposed", "catalog_version": 0});
+        append(&store, 1, &[("models.detection_failed", failed)]);
+
+        store.rebuild(&user()).unwrap();
+
+        assert_eq!(catalog_version(&store), 0);
+    }
+
     #[test]
     fn a_rebuild_keeps_recorded_tiers_and_flags_not_the_compiled_table() {
         let (_dir, store) = store();
