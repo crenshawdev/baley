@@ -108,8 +108,12 @@ pub(crate) fn not_configured(name: &str, root: &Path) -> String {
 }
 
 /// Git's whole stderr as a diagnostic. Each line goes through the redaction
-/// on its own, so git's lines and their indentation stay, a `fatal:` line
-/// after a `warning:` line included.
+/// on its own and the line breaks between lines stay, so a `fatal:` line after
+/// a `warning:` line still reaches the owner. The redaction drops control
+/// characters, a tab indent among them, and keeps space indentation. The
+/// whole text is then trimmed, which drops the first line's leading
+/// whitespace, the last line's trailing whitespace and blank lines at either
+/// end.
 fn stderr_text(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
         .split('\n')
