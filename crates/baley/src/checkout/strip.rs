@@ -2,12 +2,8 @@
 //! or compared, and the redaction applied to git's error text before it is
 //! stored or shown (design 0001 Project identity and policy, EVD-R17).
 
-/// Quotes git and remotes put around a URL. One may stand before a URL and
-/// ends its authority.
+/// Quotes git and remotes put around a URL. One ends a URL's authority.
 const QUOTES: [char; 3] = ['\'', '"', '`'];
-
-/// Opening brackets that may stand before a URL.
-const OPENING_BRACKETS: [char; 4] = ['(', '[', '{', '<'];
 
 /// Removes the user information from a URL that has a scheme, a bare user
 /// included, and returns every other form as given.
@@ -45,11 +41,12 @@ pub fn strip_user_information(url: &str) -> String {
 /// characters go first: a tab inside `https://user<TAB>:tok@host` would
 /// otherwise end the URL early and leave `user:tok@host` once dropped.
 ///
-/// Git quotes URLs mid-sentence, so the text is scanned for each `://`. The
-/// scheme before it is read as [`strip_user_information`] reads one, and it
-/// starts a URL only at the start of the text or after whitespace, a quote
-/// (`'`, `"` or a backtick) or an opening bracket (`(`, `[`, `{` or `<`), so a
-/// path such as `/srv/odd://u@x/y` is kept. The authority runs to the first
+/// Git and remotes put URLs mid-sentence, so the text is scanned for each
+/// `://`. The scheme before it is a letter followed by letters, digits, `+`,
+/// `-` or `.`, and it starts a URL at the start of the text or after any
+/// character other than `/`, an ASCII letter or an ASCII digit, so
+/// `url=https://...` and `(-https://...` are read as URLs while a path such
+/// as `/srv/odd://u@x/y` is kept. The authority runs to the first
 /// `/`, `?`, `#`, whitespace or quote, and everything up to and including its
 /// last `@` goes. Nothing else changes: a credential in a query string, a
 /// `file:///` URL, an scp-style `git@host:path` and text with no URL come back
@@ -84,14 +81,22 @@ pub fn redact_git_text(text: &str) -> String {
     redacted
 }
 
-/// Whether the text before a `://` ends in a scheme that starts a URL.
+/// Whether the text before a `://` ends in a scheme that starts a URL: some
+/// letter in the trailing run of scheme characters stands at the start of the
+/// text or after a character other than `/`, an ASCII letter or an ASCII
+/// digit.
 fn ends_in_url_scheme(before: &str) -> bool {
     let start = before.trim_end_matches(scheme_char).len();
-    let (lead, scheme) = before.split_at(start);
-    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && lead.chars().next_back().is_none_or(|c| {
-            c.is_whitespace() || QUOTES.contains(&c) || OPENING_BRACKETS.contains(&c)
-        })
+    let (lead, run) = before.split_at(start);
+    // Inside the run only `+`, `-` or `.` may stand before a scheme, so
+    // `(-https` is read from its `h`.
+    let mut prior = lead.chars().next_back();
+    run.chars().any(|c| {
+        let starts =
+            c.is_ascii_alphabetic() && prior.is_none_or(|p| p != '/' && !p.is_ascii_alphanumeric());
+        prior = Some(c);
+        starts
+    })
 }
 
 /// A character a scheme may hold after its first letter.
@@ -222,6 +227,26 @@ mod tests {
             ("{https://alice:secret@host/r}", "{https://host/r}"),
             ("<https://alice:secret@host/r>", "<https://host/r>"),
             ("`https://alice:secret@host/r`", "`https://host/r`"),
+        ] {
+            assert_eq!(redact(given), shown, "{given}");
+        }
+    }
+
+    #[test]
+    fn a_url_after_punctuation_or_a_scheme_run_led_by_a_symbol_keeping_its_user_is_caught() {
+        for (given, shown) in [
+            (
+                "remote: url=https://alice:secret@example.org/r",
+                "remote: url=https://example.org/r",
+            ),
+            // The tab goes first, which leaves `:` before the scheme.
+            (
+                "remote:\thttps://alice:secret@example.org/r",
+                "remote:https://example.org/r",
+            ),
+            ("(-https://alice:secret@host/r)", "(-https://host/r)"),
+            ("(+https://alice:secret@host/r)", "(+https://host/r)"),
+            ("(.https://alice:secret@host/r)", "(.https://host/r)"),
         ] {
             assert_eq!(redact(given), shown, "{given}");
         }
