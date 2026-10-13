@@ -8,8 +8,8 @@ use baley_store::Actor;
 
 use crate::keys::{KEYS_FILE_EXPOSED, KEYS_FILE_INVALID};
 
-/// The command kind `baley models update` records each provider under.
-pub const UPDATE_COMMAND: &str = "models.update";
+/// The command kind `baley models import` records its provider under.
+pub const IMPORT_COMMAND: &str = "models.import";
 /// The command kind the automatic trigger records each provider under.
 pub const DETECT_COMMAND: &str = "models.detect";
 
@@ -32,8 +32,8 @@ pub fn list_address(provider: Provider) -> &'static str {
 /// What started a detection run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
-    /// `baley models update` with the providers the owner named, each once.
-    /// Empty when none was named.
+    /// A command the owner ran, `baley models import`, with the providers it
+    /// names, each once.
     Owner(Vec<Provider>),
     /// A run Baley starts itself: `baley init`, and later install and a
     /// model-not-found failure.
@@ -43,7 +43,7 @@ impl Trigger {
     /// The command kind each provider's record is made under.
     pub fn kind(&self) -> &'static str {
         match self {
-            Trigger::Owner(_) => UPDATE_COMMAND,
+            Trigger::Owner(_) => IMPORT_COMMAND,
             Trigger::Automatic => DETECT_COMMAND,
         }
     }
@@ -252,8 +252,8 @@ mod tests {
     }
 
     #[test]
-    fn the_owner_trigger_records_as_update_by_the_owner_and_the_automatic_one_as_detect_by_baley() {
-        assert_eq!(Trigger::Owner(vec![]).kind(), "models.update");
+    fn the_owner_trigger_records_as_import_by_the_owner_and_the_automatic_one_as_detect_by_baley() {
+        assert_eq!(Trigger::Owner(vec![]).kind(), "models.import");
         assert_eq!(Trigger::Owner(vec![OpenAi]).actor(), Actor::Owner);
         assert_eq!(Trigger::Automatic.kind(), "models.detect");
         assert_eq!(Trigger::Automatic.actor(), Actor::Baley);

@@ -303,7 +303,7 @@ mod tests {
     fn a_listing_records_detected_at_policy_zero_with_the_prior_catalog_and_compiled_hint_versions()
     {
         for (trigger, kind, actor) in [
-            (Trigger::Owner(vec![]), "models.update", Actor::Owner),
+            (Trigger::Owner(vec![]), "models.import", Actor::Owner),
             (Trigger::Automatic, "models.detect", Actor::Baley),
         ] {
             let (_dir, store) = seeded();
@@ -367,7 +367,7 @@ mod tests {
         )
         .unwrap();
 
-        let completed = events(&store, "command/models.update");
+        let completed = events(&store, "command/models.import");
         let requests: Vec<&str> = completed
             .iter()
             .map(|event| event.payload["request_id"].as_str().unwrap())
@@ -504,7 +504,7 @@ mod tests {
         assert!(matches!(detected.outcome, Outcome::Detected(_)));
         assert_eq!(failed.outcome, Outcome::Failed(Category::Unauthorized));
         let mut recorded = events(&store, "models");
-        recorded.extend(events(&store, "command/models.update"));
+        recorded.extend(events(&store, "command/models.import"));
         assert_eq!(
             recorded.len(),
             5,

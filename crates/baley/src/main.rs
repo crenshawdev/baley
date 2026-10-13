@@ -30,7 +30,7 @@ enum Command {
     Config(baley::config_command::ConfigArgs),
     /// Tie this repository to a ledger project: write baley.toml and record project.initialized.
     Init(baley::init::InitArgs),
-    /// List, add, remove and update the model names Baley accepts per host and provider.
+    /// List, add, remove and import the model names Baley accepts per host and provider, and print a provider's fetch command.
     Models(baley::models::ModelsArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),
