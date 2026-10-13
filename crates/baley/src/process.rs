@@ -60,7 +60,6 @@ pub struct Launch {
 enum Origin {
     Baley,
     Git(crate::git_process::Registration),
-    Owner,
 }
 
 impl std::fmt::Debug for Launch {
@@ -139,16 +138,6 @@ impl Launch {
         let mut launch = Self::registered_git(registration).timeout(grant.timeout());
         launch.granted = Some(grant.timeout());
         launch
-    }
-
-    /// A command the owner chose through `baley exec`, built only by `exec::launch_for`.
-    /// Baley's own programs never use this constructor.
-    pub(crate) fn owner_command(program: impl AsRef<OsStr>) -> Self {
-        Self {
-            origin: Origin::Owner,
-            inherit_stdin: true,
-            ..Self::new(program)
-        }
     }
 
     pub(crate) fn git_caller(&self) -> Option<crate::git_process::Caller> {
@@ -243,9 +232,6 @@ impl ValidatedLaunch<'_> {
 /// Validate borrowed launch material before a Command or recorded observation
 /// can be obtained. The borrow prevents mutation until the consumer is done.
 pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> {
-    if launch.origin == Origin::Owner {
-        return Ok(ValidatedLaunch(launch));
-    }
     let is_git = Path::new(&launch.program).file_name() == Some(OsStr::new("git"));
     match (is_git, launch.git_caller()) {
         (true, Some(caller)) => {

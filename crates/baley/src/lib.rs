@@ -53,8 +53,6 @@ pub mod config_command;
 pub mod detection;
 /// Finds the checkout's project: the nearest `baley.toml` at or below the repository root.
 pub mod discovery;
-/// Runs one command with a provider key in its environment and redacted from its output.
-pub mod exec;
 /// Platform configuration and ledger folders.
 pub mod folders;
 /// The guard's one time budget: git and storage allowances inside the hook timeout.
