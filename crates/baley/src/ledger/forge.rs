@@ -50,7 +50,9 @@ impl<P: Process> GitForge<P> {
                 }
             }
             Err(error) => {
-                self.last_error = Some(error.to_string());
+                // A deadline's text quotes the git command line, whose
+                // arguments hold the raw push URL.
+                self.last_error = Some(redact_git_text(&error.to_string()));
                 None
             }
         }
@@ -864,6 +866,29 @@ mod tests {
         assert_eq!(
             f.last_error.as_deref(),
             Some("remote: [31mdenied[0m\nfatal: the remote end hung up unexpectedly")
+        );
+    }
+    #[test]
+    fn a_remote_password_in_a_timed_out_git_command_line_printed_is_caught() {
+        let mut f = forge(
+            Recorded::new()
+                .out("origin\n")
+                .out("https://alice:secret@host/o/r.git\n")
+                .out(format!("{}\n", "a".repeat(40)))
+                .out(format!("{}\n", "b".repeat(40)))
+                .unavailable(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
+        );
+        assert_eq!(
+            f.push_tag(&p(), "origin", "TAG", "note\n"),
+            PushObservation::Unreachable
+        );
+        assert_eq!(
+            f.last_error,
+            Some(format!(
+                "git push --porcelain --no-verify https://host/o/r.git {}:refs/tags/TAG \
+                 exceeded git deadline of 60 seconds",
+                "b".repeat(40)
+            ))
         );
     }
 }
