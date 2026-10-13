@@ -42,15 +42,15 @@ pub fn strip_user_information(url: &str) -> String {
 /// otherwise end the URL early and leave `user:tok@host` once dropped.
 ///
 /// Git and remotes put URLs mid-sentence, so the text is scanned for each
-/// `://`. The scheme before it is a letter followed by letters, digits, `+`,
-/// `-` or `.`, and it starts a URL at the start of the text or after any
-/// character other than `/`, an ASCII letter or an ASCII digit, so
-/// `url=https://...` and `(-https://...` are read as URLs while a path such
-/// as `/srv/odd://u@x/y` is kept. The authority runs to the first
-/// `/`, `?`, `#`, whitespace or quote, and everything up to and including its
-/// last `@` goes. Nothing else changes: a credential in a query string, a
-/// `file:///` URL, an scp-style `git@host:path` and text with no URL come back
-/// as given apart from control characters.
+/// `://`, whatever stands before it. No scheme or preceding character is
+/// checked, because a colour code, a slash or a letter glued to a scheme
+/// would otherwise hide a URL's credentials. The authority after each `://`
+/// runs to the first `/`, `?`, `#`, whitespace or quote, and everything up to
+/// and including its last `@` goes, so `/srv/odd://u@x/y` becomes
+/// `/srv/odd://x/y`. Nothing else changes: a credential in a query string, a
+/// `file:///` URL, an scp-style `git@host:path` and text in which no `://` is
+/// followed by an authority holding `@` come back as given apart from control
+/// characters.
 pub fn redact_git_text(text: &str) -> String {
     let text: String = text.chars().filter(|c| !c.is_control()).collect();
     let mut redacted = String::with_capacity(text.len());
@@ -61,12 +61,8 @@ pub fn redact_git_text(text: &str) -> String {
     // other `://` sits inside one and the scan stays linear on the guard's
     // 1 MiB line.
     while let Some(found) = text[from..].find("://") {
-        let colon = from + found;
-        let authority = colon + 3;
+        let authority = from + found + 3;
         from = authority;
-        if !ends_in_url_scheme(&text[..colon]) {
-            continue;
-        }
         let end = text[authority..]
             .find(|c: char| {
                 matches!(c, '/' | '?' | '#') || c.is_whitespace() || QUOTES.contains(&c)
@@ -79,24 +75,6 @@ pub fn redact_git_text(text: &str) -> String {
     }
     redacted.push_str(&text[copied..]);
     redacted
-}
-
-/// Whether the text before a `://` ends in a scheme that starts a URL: some
-/// letter in the trailing run of scheme characters stands at the start of the
-/// text or after a character other than `/`, an ASCII letter or an ASCII
-/// digit.
-fn ends_in_url_scheme(before: &str) -> bool {
-    let start = before.trim_end_matches(scheme_char).len();
-    let (lead, run) = before.split_at(start);
-    // Inside the run only `+`, `-` or `.` may stand before a scheme, so
-    // `(-https` is read from its `h`.
-    let mut prior = lead.chars().next_back();
-    run.chars().any(|c| {
-        let starts =
-            c.is_ascii_alphabetic() && prior.is_none_or(|p| p != '/' && !p.is_ascii_alphanumeric());
-        prior = Some(c);
-        starts
-    })
 }
 
 /// A character a scheme may hold after its first letter.
@@ -187,19 +165,35 @@ mod tests {
     }
 
     #[test]
-    fn credential_free_git_text_or_a_url_lookalike_changed_by_redaction_is_caught() {
+    fn credential_free_git_text_or_an_scp_address_changed_by_redaction_is_caught() {
         assert_eq!(
             redact(
                 "fatal: unable to access 'https://host/o/r.git/': Could not resolve host: host\u{7}\u{9b}\r"
             ),
             "fatal: unable to access 'https://host/o/r.git/': Could not resolve host: host"
         );
-        for kept in [
-            "fatal: '/srv/odd://u@x/y' does not appear to be a git repository",
-            "git@host:o/r.git",
-            "  remote:  kept  as is  ",
-        ] {
+        for kept in ["git@host:o/r.git", "  remote:  kept  as is  "] {
             assert_eq!(redact(kept), kept);
+        }
+    }
+
+    #[test]
+    fn a_url_after_a_colour_code_a_slash_or_a_letter_keeping_its_user_is_caught() {
+        for (given, shown) in [
+            (
+                "fatal: \u{1b}[31mhttps://alice:secret@host/r",
+                "fatal: [31mhttps://host/r",
+            ),
+            ("x/https://alice:secret@host/r", "x/https://host/r"),
+            ("xhttps://alice:secret@host/r", "xhttps://host/r"),
+            ("/srv/odd://alice:secret@x/y", "/srv/odd://x/y"),
+        ] {
+            let shown_now = redact(given);
+            assert!(
+                !shown_now.contains("alice") && !shown_now.contains("secret"),
+                "{given}"
+            );
+            assert_eq!(shown_now, shown, "{given}");
         }
     }
 
