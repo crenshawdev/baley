@@ -12,7 +12,8 @@ use super::parse::{ProviderListing, parse_body};
 pub enum Category {
     /// DNS, connect, TLS, a timeout, or a connection dropped mid-body.
     Offline,
-    /// A body cut short at the 4 MiB bound.
+    /// A body cut short or over the 4 MiB bound, or fetched bytes without a
+    /// valid trailer.
     Incomplete,
     /// A 2xx body outside the provider's list shape.
     Malformed,
@@ -22,15 +23,6 @@ pub enum Category {
     RateLimited,
     /// Any other status that is not 2xx, an unfollowed 3xx included.
     Http(u16),
-    /// `keys.env` refused as exposed. The binary records it; `classify`
-    /// never gives it.
-    KeysFileExposed,
-    /// `keys.env` refused as invalid. The binary records it; `classify`
-    /// never gives it.
-    KeysFileInvalid,
-    /// `keys.env` refused as unreadable. The binary records it; `classify`
-    /// never gives it.
-    KeysFileUnreadable,
 }
 impl Category {
     /// The name recorded as `category`.
@@ -42,14 +34,11 @@ impl Category {
             Category::Unauthorized => "unauthorized".into(),
             Category::RateLimited => "rate-limited".into(),
             Category::Http(status) => format!("http-{status}"),
-            Category::KeysFileExposed => "keys-file-exposed".into(),
-            Category::KeysFileInvalid => "keys-file-invalid".into(),
-            Category::KeysFileUnreadable => "keys-file-unreadable".into(),
         }
     }
 }
 
-/// One response the lister received.
+/// One response a provider's model list answered.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ObservedResponse {
     /// The HTTP status.
@@ -71,7 +60,7 @@ impl fmt::Debug for ObservedResponse {
     }
 }
 
-/// What one provider's lister call saw. It holds no error text.
+/// What one provider's fetch saw. It holds no error text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Observation {
     /// The response received, if the call got that far.
@@ -87,8 +76,8 @@ pub fn classify(observation: &Observation) -> Result<ProviderListing, Category> 
     if observation.transport_failed {
         return Err(Category::Offline);
     }
-    // The lister never returns this, and an empty listing here would remove
-    // every id.
+    // The trailer parser never gives this, and an empty listing here would
+    // remove every id.
     let Some(response) = &observation.response else {
         return Err(Category::Offline);
     };

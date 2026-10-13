@@ -3,7 +3,7 @@
 //! reserved `user` project; the judges live in `baley_core::catalog`.
 
 use std::fmt;
-use std::path::Path;
+use std::io::Read;
 use std::process::ExitCode;
 
 use baley_core::catalog::detection::{IdChange, Outcome};
@@ -14,6 +14,7 @@ use baley_core::catalog::{
     judge_held_removal, listing, owner_changed_payload, read_state, seed_due, seed_payload,
     state_key,
 };
+use baley_core::policy::{FileLayer, Schema, parse_layer};
 use baley_store::{
     Actor, Admin, Answer, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed,
     OutcomeKind, ProjectId, Recorded, Refusal, RequestId, StoreError, StreamName, Views,
@@ -22,13 +23,17 @@ use baley_store::{
 use baley_store_sqlite::SqliteStore;
 use serde_json::{Value, json};
 
-use crate::detection::{Detection, ProviderOutcome, Recording, Trigger, detect_blocking};
+use crate::config_command::reviewers;
+use crate::detection::{MAX_BODY_BYTES, Recording, fetch_command, parse_fetched, record};
 use crate::folders::{Environment, Folders, Platform};
-use crate::keys::{self, KeysRefusal};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
+use crate::providers;
+use crate::providers::record::covered_by;
+use crate::providers::warning::warning_sha256;
+use crate::settings;
 
 /// The command kind the seeding step records under.
 pub const SEED_COMMAND: &str = "models.seed";
@@ -39,6 +44,10 @@ pub const REMOVE_COMMAND: &str = "models.remove";
 /// The name the `user` project is created with, as `doctor` and `export`
 /// show it.
 pub const USER_PROJECT_NAME: &str = "per-user records";
+/// Why `baley models update` prints no fetch command: a provider it would
+/// cover has no current acknowledgement. Design 0008 refuses a review with
+/// the same reason.
+pub const PROVIDER_NOT_ACKNOWLEDGED: &str = "provider-not-acknowledged";
 
 fn user() -> ProjectId {
     ProjectId(USER_PROJECT.into())
@@ -299,13 +308,23 @@ enum ModelsCommand {
         #[arg(value_name = "NAME", value_parser = model_name)]
         name: String,
     },
-    /// Refresh the openai and deepseek catalogs from each provider's model
-    /// list, with the keys in keys.env. Every provider with a key when none
-    /// is named. A failed detection is reported and exits 0.
+    /// Print the shell command that fetches each provider's model list from
+    /// your environment's key and pipes it into baley models import. With
+    /// none named, covers the providers review.reviewers selects that have a
+    /// current acknowledgement. A provider without one refuses the run with
+    /// provider-not-acknowledged; run baley config interview to acknowledge.
     Update {
         /// openai or deepseek.
         #[arg(value_name = "PROVIDER")]
         providers: Vec<String>,
+    },
+    /// Record a provider's model list read from stdin, as the command
+    /// baley models update prints sends it. A list that did not arrive whole
+    /// is recorded as a failed detection and the previous list is kept.
+    Import {
+        /// openai or deepseek.
+        #[arg(value_name = "PROVIDER")]
+        provider: String,
     },
 }
 
@@ -323,6 +342,7 @@ pub fn run(args: ModelsArgs) -> ExitCode {
             owner(&catalog, &name, OwnerChange::Removed, &started_at)
         }
         ModelsCommand::Update { providers } => update(&providers, &started_at),
+        ModelsCommand::Import { provider } => import(&provider, &started_at),
     }
     .unwrap_or_else(|e| e);
     ExitCode::from(display::emit(
@@ -425,7 +445,8 @@ fn tier(text: &str) -> Result<Tier, String> {
     })
 }
 
-/// The providers `baley models update` names, each once, or none. Only a
+/// The providers `baley models update` or `baley models import` names, each
+/// once, or none. Only a
 /// provider Baley detects is accepted: a host or any other name is refused
 /// with `unknown-provider`, before any store opens. Case is not folded.
 pub fn named_providers(names: &[String]) -> Result<Vec<Provider>, String> {
@@ -446,21 +467,180 @@ pub fn named_providers(names: &[String]) -> Result<Vec<Provider>, String> {
     Ok(named)
 }
 
+// Reads no key and no environment value, and records nothing.
 fn update(names: &[String], started_at: &str) -> Result<Render, Render> {
     let folders = folders()?;
     let named = named_providers(names).map_err(|e| refuse(&e))?;
-    let keys = keys::load(&folders.config);
-    // Opened without seeding: the run seeds only when it records.
+    // A named provider is never filtered by the selection, so the global
+    // file is read only when none is named.
+    let selected = if named.is_empty() {
+        let file = settings::read(&settings::global_path(&folders)).map_err(|e| refuse(&e))?;
+        let layer = file
+            .map(|file| parse_layer(&file, FileLayer::Global, Schema::standard()))
+            .transpose()
+            .map_err(|e| refuse(&e))?;
+        reviewers::stored(layer.as_ref()).providers
+    } else {
+        Vec::new()
+    };
+    // Not `open_seeded`: printing a command never seeds or creates `user`.
     let store = open::store(&folders.home, started_at, open::options())
         .map_err(|e| display::store_error(&e, None))?;
-    let detection = detect_blocking(&store, keys.as_ref(), &Trigger::Owner(named), started_at)
-        .map_err(failed)?;
-    let keys_file = folders.config.join("keys.env");
+    let stored = providers::record::read(&store).map_err(failed)?;
+    Ok(update_decision(&named, &selected, &stored.payloads))
+}
+
+/// What `baley models update` prints, from the providers named, the
+/// providers `review.reviewers` selects (read only when none is named) and
+/// the stored acknowledgement payloads. A provider is acknowledged when any
+/// payload covers it at the compiled warning. A named provider without one
+/// refuses the whole run, so a script never sees a partial set; with none
+/// named, the providers both selected and acknowledged get a command, and
+/// none of them refuses. Commands come in catalog order, one per line.
+pub(crate) fn update_decision(
+    named: &[Provider],
+    selected: &[Provider],
+    payloads: &[Value],
+) -> Render {
+    let digest = warning_sha256();
+    let acknowledged = |provider: &Provider| {
+        payloads
+            .iter()
+            .any(|payload| covered_by(payload, &digest).contains(&provider.name()))
+    };
+    let covered: Vec<Provider> = if named.is_empty() {
+        let covered: Vec<Provider> = Provider::ALL
+            .into_iter()
+            .filter(|provider| selected.contains(provider) && acknowledged(provider))
+            .collect();
+        if covered.is_empty() {
+            return Render::refusal(format!(
+                "{PROVIDER_NOT_ACKNOWLEDGED}: review.reviewers selects no provider with a current acknowledgement; run baley config interview"
+            ));
+        }
+        covered
+    } else {
+        let missing: Vec<&str> = Provider::ALL
+            .into_iter()
+            .filter(|provider| named.contains(provider) && !acknowledged(provider))
+            .map(Provider::name)
+            .collect();
+        if !missing.is_empty() {
+            return Render::refusal(format!(
+                "{PROVIDER_NOT_ACKNOWLEDGED}: no current acknowledgement for {}; run baley config interview",
+                missing.join(", ")
+            ));
+        }
+        Provider::ALL
+            .into_iter()
+            .filter(|provider| named.contains(provider))
+            .collect()
+    };
+    Render {
+        lines: covered.into_iter().map(fetch_command).collect(),
+        code: 0,
+        error: false,
+    }
+}
+
+/// The most stdin bytes `import` holds: a 4 MiB body, the longest trailer
+/// and the newline on each side of it. It reads one byte past this, so a
+/// longer input reaches the parser as a body over the bound.
+const IMPORT_INPUT_BYTES: usize =
+    MAX_BODY_BYTES + "baley-fetch status=000 complete=false".len() + 2;
+
+fn import(name: &str, started_at: &str) -> Result<Render, Render> {
+    let folders = folders()?;
+    let provider = named_providers(&[name.to_owned()]).map_err(|e| refuse(&e))?[0];
+    let mut input = Vec::new();
+    // A failed read means the list did not arrive whole: with nothing
+    // read there is no trailer, which the parser judges `incomplete`.
+    if std::io::stdin()
+        .lock()
+        .take(IMPORT_INPUT_BYTES as u64 + 1)
+        .read_to_end(&mut input)
+        .is_err()
+    {
+        input.clear();
+    }
+    let mut lines = Vec::new();
+    let store = open_seeded(&folders, started_at, &mut lines)?;
+    let recording =
+        record_import(&store, provider, &input, new_request_id(), started_at).map_err(failed)?;
+    lines.extend(import_lines(provider, &recording));
     Ok(Render {
-        lines: update_lines(&detection, keys.as_ref().err(), &keys_file),
+        lines,
         code: 0,
         error: false,
     })
+}
+
+/// Records what one fetch piped into `baley models import` for `provider`,
+/// as the owner under `models.import`: the listing the trailer vouches for,
+/// or the failure its bytes show. It assumes `user` exists: the command
+/// seeds first. No acknowledgement is checked here; the fetch command was
+/// only printed for an acknowledged provider.
+pub fn record_import(
+    store: &impl Ledger,
+    provider: Provider,
+    input: &[u8],
+    request_id: RequestId,
+    at: &str,
+) -> Result<Recording, StoreError> {
+    let seen = parse_fetched(input);
+    record(
+        store,
+        provider,
+        seen.as_ref().map_err(|category| *category),
+        request_id,
+        at,
+    )
+}
+
+/// The lines `baley models import` prints for one provider's recording:
+/// the counts, version and each id's change for a detection, or the
+/// failure's category. No error or response text reaches them.
+pub(crate) fn import_lines(provider: Provider, recording: &Recording) -> Vec<String> {
+    const HEADER: [&str; 5] = ["PROVIDER", "ID", "STATUS", "TIER", "PLACED"];
+    let name = provider.name();
+    let Recording { outcome, version } = recording;
+    let report = match outcome {
+        Outcome::Failed(category) => {
+            return vec![format!(
+                "{name}: detection failed: {}; the previous list is kept",
+                category.name()
+            )];
+        }
+        Outcome::Detected(report) => report,
+    };
+    let mut lines = vec![format!(
+        "{name}: detected {} added, {} removed, {} unchanged; catalog version {version}",
+        report.count(IdChange::New),
+        report.count(IdChange::Removed),
+        report.count(IdChange::Unchanged),
+    )];
+    let rows: Vec<[&str; 5]> = report
+        .rows
+        .iter()
+        .map(|row| {
+            let change = match row.change {
+                IdChange::New => "added",
+                IdChange::Unchanged => "unchanged",
+                IdChange::Removed => "removed",
+            };
+            [
+                name,
+                row.id.as_str(),
+                change,
+                row.tier.map_or("-", Tier::name),
+                row.placed.name(),
+            ]
+        })
+        .collect();
+    if !rows.is_empty() {
+        lines.extend(columns(HEADER, &rows));
+    }
+    lines
 }
 
 fn owner(
@@ -501,90 +681,10 @@ fn owner(
     })
 }
 
-fn seed_line() -> String {
+/// The line printed when a seed was recorded. Init, `models list` and the other
+/// catalog commands print the same one.
+pub(crate) fn seed_line() -> String {
     format!("seeded the model catalog with hint table version {HINT_VERSION}")
-}
-
-/// The lines `baley models update` prints for one run: the seed line when
-/// it seeded, a refused `keys.env`'s own text once, then each provider the
-/// run did not skip. No error or response text reaches them.
-pub fn update_lines(
-    detection: &Detection,
-    refusal: Option<&KeysRefusal>,
-    keys_file: &Path,
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    if detection.seeded {
-        lines.push(seed_line());
-    }
-    if let Some(refusal) = refusal {
-        lines.push(refusal.to_string());
-    }
-    const HEADER: [&str; 5] = ["PROVIDER", "ID", "STATUS", "TIER", "PLACED"];
-    for (provider, outcome) in &detection.providers {
-        let name = provider.name();
-        match outcome {
-            ProviderOutcome::Skipped => {}
-            ProviderOutcome::Recorded(Recording {
-                outcome: Outcome::Detected(report),
-                version,
-            }) => {
-                lines.push(format!(
-                    "{name}: detected {} added, {} removed, {} unchanged; catalog version {version}",
-                    report.count(IdChange::New),
-                    report.count(IdChange::Removed),
-                    report.count(IdChange::Unchanged),
-                ));
-                let rows: Vec<[&str; 5]> = report
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        let change = match row.change {
-                            IdChange::New => "added",
-                            IdChange::Unchanged => "unchanged",
-                            IdChange::Removed => "removed",
-                        };
-                        let tier = row.tier.map_or("-", Tier::name);
-                        [name, row.id.as_str(), change, tier, row.placed.name()]
-                    })
-                    .collect();
-                if !rows.is_empty() {
-                    lines.extend(columns(HEADER, &rows));
-                }
-            }
-            ProviderOutcome::Recorded(Recording {
-                outcome: Outcome::Failed(category),
-                ..
-            }) => lines.push(format!(
-                "{name}: detection failed: {}; the previous list is kept",
-                category.name()
-            )),
-            ProviderOutcome::Missing { key, entries } => {
-                lines.push(format!(
-                    "{name}: {key} is not in {}, so its detected entries are unverifiable",
-                    keys_file.display()
-                ));
-                let rows: Vec<[&str; 5]> = entries
-                    .iter()
-                    .map(|entry| {
-                        [
-                            name,
-                            entry.name.as_str(),
-                            "unverifiable",
-                            entry.tier.map_or("-", Tier::name),
-                            entry.placed.map_or("-", Placement::name),
-                        ]
-                    })
-                    .collect();
-                if rows.is_empty() {
-                    lines.push(format!("{name}: no detected entries"));
-                } else {
-                    lines.extend(columns(HEADER, &rows));
-                }
-            }
-        }
-    }
-    lines
 }
 
 // Pads every column but the last to its widest cell.
@@ -853,6 +953,20 @@ mod tests {
         append(&store, 2, &[detected(json!([]), json!(["gpt-x"]))]);
 
         assert!(!accepts(&store, "gpt-x"));
+    }
+
+    // Older ledgers hold failures under categories since removed. The
+    // projector never reads `category`, so they replay with no upcaster.
+    #[test]
+    fn an_old_keys_file_detection_failure_still_rebuilds_the_catalog() {
+        let (_dir, store) = store();
+        let failed =
+            json!({"provider": "openai", "category": "keys-file-exposed", "catalog_version": 0});
+        append(&store, 1, &[("models.detection_failed", failed)]);
+
+        store.rebuild(&user()).unwrap();
+
+        assert_eq!(catalog_version(&store), 0);
     }
 
     #[test]
@@ -1260,34 +1374,270 @@ mod tests {
         assert_eq!(names("openai", openai).names, ["gpt-a".to_string()].into());
     }
 
-    mod update_lines {
-        use std::path::{Path, PathBuf};
+    mod update_decision {
+        use baley_core::catalog::Provider::{self, DeepSeek, OpenAi};
+        use serde_json::{Value, json};
+
+        use crate::ledger::display::{self, Render};
+        use crate::models::update_decision;
+        use crate::providers::fixtures::{DESIGN_WARNING, sha256_hex};
+
+        // Task 1's lines as the plan writes them, not from `fetch_command`.
+        const OPENAI_LINE: &str = r#"{ s=$(printf 'Authorization: Bearer %s\n' "$OPENAI_API_KEY" | curl --disable --silent --show-error --proto =https --max-time 20 --max-filesize 4194304 --header @- --output /dev/fd/3 --write-out '%{http_code}' https://api.openai.com/v1/models); e=$?; if [ "$e" -eq 0 ]; then printf '\nbaley-fetch status=%s complete=true\n' "$s"; elif [ "$e" -eq 63 ]; then printf '\nbaley-fetch status=%s complete=false\n' "$s"; else printf '\nbaley-fetch transport-failed\n'; fi; } 3>&1 | baley models import openai"#;
+        const DEEPSEEK_LINE: &str = r#"{ s=$(printf 'Authorization: Bearer %s\n' "$DEEPSEEK_API_KEY" | curl --disable --silent --show-error --proto =https --max-time 20 --max-filesize 4194304 --header @- --output /dev/fd/3 --write-out '%{http_code}' https://api.deepseek.com/models); e=$?; if [ "$e" -eq 0 ]; then printf '\nbaley-fetch status=%s complete=true\n' "$s"; elif [ "$e" -eq 63 ]; then printf '\nbaley-fetch status=%s complete=false\n' "$s"; else printf '\nbaley-fetch transport-failed\n'; fi; } 3>&1 | baley models import deepseek"#;
+        const NONE_SELECTED: &str = "provider-not-acknowledged: review.reviewers selects no provider with a current acknowledgement; run baley config interview";
+
+        fn payload(providers: &[&str], warning: &str) -> Value {
+            json!({
+                "providers": providers,
+                "warning_version": 1,
+                "warning_sha256": sha256_hex(warning),
+            })
+        }
+
+        fn current(providers: &[&str]) -> Value {
+            payload(providers, DESIGN_WARNING)
+        }
+
+        fn older(providers: &[&str]) -> Value {
+            payload(providers, "an older warning")
+        }
+
+        fn unacknowledged(names: &str) -> String {
+            format!(
+                "provider-not-acknowledged: no current acknowledgement for {names}; run baley config interview"
+            )
+        }
+
+        fn check(render: &Render, code: u8, error: bool, lines: &[&str]) {
+            assert_eq!(render.code, code, "{render:?}");
+            assert_eq!(render.error, error, "{render:?}");
+            assert_eq!(render.lines, lines, "{render:?}");
+        }
+
+        fn decide(named: &[Provider], selected: &[Provider], payloads: &[Value]) -> Render {
+            update_decision(named, selected, payloads)
+        }
+
+        #[test]
+        fn an_unacknowledged_named_provider_refuses_the_whole_run_without_a_fetch_command() {
+            let render = decide(&[OpenAi, DeepSeek], &[], &[current(&["openai"])]);
+
+            check(&render, 2, true, &[&unacknowledged("deepseek")]);
+            assert!(
+                !render
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("curl") || line.contains(OPENAI_LINE)),
+                "{render:?}"
+            );
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            assert_eq!(display::emit(&render, &mut out, &mut err), 2);
+            assert!(out.is_empty());
+            assert_eq!(
+                String::from_utf8(err).unwrap(),
+                format!("baley: {}\n", unacknowledged("deepseek"))
+            );
+        }
+
+        #[test]
+        fn with_no_name_only_a_selected_acknowledged_provider_gets_a_fetch_command() {
+            let render = decide(&[], &[OpenAi], &[current(&["openai", "deepseek"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn a_named_provider_is_never_filtered_by_review_reviewers() {
+            let render = decide(&[OpenAi], &[], &[current(&["openai"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn nothing_selected_and_acknowledged_refuses_without_a_fetch_command() {
+            let render = decide(&[], &[DeepSeek], &[current(&["openai"])]);
+            check(&render, 2, true, &[NONE_SELECTED]);
+        }
+
+        #[test]
+        fn an_acknowledgement_of_another_warning_text_does_not_count() {
+            let render = decide(&[OpenAi], &[], &[older(&["openai"])]);
+            check(&render, 2, true, &[&unacknowledged("openai")]);
+        }
+
+        #[test]
+        fn every_named_acknowledged_provider_gets_its_command_in_catalog_order() {
+            let payloads = [current(&["deepseek"]), current(&["openai"])];
+            let render = decide(&[DeepSeek, OpenAi], &[], &payloads);
+            check(&render, 0, false, &[OPENAI_LINE, DEEPSEEK_LINE]);
+        }
+
+        #[test]
+        fn every_unacknowledged_named_provider_is_named_in_catalog_order() {
+            let render = decide(&[DeepSeek, OpenAi], &[], &[]);
+            check(&render, 2, true, &[&unacknowledged("openai, deepseek")]);
+        }
+
+        #[test]
+        fn a_named_run_prints_only_the_named_providers() {
+            let render = decide(&[OpenAi], &[], &[current(&["openai", "deepseek"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn with_no_name_a_selected_but_unacknowledged_provider_is_left_out() {
+            let render = decide(&[], &[OpenAi, DeepSeek], &[current(&["openai"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn an_older_acknowledgement_beside_a_current_one_counts_only_where_it_is_current() {
+            let first = [older(&["openai", "deepseek"]), current(&["deepseek"])];
+            check(
+                &decide(&[DeepSeek], &[], &first),
+                0,
+                false,
+                &[DEEPSEEK_LINE],
+            );
+            let second = [current(&["deepseek"]), older(&["openai"])];
+            check(
+                &decide(&[OpenAi], &[], &second),
+                2,
+                true,
+                &[&unacknowledged("openai")],
+            );
+        }
+
+        #[test]
+        fn an_empty_selection_refuses_even_with_acknowledged_providers() {
+            let selection = crate::config_command::reviewers::stored(None);
+            let render = decide(
+                &[],
+                &selection.providers,
+                &[current(&["openai", "deepseek"])],
+            );
+            check(&render, 2, true, &[NONE_SELECTED]);
+        }
+    }
+
+    mod import {
+        use std::collections::BTreeSet;
 
         use baley_core::catalog::detection::{Category, IdChange, Outcome, Report, ReportRow};
-        use baley_core::catalog::{Catalog, ListingRow, Placement, Provider, Source, Tier};
+        use baley_core::catalog::{Placement, Provider, Tier};
+        use baley_store::{Actor, Ledger};
+        use serde_json::json;
 
-        use crate::detection::{Detection, ProviderOutcome, Recording};
-        use crate::keys::KeysRefusal;
-        use crate::models::update_lines;
+        use super::{
+            OPENAI, accepted_names, append, at, catalog_key, catalog_version, detected, document,
+            events, open, owner, request, seed, state_key,
+        };
+        use crate::detection::Recording;
+        use crate::models::{import_lines, record_import};
 
-        const KEYS_FILE: &str = "/c/keys.env";
+        const COMPLETE: &str = "\nbaley-fetch status=200 complete=true\n";
 
-        fn run(seeded: bool, outcomes: [ProviderOutcome; 2]) -> Detection {
-            Detection {
-                seeded,
-                providers: Provider::ALL.into_iter().zip(outcomes).collect(),
+        /// A fresh store with the compiled hint table seeded.
+        fn seeded() -> (tempfile::TempDir, baley_store_sqlite::SqliteStore) {
+            let (dir, store) = open();
+            assert!(seed(&store, request(1), &at(1)).unwrap());
+            (dir, store)
+        }
+
+        /// Every name the `openai` catalog accepts as stored.
+        fn openai_names(store: &baley_store_sqlite::SqliteStore) -> BTreeSet<String> {
+            let catalog = document(store, &catalog_key(OPENAI));
+            let state = document(store, &state_key());
+            accepted_names("openai", catalog.as_ref(), state.as_ref())
+                .unwrap()
+                .names
+        }
+
+        fn last_models_event(store: &baley_store_sqlite::SqliteStore) -> baley_store::Event {
+            events(store, "models").pop().unwrap()
+        }
+
+        fn astra_detected(store: &baley_store_sqlite::SqliteStore, n: u8) {
+            let found = json!([{"id": "gpt-6-astra", "tier": "flagship", "high_effort": false, "placed": "hint"}]);
+            append(store, n, &[detected(found, json!([]))]);
+        }
+
+        fn import(store: &impl Ledger, input: &[u8], n: u8) -> Recording {
+            record_import(store, Provider::OpenAi, input, request(n), &at(n)).unwrap()
+        }
+
+        #[test]
+        fn a_complete_empty_import_removes_seeded_and_detected_ids_but_never_an_owner_entry() {
+            let (_dir, store) = seeded();
+            astra_detected(&store, 2);
+            append(&store, 3, &[owner("added", "gpt-mine", Some("cheap"))]);
+            let before = openai_names(&store);
+            assert!(before.contains("gpt-6-astra") && before.contains("gpt-mine"));
+            assert!(before.len() > 2, "the seed holds openai ids: {before:?}");
+
+            let input = [&br#"{"object":"list","data":[]}"#[..], COMPLETE.as_bytes()].concat();
+            import(&store, &input, 4);
+
+            let event = last_models_event(&store);
+            assert_eq!(event.type_name, "models.detected");
+            assert_eq!(event.payload["provider"], "openai");
+            assert_eq!(
+                openai_names(&store),
+                BTreeSet::from(["gpt-mine".to_string()])
+            );
+        }
+
+        #[test]
+        fn a_trailerless_cut_failed_or_oversized_import_records_a_failure_and_keeps_the_catalog() {
+            let (_dir, store) = seeded();
+            astra_detected(&store, 2);
+            let names = openai_names(&store);
+            let version = catalog_version(&store);
+            let empty = br#"{"object":"list","data":[]}"#;
+            let mut padded = empty.to_vec();
+            padded.resize(4_194_305, b' ');
+            let inputs: [(Vec<u8>, Category); 4] = [
+                ([&empty[..], b"\n"].concat(), Category::Incomplete),
+                (
+                    [&empty[..], b"\nbaley-fetch status=200 complete=false\n"].concat(),
+                    Category::Incomplete,
+                ),
+                (
+                    b"\nbaley-fetch transport-failed\n".to_vec(),
+                    Category::Offline,
+                ),
+                (
+                    [&padded[..], COMPLETE.as_bytes()].concat(),
+                    Category::Incomplete,
+                ),
+            ];
+            for (n, (input, category)) in (3..).zip(inputs) {
+                let recording = import(&store, &input, n);
+
+                assert_eq!(recording.outcome, Outcome::Failed(category), "{category:?}");
+                assert_eq!(
+                    last_models_event(&store).type_name,
+                    "models.detection_failed"
+                );
+                assert_eq!(openai_names(&store), names, "{category:?}");
+                assert_eq!(catalog_version(&store), version, "{category:?}");
             }
         }
 
-        fn lines(detection: &Detection) -> Vec<String> {
-            update_lines(detection, None, Path::new(KEYS_FILE))
-        }
+        #[test]
+        fn an_import_is_recorded_as_models_import_by_the_owner() {
+            let (_dir, store) = seeded();
+            let body = r#"{"object":"list","data":[{"id":"gpt-6-astra","object":"model"}]}"#;
+            let input = [body.as_bytes(), COMPLETE.as_bytes()].concat();
 
-        fn detected(rows: Vec<ReportRow>, version: u64) -> ProviderOutcome {
-            ProviderOutcome::Recorded(Recording {
-                outcome: Outcome::Detected(Report { rows }),
-                version,
-            })
+            import(&store, &input, 2);
+
+            let completed = events(&store, "command/models.import");
+            assert_eq!(completed.len(), 1);
+            assert_eq!(completed[0].type_name, "command.completed");
+            assert_eq!(completed[0].actor, Actor::Owner);
+            let event = last_models_event(&store);
+            assert_eq!(event.type_name, "models.detected");
+            assert_eq!(event.actor, Actor::Owner);
         }
 
         fn row(id: &str, change: IdChange, tier: Option<Tier>, placed: Placement) -> ReportRow {
@@ -1299,91 +1649,36 @@ mod tests {
             }
         }
 
-        fn entry(name: &str, tier: Tier, placed: Placement) -> ListingRow {
-            ListingRow {
-                catalog: Catalog::Provider(Provider::OpenAi),
-                name: name.into(),
-                source: Source::Detected,
-                tier: Some(tier),
-                placed: Some(placed),
-            }
-        }
-
-        #[test]
-        fn a_named_keyless_provider_names_its_missing_key_and_marks_each_entry_unverifiable() {
-            let missing = ProviderOutcome::Missing {
-                key: "OPENAI_API_KEY",
-                entries: vec![
-                    entry("gpt-6-astra", Tier::Flagship, Placement::Hint),
-                    entry("whisper-9", Tier::Balanced, Placement::BestFit),
-                ],
-            };
-            let skipped = || ProviderOutcome::Skipped;
-
-            let printed = lines(&run(false, [missing, skipped()]));
-
-            assert!(printed[0].starts_with("openai: "), "{printed:?}");
-            assert!(printed[0].contains("OPENAI_API_KEY"), "{printed:?}");
-            assert!(printed[0].contains(KEYS_FILE), "{printed:?}");
-            let rows: Vec<Vec<&str>> = printed[2..]
-                .iter()
-                .map(|line| line.split_whitespace().collect())
-                .collect();
-            assert_eq!(
-                rows,
-                vec![
-                    vec!["openai", "gpt-6-astra", "unverifiable", "flagship", "hint"],
-                    vec![
-                        "openai",
-                        "whisper-9",
-                        "unverifiable",
-                        "balanced",
-                        "best-fit"
-                    ],
-                ]
-            );
-        }
-
-        #[test]
-        fn a_named_keyless_provider_with_no_detected_entries_says_it_has_none() {
-            let missing = ProviderOutcome::Missing {
-                key: "DEEPSEEK_API_KEY",
-                entries: vec![],
-            };
-            let printed = lines(&run(false, [ProviderOutcome::Skipped, missing]));
-            assert_eq!(printed.len(), 2, "{printed:?}");
-            assert!(printed[0].contains("DEEPSEEK_API_KEY"));
-            assert_eq!(printed[1], "deepseek: no detected entries");
-        }
-
         #[test]
         fn a_detection_shows_its_counts_version_and_each_ids_change_tier_and_placement() {
-            let report = detected(
-                vec![
-                    row(
-                        "gpt-6-astra",
-                        IdChange::Unchanged,
-                        Some(Tier::Flagship),
-                        Placement::Hint,
-                    ),
-                    row(
-                        "gpt-6-luna",
-                        IdChange::Removed,
-                        Some(Tier::Cheap),
-                        Placement::Hint,
-                    ),
-                    row("gpt-mine", IdChange::Unchanged, None, Placement::Owner),
-                    row(
-                        "gpt-6-sol-9",
-                        IdChange::New,
-                        Some(Tier::Balanced),
-                        Placement::Prefix,
-                    ),
-                ],
-                7,
-            );
+            let recording = Recording {
+                outcome: Outcome::Detected(Report {
+                    rows: vec![
+                        row(
+                            "gpt-6-astra",
+                            IdChange::Unchanged,
+                            Some(Tier::Flagship),
+                            Placement::Hint,
+                        ),
+                        row(
+                            "gpt-6-luna",
+                            IdChange::Removed,
+                            Some(Tier::Cheap),
+                            Placement::Hint,
+                        ),
+                        row("gpt-mine", IdChange::Unchanged, None, Placement::Owner),
+                        row(
+                            "gpt-6-sol-9",
+                            IdChange::New,
+                            Some(Tier::Balanced),
+                            Placement::Prefix,
+                        ),
+                    ],
+                }),
+                version: 7,
+            };
 
-            let printed = lines(&run(false, [report, ProviderOutcome::Skipped]));
+            let printed = import_lines(Provider::OpenAi, &recording);
 
             assert_eq!(
                 printed[0],
@@ -1407,88 +1702,14 @@ mod tests {
 
         #[test]
         fn a_failure_prints_its_category_and_nothing_a_detection_would() {
-            let failed = ProviderOutcome::Recorded(Recording {
+            let failed = Recording {
                 outcome: Outcome::Failed(Category::RateLimited),
                 version: 3,
-            });
-            let printed = lines(&run(false, [ProviderOutcome::Skipped, failed]));
+            };
+            let printed = import_lines(Provider::DeepSeek, &failed);
             assert_eq!(
                 printed,
                 vec!["deepseek: detection failed: rate-limited; the previous list is kept"]
-            );
-        }
-
-        #[test]
-        fn a_skipped_provider_is_never_named() {
-            let failed = || {
-                ProviderOutcome::Recorded(Recording {
-                    outcome: Outcome::Failed(Category::Offline),
-                    version: 1,
-                })
-            };
-            let runs = [
-                ([failed(), ProviderOutcome::Skipped], "deepseek"),
-                ([ProviderOutcome::Skipped, failed()], "openai"),
-            ];
-            for (outcomes, skipped) in runs {
-                let printed = lines(&run(false, outcomes));
-                assert_eq!(printed.len(), 1);
-                assert!(
-                    !printed.iter().any(|line| line.contains(skipped)),
-                    "{printed:?}"
-                );
-            }
-            let nothing = lines(&run(false, [(); 2].map(|()| ProviderOutcome::Skipped)));
-            assert_eq!(nothing, Vec::<String>::new());
-        }
-
-        #[test]
-        fn the_seed_line_comes_first_and_only_when_the_run_seeded() {
-            let failed = || {
-                ProviderOutcome::Recorded(Recording {
-                    outcome: Outcome::Failed(Category::KeysFileExposed),
-                    version: 1,
-                })
-            };
-            let seed = format!(
-                "seeded the model catalog with hint table version {}",
-                baley_core::catalog::HINT_VERSION
-            );
-            let seeded = lines(&run(true, [failed(), failed()]));
-            assert_eq!(seeded[0], seed);
-            assert_eq!(seeded.len(), 3);
-            let unseeded = lines(&run(false, [failed(), failed()]));
-            assert!(!unseeded.contains(&seed));
-            assert_eq!(unseeded.len(), 2);
-        }
-
-        #[test]
-        fn a_refused_keys_file_prints_its_own_text_once_after_the_seed_line() {
-            let refusal = KeysRefusal::Exposed {
-                path: PathBuf::from(KEYS_FILE),
-                user: 1000,
-                owner: None,
-                mode: Some(0o644),
-            };
-            let failed = || {
-                ProviderOutcome::Recorded(Recording {
-                    outcome: Outcome::Failed(Category::KeysFileExposed),
-                    version: 1,
-                })
-            };
-            let detection = run(true, [failed(), failed()]);
-
-            let printed = update_lines(&detection, Some(&refusal), Path::new(KEYS_FILE));
-
-            assert_eq!(printed[1], refusal.to_string());
-            let text = refusal.to_string();
-            assert_eq!(printed.iter().filter(|line| **line == text).count(), 1);
-            assert_eq!(
-                &printed[2..],
-                [
-                    "openai: detection failed: keys-file-exposed; the previous list is kept",
-                    "deepseek: detection failed: keys-file-exposed; the previous list is kept",
-                ]
             );
         }
     }

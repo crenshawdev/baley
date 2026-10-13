@@ -22,15 +22,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run one command with a provider key and redact its output.
-    Exec(baley::exec::ExecArgs),
     /// Print a Claude Code artifact Baley renders, to standard output only.
     Artifact(baley::host_artifacts::command::ArtifactArgs),
     /// Show every setting with its layer, or change settings in either file.
     Config(baley::config_command::ConfigArgs),
     /// Tie this repository to a ledger project: write baley.toml and record project.initialized.
     Init(baley::init::InitArgs),
-    /// List, add, remove and update the model names Baley accepts per host and provider.
+    /// List, add, remove and import the model names Baley accepts per host and provider, and print a provider's fetch command.
     Models(baley::models::ModelsArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),
@@ -111,7 +109,6 @@ fn run_command(command: Command) -> std::process::ExitCode {
     use std::io::{Read, Write};
     let command = match command {
         Command::Ledger(command) => return baley::ledger::run(command),
-        Command::Exec(args) => return baley::exec::run(args),
         Command::Artifact(args) => return baley::host_artifacts::command::run(args),
         Command::Init(args) => return baley::init::run(args),
         Command::Config(args) => return baley::config_command::run(args),
@@ -122,7 +119,6 @@ fn run_command(command: Command) -> std::process::ExitCode {
     };
     let arguments: Vec<&str> = match &command {
         Command::Ledger(_)
-        | Command::Exec(_)
         | Command::Artifact(_)
         | Command::Init(_)
         | Command::Config(_)
@@ -347,36 +343,14 @@ mod ledger_argument_tests {
 mod exec_argument_tests {
     use super::*;
 
+    // The key wrapper is gone (ADR 0039) and nothing else takes its name.
     #[test]
-    fn exec_arguments_after_the_separator_belong_to_the_command() {
-        let cli = Cli::try_parse_from([
-            "baley", "exec", "--key", "A", "--", "cmd", "--key", "B", "--",
-        ])
-        .unwrap();
-        let Command::Exec(args) = cli.command else {
-            panic!("exec command lost")
-        };
-        assert_eq!(args.key, "A");
-        assert_eq!(args.command, ["cmd", "--key", "B", "--"]);
-        let cli = Cli::try_parse_from(["baley", "exec", "--key=A", "--", "ls"]).unwrap();
-        let Command::Exec(args) = cli.command else {
-            panic!("exec command lost")
-        };
-        assert_eq!(args.key, "A");
-        assert_eq!(args.command, ["ls"]);
-    }
-
-    #[test]
-    fn exec_refuses_a_missing_key_separator_or_command() {
-        for input in [
-            vec!["baley", "exec", "--key", "A", "ls"],
-            vec!["baley", "exec", "--key", "A", "--"],
-            vec!["baley", "exec", "--", "ls"],
-            vec!["baley", "exec", "--key", "A", "--key", "B", "--", "ls"],
-        ] {
-            let error = Cli::try_parse_from(input).err().expect("usage refusal");
-            assert_eq!(error.exit_code(), 2);
-        }
+    fn exec_with_a_key_is_a_usage_error_now_that_the_wrapper_is_gone() {
+        let error = Cli::try_parse_from(["baley", "exec", "--key", "OPENAI_API_KEY", "--", "true"])
+            .err()
+            .expect("usage refusal");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        assert_eq!(error.exit_code(), 2);
     }
 }
 
