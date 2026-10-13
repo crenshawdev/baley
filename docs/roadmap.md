@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T16 merged (T16 is [#257](https://github.com/crenshawdev/baley/pull/257)) and T17 in progress on this branch, based on main `28f79d21`, dated 2026-10-12, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The integration check design [#229](https://github.com/crenshawdev/baley/issues/229) is recorded as landed on 2026-10-08 in [ADR 0042](adr/0042-mocked-boundary-integration-checks.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T17 is in progress. Its installed run is recorded in `spikes/host-matrix` (`install-live-2026-10-11-run1.md` and a repeat of the install rerun, `install-live-2026-10-11-run2.md`), and what the run left open is listed in the Build 3 table and notes below, so Build 3 is not complete. Removal of the built key reader, `baley exec --key` and HTTPS model lister belongs to Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)). Each build pull request updates this roadmap.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on Claude Code, and publishing. Status is Build 2 complete, Build 3 T1 to T17 merged (T17 is [#262](https://github.com/crenshawdev/baley/pull/262)) with [#24](https://github.com/crenshawdev/baley/issues/24) open for what T17 left open, and Build 4 T1 in progress on this branch, based on main `3a421f27`, dated 2026-10-13, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. The plan re-check design [#134](https://github.com/crenshawdev/baley/issues/134) is recorded as landed on 2026-10-06 in [ADR 0037](adr/0037-plan-recheck-scope.md); its implementation belongs to Builds 4 and 5. The integration check design [#229](https://github.com/crenshawdev/baley/issues/229) is recorded as landed on 2026-10-08 in [ADR 0042](adr/0042-mocked-boundary-integration-checks.md); its implementation belongs to Builds 4 and 5. The repository upkeep design [#47](https://github.com/crenshawdev/baley/issues/47) is recorded as landed on 2026-10-06 in [0015](design/0015-repository-upkeep-and-build-gate.md); its remaining implementation belongs to #54, while UPK-R2 is implemented by [Build 3 delivery tasks T14 to T17](#build-3-hosts) ([#24](https://github.com/crenshawdev/baley/issues/24)). The delivery and credential designs are recorded as landed on 2026-10-06 in [ADR 0038](adr/0038-installer-and-opt-in-updates.md) and [ADR 0039](adr/0039-session-owned-provider-credentials.md). Build 3 T17 is merged. Its installed run is recorded in `spikes/host-matrix` (`install-live-2026-10-11-run1.md` and a repeat of the install rerun, `install-live-2026-10-11-run2.md`), and what the run left open is listed in the Build 3 table and notes below, so Build 3 is not complete. Removal of the built key reader, `baley exec --key` and HTTPS model lister belongs to Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)). Each build pull request updates this roadmap.
 
 ## The path to the first release
 
@@ -32,9 +32,9 @@ flowchart TB
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
     class B1,B2 done
-    class B3 progress
+    class B3,B4 progress
     class R1 blocked
-    class B4,B5,B6,B7,B8,B9,OTHER,R2,R3 planned
+    class B5,B6,B7,B8,B9,OTHER,R2,R3 planned
 ```
 
 Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it. Eight other open issues block the release design; the twenty-five open Build 3 issues are listed below but have no GitHub dependency link to it.
@@ -222,12 +222,11 @@ flowchart LR
     class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12 done
     class Delivery done
     class T13 done
-    class T14,T15,T16 done
-    class T17 progress
+    class T14,T15,T16,T17 done
     class Release14,Verified planned
 ```
 
-Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dotted arrow is an evidence link. T14, T15 and T16 are merged ([#250](https://github.com/crenshawdev/baley/pull/250), [#253](https://github.com/crenshawdev/baley/pull/253), [#257](https://github.com/crenshawdev/baley/pull/257)) and T17 is in progress. T14 and T17 use unsigned development artifacts only. #14 fills and qualifies T14's `verify_download` seam before delivery can release verified artifacts; its other build dependencies are listed under R1. One pull request per Build 3 task.
+Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dotted arrow is an evidence link. T14 to T17 are merged ([#250](https://github.com/crenshawdev/baley/pull/250), [#253](https://github.com/crenshawdev/baley/pull/253), [#257](https://github.com/crenshawdev/baley/pull/257), [#262](https://github.com/crenshawdev/baley/pull/262)). T14 and T17 use unsigned development artifacts only. #14 fills and qualifies T14's `verify_download` seam before delivery can release verified artifacts; its other build dependencies are listed under R1. One pull request per Build 3 task.
 
 | Task | What | Pull requests | Status |
 |---|---|---|---|
@@ -247,11 +246,11 @@ Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. The dot
 | T14 | Binary delivery, ledger update claims and events, version-folder protection and update compatibility using unsigned development artifacts only; leave `verify_download` between download and staging for #14's verifiers | [#250](https://github.com/crenshawdev/baley/pull/250) | Merged; released delivery depends on #14 |
 | T15 | Claude artifact ownership and application | [#253](https://github.com/crenshawdev/baley/pull/253) | Merged |
 | T16 | Owner setup: final summary lists every file, then `yes` records provider acknowledgement, writes API-host allowances through the installation writer, writes global `review.reviewers`, and runs settings `config set` in order. Stop on failure, report completed writes and permit safe rerun | [#257](https://github.com/crenshawdev/baley/pull/257) | Merged |
-| T17 | Delivery doctor and installed qualification with unsigned development artifacts only, including newer-hook/older-server compatibility. The doctor takes `--host` and reports the install outcome, the hook and settings against what install writes, stale and older stubs, the stable path's version, writable locations, provider hosts, acknowledgements and the effective `updates.auto`, with a fix on every finding. The installed run of 2026-10-11 against Claude Code 2.1.296 is `spikes/host-matrix/install-live-2026-10-11-run1.md`, and a shell-only repeat of the install rerun after three fixes is `install-live-2026-10-11-run2.md`. The run left open the live repeat of the older-server fix (#258), Grep and Glob on Baley's home and config folder and the installed hook in bypass-permissions mode in a live session, whether a running session finds a newly written stub and the Bash read of Baley's home folder (both rest on the session's answer), and #190 | | In progress; released-artifact verification and its qualification belong to #14 |
+| T17 | Delivery doctor and installed qualification with unsigned development artifacts only, including newer-hook/older-server compatibility. The doctor takes `--host` and reports the install outcome, the hook and settings against what install writes, stale and older stubs, the stable path's version, writable locations, provider hosts, acknowledgements and the effective `updates.auto`, with a fix on every finding. The installed run of 2026-10-11 against Claude Code 2.1.296 is `spikes/host-matrix/install-live-2026-10-11-run1.md`, and a shell-only repeat of the install rerun after three fixes is `install-live-2026-10-11-run2.md`. The run left open the live repeat of the older-server fix (#258), Grep and Glob on Baley's home and config folder and the installed hook in bypass-permissions mode in a live session, whether a running session finds a newly written stub and the Bash read of Baley's home folder (both rest on the session's answer), and #190 | [#262](https://github.com/crenshawdev/baley/pull/262) | Merged; released-artifact verification and its qualification belong to #14 |
 
 ## Build 4: Planning
 
-[#25](https://github.com/crenshawdev/baley/issues/25) · milestone Evidence · planned
+[#25](https://github.com/crenshawdev/baley/issues/25) · milestone Evidence · in progress
 
 The owner starts a project, shapes the story backlog, and commits stories to phases under a task capacity. Each story carries versioned truths, and each truth has one check. The analyzer and the planner ask the owner only the decisions left to the owner, each with a recommended answer, in rounds ordered by what each question depends on, and every answer and deferral is recorded ([ADR 0030](adr/0030-question-rounds.md)). Each phase's plan is written, checked, reviewed and risk-scanned, and approval binds the plan's exact digest. Every configured reviewer runs, and a provider that cannot be called is replaced by the host's own subagent reviewer unless that reviewer already runs. The host session makes the outside calls from Baley's work order and checks each finding, and the owner rules on each one that survives ([ADR 0013](adr/0013-host-session-calls-outside-models.md), [ADR 0019](adr/0019-reviews-adjudicated-and-ruled.md)). The first workers are dispatched here, so routing is finished here. The first dispatch task supplies Claude Code's identity rung map and a dated per-model table of supported effort levels. Claude Code runs an unsupported level as the highest supported level at or below it, and a model without effort is not applicable. The route records the requested rung and the effective level apart. `RungMap` is unchanged, and the owner reviews the initial table in that task's pull request.
 
@@ -265,6 +264,86 @@ Build 4 adds the check `level`, `unit` or `integration`, to the evidence map gra
 - ADRs: [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0017 stories and sprints](adr/0017-stories-and-sprints.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md), [0030 question rounds](adr/0030-question-rounds.md), [0031 one term per concept](adr/0031-one-term-per-concept.md), [0037 plan re-check scope](adr/0037-plan-recheck-scope.md), [0039 session-owned provider credentials](adr/0039-session-owned-provider-credentials.md), [0042 mocked-boundary integration checks](adr/0042-mocked-boundary-integration-checks.md)
 - Carries: [#40](https://github.com/crenshawdev/baley/issues/40), [#68](https://github.com/crenshawdev/baley/issues/68), [#69](https://github.com/crenshawdev/baley/issues/69), [#72](https://github.com/crenshawdev/baley/issues/72)
 - Blocked by: Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24))
+
+```mermaid
+flowchart TD
+    T1["T1: Git error redaction"]
+    T2["T2: Key removal and seeding"]
+    T3["T3: Scope records and approval"]
+    T4["T4: Scope and description changes"]
+    T5["T5: Routing and first dispatch"]
+    T6["T6: Question rounds"]
+    T7["T7: Refinement and reads"]
+    T8["T8: Plan grammar"]
+    T9["T9: Phase commitment and plan approval"]
+    T10["T10: Checker and re-check"]
+    T11["T11: Lease risk and git facts"]
+    T12["T12: Tiers and model lists"]
+    T13["T13: Review admission and returns"]
+    T14["T14: Rulings and approval gate"]
+    T15["T15: Live planning run"]
+    B3T15["Build 3 T15: Installation"]
+    B3T16["Build 3 T16: Owner setup"]
+    B3T17["Build 3 T17: Installed qualification"]
+
+    T1 --> T2
+    T1 --> T3
+    T3 --> T4
+    T3 --> T5
+    T3 --> T6
+    T4 --> T7
+    T5 --> T7
+    T6 --> T7
+    T6 --> T8
+    T4 --> T9
+    T5 --> T9
+    T7 --> T9
+    T8 --> T9
+    T9 --> T10
+    T9 --> T11
+    T10 --> T11
+    T2 --> T12
+    T5 --> T12
+    T10 --> T13
+    T11 --> T13
+    T12 --> T13
+    T11 --> T14
+    T13 --> T14
+    T14 --> T15
+    B3T15 -.-> T5
+    B3T16 -.-> T2
+    B3T16 -.-> T11
+    B3T16 -.-> T12
+    B3T16 -.-> T13
+    B3T17 -.-> T15
+
+    classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
+    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
+    classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
+    class B3T15,B3T16,B3T17 done
+    class T1 progress
+    class T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13,T14,T15 planned
+```
+
+Figure 5. Build 4's tasks. Arrows point from a task to what waits on it, and a dotted arrow is a wait on a Build 3 task. Build 3 T14 to T17 are merged ([#250](https://github.com/crenshawdev/baley/pull/250), [#253](https://github.com/crenshawdev/baley/pull/253), [#257](https://github.com/crenshawdev/baley/pull/257), [#262](https://github.com/crenshawdev/baley/pull/262)). One pull request per Build 4 task.
+
+| Task | What | Pull requests | Status |
+|---|---|---|---|
+| T1 | Redact git error text | | In progress |
+| T2 | Remove the key paths and seed the catalog at init | | Planned |
+| T3 | Scope records and approval | | Planned |
+| T4 | Scope changes | | Planned |
+| T5 | Routing, work orders and the first dispatch | | Planned |
+| T6 | Question sets and rounds | | Planned |
+| T7 | Refinement and versioned truths | | Planned |
+| T8 | Plan grammar, evidence map and the planner's rules | | Planned |
+| T9 | Phase planning, drafts and plan approval | | Planned |
+| T10 | The plan checker and re-check scope | | Planned |
+| T11 | Risk at plan submit and git facts in the transaction | | Planned |
+| T12 | Tier selection and session model lists | | Planned |
+| T13 | Review admission, work orders and returns | | Planned |
+| T14 | Adjudication, rulings and the plan review's second round | | Planned |
+| T15 | Live planning run on Claude Code | | Planned |
 
 ## Build 5: Doing the work
 
@@ -413,11 +492,11 @@ Counts from GitHub on 2026-10-12. #238 to #249, #251, #252 and #254 to #256 have
 
 What the records leave open or do not say.
 
-- Builds 4 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
+- Builds 5 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
 - There is no first version number. The release design #14 picks it.
 - #44 was meant to land before Build 1 T10, which has merged. No order is given for bug #70.
 - The board's Status field is set only on the build issues, #40 and #14.
-- Build 4 (#25) owns removal of the built `keys.env` reader, `baley exec --key` credential wrapper and HTTPS model lister and credential lookup; its task breakdown is not written yet. The removal seams are `crates/baley/src/keys.rs`, `crates/baley/src/exec.rs` and `crates/baley/src/detection/`, with `baley init` switching to seeding.
+- Build 4 (#25) owns removal of the built `keys.env` reader, `baley exec --key` credential wrapper and HTTPS model lister and credential lookup, as T2 in the [Build 4 table](#build-4-planning). The removal seams are `crates/baley/src/keys.rs`, `crates/baley/src/exec.rs` and `crates/baley/src/detection/`, with `baley init` switching to seeding.
 - The release design #14 owns the signed checksum manifest's signature format, trust root and both verifiers, including qualification and any new dependency. Both `install.sh` and the updater now check SHA-256 against an unsigned manifest in `verify_download` before staging. T14 and T17 use unsigned development artifacts only, and nothing is released before #14 supplies and qualifies signature verification. Removing old versions also belongs to #14.
 - Build 3 T14 now provides `baley update`, the opt-in detached check started by `baley serve`, the development `install.sh`, ledger update claims and events, and staged binaries at `~/.local/lib/crenshawdev/baley/versions/<version>/baley`. The placement map projects the versions folder for write-only protection, and the security proposal renders its denials. T14 leaves the view set at 7 and records update events only in `user`, adding no event type to the session's project. T17 qualified the live install script, the update path and a newer stable-path hook beside an older running server and its ledger state; its bullet below holds the results. T11 supplies the installed executable path to the protected-path projection.
 - Build 3 T15 provides `baley install [--host claude-code]`, which writes Claude Code's wiring at the stable path. The Claude folder is `CLAUDE_CONFIG_DIR` when it is set, else `~/.claude`, and one derivation of the stable path and the Claude folder serves install, the live guard and the doctor. Install writes the user settings file `<Claude folder>/settings.json` with the pre-tool hook, the `permissions.deny` rules and the sandbox block merged into the owner's settings, the skill stubs under `<Claude folder>/skills/`, and the user-scope MCP registration, which it has Claude Code write through `claude mcp add-json` and never writes itself. It replaces an artifact only when this binary's own render or `install.recorded` shows Baley wrote it. Otherwise it refuses `install-ownership-conflict` or `install-settings-conflict` before any write. Then it seeds the catalog and records `install.recorded` in `user`. The `install` view holds those records, so the view set rises from 7 to 8, and a binary built before T15 is read-only on `user` once a newer binary has brought its views to 8. The live guard now protects the placed stubs, the settings file, the registration file and the executable, and the versions folder as write-only. The doctor judges only what the install record shows, so a machine that never ran install still reports every artifact as not installed. An owner setting that weakens protection, a missing `bwrap` or `socat` on Linux, or nothing runnable at the stable path makes the install partial: the receipt names each gap with its fix and the command exits 1. Install writes nothing to `config.toml`. T16 builds on the settings file and the install record, as the next bullet says. T17's doctor reads the derived placements and the record in its installed-result checks, and the live install and Claude Code sessions on the written wiring ran in T17's qualification. Two cases are filed and not closed: a registration changed between install's check and its removal of the old entry ([#251](https://github.com/crenshawdev/baley/issues/251)), and an older recorded hook removed while nothing runnable is at the stable path ([#252](https://github.com/crenshawdev/baley/issues/252)).
