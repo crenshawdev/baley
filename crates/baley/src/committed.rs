@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use baley_core::policy::{Fault, SettingsFile, Unavailable};
 
+use crate::checkout::redact_git_text;
 use crate::git_process::{self, Caller};
 use crate::guard_budget::Budget;
 use crate::process::{Launch, Output, Process};
@@ -318,14 +319,12 @@ pub(crate) fn failed(launch: &Launch, output: &Output) -> String {
     }
 }
 
-/// Git's first stderr line as an error states it.
+/// Git's first stderr line as an error states it, without control characters
+/// or the user information of any URL in it. Every refusal and guard excerpt
+/// in this file and in checkout gathering takes git's words from here.
 fn stderr_text(output: &Output) -> String {
     let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
-    // Control characters from the repository never reach the owner's terminal.
-    String::from_utf8_lossy(first)
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect()
+    redact_git_text(&String::from_utf8_lossy(first))
 }
 
 pub(crate) fn command(launch: &Launch) -> String {
@@ -706,6 +705,37 @@ mod tests {
         let refused = guard_read(&mut warned, &mut budget_at(secs(0))).unwrap_err();
         assert_eq!(refused.excerpt, None);
         assert!(!cause(&refused.refusal).contains("SENTINEL"));
+    }
+
+    #[test]
+    fn a_remote_user_or_token_in_a_config_reason_checkout_refusal_or_guard_excerpt_is_caught() {
+        let stderr = "fatal: unable to access 'https://alice:ghp_tok@host/o/r.git/': \
+                      Could not resolve host: host\n";
+        let shown = "fatal: unable to access 'https://host/o/r.git/': Could not resolve host: host";
+        let failure = format!("git rev-parse --verify -q HEAD exited with code 128: {shown}");
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let reason = read_at("/r/baley.toml", &mut fake).unwrap_err().to_string();
+        assert_eq!(
+            reason,
+            format!("config-unavailable: cannot read /r/baley.toml: HEAD's copy: {failure}")
+        );
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let refusal = crate::checkout::root_commit(Path::new(ROOT), &mut fake).unwrap_err();
+        assert_eq!(refusal, failure);
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let refused = guard_read(&mut fake, &mut budget_at(secs(0))).unwrap_err();
+        assert_eq!(refused.excerpt.as_deref(), Some(shown));
+        assert_eq!(cause(&refused.refusal), format!("HEAD's copy: {failure}"));
+
+        for text in [&reason, &refusal, refused.excerpt.as_ref().unwrap()] {
+            assert!(
+                !text.contains("alice") && !text.contains("ghp_tok"),
+                "{text}"
+            );
+        }
     }
 
     #[test]
