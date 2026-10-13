@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use baley_core::policy::{Fault, SettingsFile, Unavailable};
 
+use crate::checkout::redact_git_text;
 use crate::git_process::{self, Caller};
 use crate::guard_budget::Budget;
 use crate::process::{Launch, Output, Process};
@@ -77,8 +78,8 @@ pub fn read(
 /// refuses one.
 const GUARD_OUTPUT_LIMIT: usize = settings::GUARD_LIMIT;
 
-/// Bytes kept of git's first stderr line in a guard read's error, so the
-/// error cannot carry a flood of output or any later line.
+/// Bytes kept of git's redacted first stderr line in a guard read's error,
+/// so the error cannot carry a flood of output or any later line.
 const GUARD_EXCERPT_LIMIT: usize = 256;
 
 /// A guard read's refusal, with git's own words kept apart from Baley's.
@@ -86,8 +87,8 @@ const GUARD_EXCERPT_LIMIT: usize = 256;
 pub struct GuardRefusal {
     /// The refusal as the live answer states it, git's excerpt included.
     pub refusal: Unavailable,
-    /// The excerpt of git's stderr that ends the refusal's cause, when it
-    /// carries one. A guard record keeps the cause without it.
+    /// The excerpt of git's redacted stderr that ends the refusal's cause,
+    /// when it carries one. A guard record keeps the cause without it.
     pub excerpt: Option<String>,
 }
 
@@ -98,8 +99,8 @@ pub struct GuardRefusal {
 /// they share git's one allowance with the branch lookup. With no time left
 /// nothing launches and the read is refused. Each stream keeps at most
 /// `GUARD_OUTPUT_LIMIT` bytes (1 MiB), and an error keeps at most
-/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line, which the
-/// refusal also gives apart.
+/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line, redacted
+/// before the cut, which the refusal also gives apart.
 ///
 /// The guard hook is its caller: it reads HEAD's copy at the session
 /// project's root after the branch lookup, on the same budget.
@@ -197,13 +198,13 @@ fn sequence(
     })
 }
 
-/// Keeps only the start of git's first stderr line, cut on a character
-/// boundary, for a guard read's error text.
+/// Keeps only the start of git's first stderr line as `stderr_text` gives it,
+/// cut on a character boundary, for a guard read's error text. The cut comes
+/// after redaction, so a URL crossing it still has its `@` for the scan.
 fn first_line_excerpt(mut output: Output) -> Output {
-    let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
-    let text = String::from_utf8_lossy(first);
-    let end = text.floor_char_boundary(GUARD_EXCERPT_LIMIT);
-    output.stderr = text.as_bytes()[..end].to_vec();
+    let mut text = stderr_text(&output);
+    text.truncate(text.floor_char_boundary(GUARD_EXCERPT_LIMIT));
+    output.stderr = text.into_bytes();
     output
 }
 
@@ -318,14 +319,12 @@ pub(crate) fn failed(launch: &Launch, output: &Output) -> String {
     }
 }
 
-/// Git's first stderr line as an error states it.
+/// Git's first stderr line as an error states it, without control characters
+/// or the user information of any URL in it. Every refusal and guard excerpt
+/// in this file and in checkout gathering takes git's words from here.
 fn stderr_text(output: &Output) -> String {
     let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
-    // Control characters from the repository never reach the owner's terminal.
-    String::from_utf8_lossy(first)
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect()
+    redact_git_text(&String::from_utf8_lossy(first))
 }
 
 pub(crate) fn command(launch: &Launch) -> String {
@@ -706,6 +705,62 @@ mod tests {
         let refused = guard_read(&mut warned, &mut budget_at(secs(0))).unwrap_err();
         assert_eq!(refused.excerpt, None);
         assert!(!cause(&refused.refusal).contains("SENTINEL"));
+    }
+
+    #[test]
+    fn a_remote_user_or_token_in_a_config_reason_checkout_refusal_or_guard_excerpt_is_caught() {
+        let stderr = "fatal: unable to access 'https://alice:ghp_tok@host/o/r.git/': \
+                      Could not resolve host: host\n";
+        let shown = "fatal: unable to access 'https://host/o/r.git/': Could not resolve host: host";
+        let failure = format!("git rev-parse --verify -q HEAD exited with code 128: {shown}");
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let reason = read_at("/r/baley.toml", &mut fake).unwrap_err().to_string();
+        assert_eq!(
+            reason,
+            format!("config-unavailable: cannot read /r/baley.toml: HEAD's copy: {failure}")
+        );
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let refusal = crate::checkout::root_commit(Path::new(ROOT), &mut fake).unwrap_err();
+        assert_eq!(refusal, failure);
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let refused = guard_read(&mut fake, &mut budget_at(secs(0))).unwrap_err();
+        assert_eq!(refused.excerpt.as_deref(), Some(shown));
+        assert_eq!(cause(&refused.refusal), format!("HEAD's copy: {failure}"));
+
+        for text in [&reason, &refusal, refused.excerpt.as_ref().unwrap()] {
+            assert!(
+                !text.contains("alice") && !text.contains("ghp_tok"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_token_crossing_the_guard_excerpt_cut_left_in_the_answer_is_caught() {
+        // The token spans bytes 244 to 279 and its `@` is byte 280, past the cut.
+        let lead = format!("fatal: {}", "a ".repeat(111));
+        let stderr = format!(
+            "{lead}'https://alice:ghp_0123456789abcdef0123456789abcdef@host/o/r.git/': \
+             Could not resolve host: host\n"
+        );
+        let excerpt = format!("{lead}'https://host/o/r.git/': Co");
+        assert_eq!(excerpt.len(), 256);
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let refused = guard_read(&mut fake, &mut budget_at(secs(0))).unwrap_err();
+
+        assert_eq!(refused.excerpt.as_deref(), Some(excerpt.as_str()));
+        let cause = cause(&refused.refusal);
+        assert_eq!(
+            cause,
+            format!("HEAD's copy: git rev-parse --verify -q HEAD exited with code 128: {excerpt}")
+        );
+        for text in [cause, &excerpt] {
+            assert!(!text.contains("alice") && !text.contains("ghp_"), "{text}");
+        }
     }
 
     #[test]

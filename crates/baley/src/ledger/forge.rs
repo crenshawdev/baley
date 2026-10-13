@@ -1,6 +1,7 @@
 //! Git observations for immutable tags without local references.
 use super::{CliRefusal, anchor_plan::configured};
 use crate::{
+    checkout::redact_git_text,
     git_process::{self, Caller},
     process::{Output, Process},
 };
@@ -37,8 +38,7 @@ impl<P: Process> GitForge<P> {
         match git_process::run(&launch, &mut self.process) {
             Ok(output) => {
                 if !output.success() || !output.complete() {
-                    self.last_error =
-                        Some(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+                    self.last_error = Some(stderr_text(&output.stderr));
                 }
                 if output.complete() {
                     Some(output)
@@ -50,7 +50,9 @@ impl<P: Process> GitForge<P> {
                 }
             }
             Err(error) => {
-                self.last_error = Some(error.to_string());
+                // A deadline's text quotes the git command line, whose
+                // arguments hold the raw push URL.
+                self.last_error = Some(redact_git_text(&error.to_string()));
                 None
             }
         }
@@ -107,6 +109,22 @@ pub(crate) fn not_configured(name: &str, root: &Path) -> String {
     )
 }
 
+/// Git's whole stderr as a diagnostic. Each line goes through the redaction
+/// on its own and the line breaks between lines stay, so a `fatal:` line after
+/// a `warning:` line still reaches the owner. The redaction drops control
+/// characters, a tab indent among them, and keeps space indentation. The
+/// whole text is then trimmed, which drops the first line's leading
+/// whitespace, the last line's trailing whitespace and blank lines at either
+/// end.
+fn stderr_text(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .split('\n')
+        .map(redact_git_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
+}
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).into()).collect()
 }
@@ -130,7 +148,7 @@ pub(super) fn push_url(output: Output) -> Result<String, String> {
     if !output.success() {
         return Err(format!(
             "push URL lookup failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr_text(&output.stderr)
         ));
     }
     let text = String::from_utf8(output.stdout)
@@ -197,7 +215,7 @@ pub(super) fn push_observation(output: &Output, tag: &str) -> PushObservation {
             "*" | "=" => return PushObservation::Unreachable,
             "!" => {
                 return PushObservation::Refused {
-                    reason: columns[2].into(),
+                    reason: redact_git_text(columns[2]),
                 };
             }
             _ => {}
@@ -764,6 +782,113 @@ mod tests {
         assert_eq!(
             f.require_remote("o").unwrap_err().to_string(),
             "baley: remote o is not configured in the git repository at /fixture"
+        );
+    }
+    /// A forge whose push of `TAG` to `origin` gets `push` after the remote,
+    /// URL, tree and tag object launches succeed.
+    fn pushing(push: Output) -> GitForge<Recorded> {
+        forge(
+            Recorded::new()
+                .out("origin\n")
+                .out("/fixture/remote.git\n")
+                .out(format!("{}\n", "a".repeat(40)))
+                .out(format!("{}\n", "b".repeat(40)))
+                .answer(push),
+        )
+    }
+    #[test]
+    fn a_remote_password_recorded_or_printed_by_an_anchor_failure_or_a_git_line_dropped_is_caught()
+    {
+        let mut f = pushing(Output::exited(
+            128,
+            "",
+            "warning: URL 'https://alice:<redacted>@host/o/r.git' uses plaintext credentials\n\
+             fatal: unable to access 'https://alice:secret@host/o/r.git/': The requested URL returned error: 403\n",
+        ));
+        assert_eq!(
+            f.push_tag(&p(), "origin", "TAG", "note\n"),
+            PushObservation::Unreachable
+        );
+        assert_eq!(
+            f.last_error.as_deref(),
+            Some(
+                "warning: URL 'https://host/o/r.git' uses plaintext credentials\n\
+                 fatal: unable to access 'https://host/o/r.git/': The requested URL returned error: 403"
+            )
+        );
+
+        let mut f = pushing(Output::exited(
+            1,
+            format!(
+                "!\t{}:refs/tags/TAG\t[remote rejected] (https://alice:secret@host/o/r.git denied the tag)\n",
+                "b".repeat(40)
+            ),
+            "error: failed to push some refs to 'https://alice:secret@host/o/r.git'\n",
+        ));
+        assert_eq!(
+            f.push_tag(&p(), "origin", "TAG", "note\n"),
+            PushObservation::Refused {
+                reason: "[remote rejected] (https://host/o/r.git denied the tag)".into()
+            }
+        );
+        assert_eq!(
+            f.last_error.as_deref(),
+            Some("error: failed to push some refs to 'https://host/o/r.git'")
+        );
+    }
+    #[test]
+    fn a_remote_password_in_a_failed_push_url_lookup_or_its_second_line_lost_is_caught() {
+        assert_eq!(
+            push_url(Output::exited(
+                2,
+                "",
+                "warning: URL 'https://alice:<redacted>@host/o/r.git' uses plaintext credentials\n  \
+                 (indented detail)\nerror: No such remote 'https://alice:secret@host/o/r.git'\n"
+            )),
+            Err(
+                "push URL lookup failed: warning: URL 'https://host/o/r.git' uses plaintext \
+                 credentials\n  (indented detail)\nerror: No such remote 'https://host/o/r.git'"
+                    .into()
+            )
+        );
+    }
+    #[test]
+    fn control_characters_from_a_remote_in_the_printed_git_text_are_caught() {
+        let mut f = pushing(Output::exited(
+            128,
+            "",
+            "remote: \u{1b}[31mdenied\u{1b}[0m\u{9b}\r\nfatal: the remote end hung up unexpectedly\n",
+        ));
+        assert_eq!(
+            f.push_tag(&p(), "origin", "TAG", "note\n"),
+            PushObservation::Unreachable
+        );
+        assert_eq!(
+            f.last_error.as_deref(),
+            Some("remote: [31mdenied[0m\nfatal: the remote end hung up unexpectedly")
+        );
+    }
+    #[test]
+    fn a_remote_password_in_a_timed_out_git_command_line_printed_is_caught() {
+        let mut f = forge(
+            Recorded::new()
+                .out("origin\n")
+                .out("https://alice:secret@host/o/r.git\n")
+                .out(format!("{}\n", "a".repeat(40)))
+                .out(format!("{}\n", "b".repeat(40)))
+                .unavailable(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
+        );
+        assert_eq!(
+            f.push_tag(&p(), "origin", "TAG", "note\n"),
+            PushObservation::Unreachable
+        );
+        assert_eq!(
+            f.last_error,
+            Some(format!(
+                "git push --porcelain --no-verify https://host/o/r.git {}:refs/tags/TAG \
+                 exceeded git deadline of 60 seconds",
+                "b".repeat(40)
+            ))
         );
     }
 }
