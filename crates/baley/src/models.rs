@@ -22,13 +22,20 @@ use baley_store::{
 use baley_store_sqlite::SqliteStore;
 use serde_json::{Value, json};
 
-use crate::detection::{Detection, ProviderOutcome, Recording, Trigger, detect_blocking};
+use baley_core::policy::{FileLayer, Schema, parse_layer};
+
+use crate::config_command::reviewers;
+use crate::detection::{Detection, ProviderOutcome, Recording, fetch_command};
 use crate::folders::{Environment, Folders, Platform};
-use crate::keys::{self, KeysRefusal};
+use crate::keys::KeysRefusal;
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
+use crate::providers;
+use crate::providers::record::covered_by;
+use crate::providers::warning::warning_sha256;
+use crate::settings;
 
 /// The command kind the seeding step records under.
 pub const SEED_COMMAND: &str = "models.seed";
@@ -39,6 +46,10 @@ pub const REMOVE_COMMAND: &str = "models.remove";
 /// The name the `user` project is created with, as `doctor` and `export`
 /// show it.
 pub const USER_PROJECT_NAME: &str = "per-user records";
+/// Why `baley models update` prints no fetch command: a provider it would
+/// cover has no current acknowledgement. Design 0008 refuses a review with
+/// the same reason.
+pub const PROVIDER_NOT_ACKNOWLEDGED: &str = "provider-not-acknowledged";
 
 fn user() -> ProjectId {
     ProjectId(USER_PROJECT.into())
@@ -299,9 +310,11 @@ enum ModelsCommand {
         #[arg(value_name = "NAME", value_parser = model_name)]
         name: String,
     },
-    /// Refresh the openai and deepseek catalogs from each provider's model
-    /// list, with the keys in keys.env. Every provider with a key when none
-    /// is named. A failed detection is reported and exits 0.
+    /// Print the shell command that fetches each provider's model list from
+    /// your environment's key and pipes it into baley models import. With
+    /// none named, covers the providers review.reviewers selects that have a
+    /// current acknowledgement. A provider without one refuses the run with
+    /// provider-not-acknowledged; run baley config interview to acknowledge.
     Update {
         /// openai or deepseek.
         #[arg(value_name = "PROVIDER")]
@@ -446,21 +459,80 @@ pub fn named_providers(names: &[String]) -> Result<Vec<Provider>, String> {
     Ok(named)
 }
 
+// Reads no key and no environment value, and records nothing.
 fn update(names: &[String], started_at: &str) -> Result<Render, Render> {
     let folders = folders()?;
     let named = named_providers(names).map_err(|e| refuse(&e))?;
-    let keys = keys::load(&folders.config);
-    // Opened without seeding: the run seeds only when it records.
+    // A named provider is never filtered by the selection, so the global
+    // file is read only when none is named.
+    let selected = if named.is_empty() {
+        let file = settings::read(&settings::global_path(&folders)).map_err(|e| refuse(&e))?;
+        let layer = file
+            .map(|file| parse_layer(&file, FileLayer::Global, Schema::standard()))
+            .transpose()
+            .map_err(|e| refuse(&e))?;
+        reviewers::stored(layer.as_ref()).providers
+    } else {
+        Vec::new()
+    };
+    // Not `open_seeded`: printing a command never seeds or creates `user`.
     let store = open::store(&folders.home, started_at, open::options())
         .map_err(|e| display::store_error(&e, None))?;
-    let detection = detect_blocking(&store, keys.as_ref(), &Trigger::Owner(named), started_at)
-        .map_err(failed)?;
-    let keys_file = folders.config.join("keys.env");
-    Ok(Render {
-        lines: update_lines(&detection, keys.as_ref().err(), &keys_file),
+    let stored = providers::record::read(&store).map_err(failed)?;
+    Ok(update_decision(&named, &selected, &stored.payloads))
+}
+
+/// What `baley models update` prints, from the providers named, the
+/// providers `review.reviewers` selects (read only when none is named) and
+/// the stored acknowledgement payloads. A provider is acknowledged when any
+/// payload covers it at the compiled warning. A named provider without one
+/// refuses the whole run, so a script never sees a partial set; with none
+/// named, the providers both selected and acknowledged get a command, and
+/// none of them refuses. Commands come in catalog order, one per line.
+pub(crate) fn update_decision(
+    named: &[Provider],
+    selected: &[Provider],
+    payloads: &[Value],
+) -> Render {
+    let digest = warning_sha256();
+    let acknowledged = |provider: &Provider| {
+        payloads
+            .iter()
+            .any(|payload| covered_by(payload, &digest).contains(&provider.name()))
+    };
+    let covered: Vec<Provider> = if named.is_empty() {
+        let covered: Vec<Provider> = Provider::ALL
+            .into_iter()
+            .filter(|provider| selected.contains(provider) && acknowledged(provider))
+            .collect();
+        if covered.is_empty() {
+            return Render::refusal(format!(
+                "{PROVIDER_NOT_ACKNOWLEDGED}: review.reviewers selects no provider with a current acknowledgement; run baley config interview"
+            ));
+        }
+        covered
+    } else {
+        let missing: Vec<&str> = Provider::ALL
+            .into_iter()
+            .filter(|provider| named.contains(provider) && !acknowledged(provider))
+            .map(Provider::name)
+            .collect();
+        if !missing.is_empty() {
+            return Render::refusal(format!(
+                "{PROVIDER_NOT_ACKNOWLEDGED}: no current acknowledgement for {}; run baley config interview",
+                missing.join(", ")
+            ));
+        }
+        Provider::ALL
+            .into_iter()
+            .filter(|provider| named.contains(provider))
+            .collect()
+    };
+    Render {
+        lines: covered.into_iter().map(fetch_command).collect(),
         code: 0,
         error: false,
-    })
+    }
 }
 
 fn owner(
@@ -1490,6 +1562,151 @@ mod tests {
                     "deepseek: detection failed: keys-file-exposed; the previous list is kept",
                 ]
             );
+        }
+    }
+
+    mod update_decision {
+        use baley_core::catalog::Provider::{self, DeepSeek, OpenAi};
+        use serde_json::{Value, json};
+
+        use crate::ledger::display::{self, Render};
+        use crate::models::update_decision;
+        use crate::providers::fixtures::{DESIGN_WARNING, sha256_hex};
+
+        // Task 1's lines as the plan writes them, not from `fetch_command`.
+        const OPENAI_LINE: &str = r#"{ s=$(printf 'Authorization: Bearer %s\n' "$OPENAI_API_KEY" | curl --disable --silent --show-error --proto =https --max-time 20 --max-filesize 4194304 --header @- --output /dev/fd/3 --write-out '%{http_code}' https://api.openai.com/v1/models); e=$?; if [ "$e" -eq 0 ]; then printf '\nbaley-fetch status=%s complete=true\n' "$s"; elif [ "$e" -eq 63 ]; then printf '\nbaley-fetch status=%s complete=false\n' "$s"; else printf '\nbaley-fetch transport-failed\n'; fi; } 3>&1 | baley models import openai"#;
+        const DEEPSEEK_LINE: &str = r#"{ s=$(printf 'Authorization: Bearer %s\n' "$DEEPSEEK_API_KEY" | curl --disable --silent --show-error --proto =https --max-time 20 --max-filesize 4194304 --header @- --output /dev/fd/3 --write-out '%{http_code}' https://api.deepseek.com/models); e=$?; if [ "$e" -eq 0 ]; then printf '\nbaley-fetch status=%s complete=true\n' "$s"; elif [ "$e" -eq 63 ]; then printf '\nbaley-fetch status=%s complete=false\n' "$s"; else printf '\nbaley-fetch transport-failed\n'; fi; } 3>&1 | baley models import deepseek"#;
+        const NONE_SELECTED: &str = "provider-not-acknowledged: review.reviewers selects no provider with a current acknowledgement; run baley config interview";
+
+        fn payload(providers: &[&str], warning: &str) -> Value {
+            json!({
+                "providers": providers,
+                "warning_version": 1,
+                "warning_sha256": sha256_hex(warning),
+            })
+        }
+
+        fn current(providers: &[&str]) -> Value {
+            payload(providers, DESIGN_WARNING)
+        }
+
+        fn older(providers: &[&str]) -> Value {
+            payload(providers, "an older warning")
+        }
+
+        fn unacknowledged(names: &str) -> String {
+            format!(
+                "provider-not-acknowledged: no current acknowledgement for {names}; run baley config interview"
+            )
+        }
+
+        fn check(render: &Render, code: u8, error: bool, lines: &[&str]) {
+            assert_eq!(render.code, code, "{render:?}");
+            assert_eq!(render.error, error, "{render:?}");
+            assert_eq!(render.lines, lines, "{render:?}");
+        }
+
+        fn decide(named: &[Provider], selected: &[Provider], payloads: &[Value]) -> Render {
+            update_decision(named, selected, payloads)
+        }
+
+        #[test]
+        fn an_unacknowledged_named_provider_refuses_the_whole_run_without_a_fetch_command() {
+            let render = decide(&[OpenAi, DeepSeek], &[], &[current(&["openai"])]);
+
+            check(&render, 2, true, &[&unacknowledged("deepseek")]);
+            assert!(
+                !render
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("curl") || line.contains(OPENAI_LINE)),
+                "{render:?}"
+            );
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            assert_eq!(display::emit(&render, &mut out, &mut err), 2);
+            assert!(out.is_empty());
+            assert_eq!(
+                String::from_utf8(err).unwrap(),
+                format!("baley: {}\n", unacknowledged("deepseek"))
+            );
+        }
+
+        #[test]
+        fn with_no_name_only_a_selected_acknowledged_provider_gets_a_fetch_command() {
+            let render = decide(&[], &[OpenAi], &[current(&["openai", "deepseek"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn a_named_provider_is_never_filtered_by_review_reviewers() {
+            let render = decide(&[OpenAi], &[], &[current(&["openai"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn nothing_selected_and_acknowledged_refuses_without_a_fetch_command() {
+            let render = decide(&[], &[DeepSeek], &[current(&["openai"])]);
+            check(&render, 2, true, &[NONE_SELECTED]);
+        }
+
+        #[test]
+        fn an_acknowledgement_of_another_warning_text_does_not_count() {
+            let render = decide(&[OpenAi], &[], &[older(&["openai"])]);
+            check(&render, 2, true, &[&unacknowledged("openai")]);
+        }
+
+        #[test]
+        fn every_named_acknowledged_provider_gets_its_command_in_catalog_order() {
+            let payloads = [current(&["deepseek"]), current(&["openai"])];
+            let render = decide(&[DeepSeek, OpenAi], &[], &payloads);
+            check(&render, 0, false, &[OPENAI_LINE, DEEPSEEK_LINE]);
+        }
+
+        #[test]
+        fn every_unacknowledged_named_provider_is_named_in_catalog_order() {
+            let render = decide(&[DeepSeek, OpenAi], &[], &[]);
+            check(&render, 2, true, &[&unacknowledged("openai, deepseek")]);
+        }
+
+        #[test]
+        fn a_named_run_prints_only_the_named_providers() {
+            let render = decide(&[OpenAi], &[], &[current(&["openai", "deepseek"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn with_no_name_a_selected_but_unacknowledged_provider_is_left_out() {
+            let render = decide(&[], &[OpenAi, DeepSeek], &[current(&["openai"])]);
+            check(&render, 0, false, &[OPENAI_LINE]);
+        }
+
+        #[test]
+        fn an_older_acknowledgement_beside_a_current_one_counts_only_where_it_is_current() {
+            let first = [older(&["openai", "deepseek"]), current(&["deepseek"])];
+            check(
+                &decide(&[DeepSeek], &[], &first),
+                0,
+                false,
+                &[DEEPSEEK_LINE],
+            );
+            let second = [current(&["deepseek"]), older(&["openai"])];
+            check(
+                &decide(&[OpenAi], &[], &second),
+                2,
+                true,
+                &[&unacknowledged("openai")],
+            );
+        }
+
+        #[test]
+        fn an_empty_selection_refuses_even_with_acknowledged_providers() {
+            let selection = crate::config_command::reviewers::stored(None);
+            let render = decide(
+                &[],
+                &selection.providers,
+                &[current(&["openai", "deepseek"])],
+            );
+            check(&render, 2, true, &[NONE_SELECTED]);
         }
     }
 

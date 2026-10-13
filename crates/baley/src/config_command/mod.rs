@@ -9,7 +9,7 @@
 //! `lib.rs` and `main.rs` until Build 9.
 
 mod interview;
-mod reviewers;
+pub(crate) mod reviewers;
 mod set;
 mod show;
 

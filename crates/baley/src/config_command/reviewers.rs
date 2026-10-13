@@ -16,9 +16,9 @@ const HOST: &str = "host";
 
 /// The outside providers in force and the layer they came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Selection {
+pub(crate) struct Selection {
     /// The outside providers, each once, in catalog order.
-    pub(super) providers: Vec<Provider>,
+    pub(crate) providers: Vec<Provider>,
     /// `global` when the global file writes the setting, else `default`.
     pub(super) layer: &'static str,
 }
@@ -63,7 +63,7 @@ pub(super) fn written(global: Option<&ParsedLayer>) -> Option<Vec<String>> {
 /// The selection the global file stores. `host` is the host's own reviewer, not
 /// an outside provider. With no value written the selection is none from
 /// `default`.
-pub(super) fn stored(global: Option<&ParsedLayer>) -> Selection {
+pub(crate) fn stored(global: Option<&ParsedLayer>) -> Selection {
     let Some(names) = written(global) else {
         return Selection::none();
     };
