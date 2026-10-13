@@ -398,7 +398,7 @@ Ranked recall and exact "why" queries, then task, debug and spike on the ledger.
 
 [#30](https://github.com/crenshawdev/baley/issues/30) · milestone Evidence · planned
 
-Removes the old JSON record, the intent journal, participants, root binding, the Markdown renderers and parsers, and every `.planning` path. Builds `baley show` and record export to Markdown (EVD-R25), with the record-export spelling settled beside the standalone project export. Every owner command and every served instruction then reads the ledger. The real server's memory, start time and main operations are measured against design 0001's budgets. The timings are recorded as measurements, not test assertions.
+Removes the old JSON record, the intent journal, participants, root binding, the Markdown renderers and parsers, and every `.planning` path. Builds `baley show` and record export to Markdown (EVD-R25), with the record-export spelling settled beside the standalone project export. Every owner command and every served instruction then reads the ledger. It also deletes the parked review engine (`crates/baley/src/inherited.rs` and the review code only it reaches), including its credentials reader (`crates/baley/src/review/provider/credentials.rs`), which still reads environment keys and `providers.env`. The real server's memory, start time and main operations are measured against design 0001's budgets. The timings are recorded as measurements, not test assertions.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0012 host interface](design/0012-host-interface.md), [0014 support families](design/0014-support-families.md)
 - ADRs: [0006 no Markdown records](adr/0006-no-markdown-records.md), [0009 served instructions](adr/0009-served-instructions.md)
