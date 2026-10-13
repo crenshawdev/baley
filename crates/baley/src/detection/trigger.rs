@@ -21,6 +21,14 @@ pub fn key_name(provider: Provider) -> &'static str {
     }
 }
 
+/// The address of `provider`'s model list.
+pub fn list_address(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => "https://api.openai.com/v1/models",
+        Provider::DeepSeek => "https://api.deepseek.com/models",
+    }
+}
+
 /// What started a detection run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {

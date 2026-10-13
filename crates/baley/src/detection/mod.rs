@@ -3,6 +3,7 @@
 //! CFG-R21). The judging lives in `baley_core::catalog::detection`; this
 //! module gathers each listing with its key and records the outcome.
 
+mod fetch;
 mod lister;
 mod record;
 mod trigger;
@@ -10,12 +11,20 @@ mod trigger;
 use baley_core::catalog::{ListingRow, Provider};
 use baley_store::{Admin, Ledger, StoreError, Views};
 
+pub use fetch::fetch_command;
 pub use lister::{HttpLister, ModelLister};
 pub use record::{Recording, detection_request, record, unverifiable};
 pub use trigger::{
     Action, DETECT_COMMAND, KeysRead, Steps, Trigger, UPDATE_COMMAND, judge, key_name,
-    refusal_category,
+    list_address, refusal_category,
 };
+
+/// The most body bytes one model list may hold: the fetch command's
+/// `--max-filesize` and the bound `import` checks.
+pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// How many seconds one fetch may take, body included.
+pub(crate) const DEADLINE_SECONDS: u64 = 20;
 
 use crate::keys::{Keys, KeysRefusal};
 use crate::ledger::commands::new_request_id;
