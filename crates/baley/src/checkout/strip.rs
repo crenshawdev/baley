@@ -59,8 +59,10 @@ pub fn redact_git_text(text: &str) -> String {
     let mut redacted = String::with_capacity(text.len());
     let mut copied = 0;
     let mut from = 0;
-    // Each search starts past the last URL's authority, so the scan stays
-    // linear on the guard's 1 MiB line.
+    // Each search resumes just past the last `://`, so a `://` whose colon
+    // closes an authority is still found. An authority holds no `/`, so no
+    // other `://` sits inside one and the scan stays linear on the guard's
+    // 1 MiB line.
     while let Some(found) = text[from..].find("://") {
         let colon = from + found;
         let authority = colon + 3;
@@ -77,7 +79,6 @@ pub fn redact_git_text(text: &str) -> String {
             redacted.push_str(&text[copied..authority]);
             copied = authority + at + 1;
         }
-        from = end;
     }
     redacted.push_str(&text[copied..]);
     redacted
