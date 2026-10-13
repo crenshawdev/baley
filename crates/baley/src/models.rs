@@ -682,7 +682,9 @@ fn owner(
     })
 }
 
-fn seed_line() -> String {
+/// The line printed when a seed was recorded. Init, `models list` and the other
+/// catalog commands print the same one.
+pub(crate) fn seed_line() -> String {
     format!("seeded the model catalog with hint table version {HINT_VERSION}")
 }
 

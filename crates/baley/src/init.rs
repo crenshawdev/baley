@@ -15,13 +15,12 @@ use baley_core::{PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION};
 use baley_store::{
     Actor, Admin, Command, CommandKind, Decision, EVENT_PAGE_BOUND, EventMatch, Ledger, NewEvent,
     Observed, OutcomeKind, PageRequest, ProjectId, Refusal, RequestId, StoreError, StreamName,
-    request_digest,
+    Views, request_digest,
 };
 use clap::Args;
 use serde_json::json;
 
 use crate::checkout::{self, EntryError};
-use crate::detection::{Trigger, detect_blocking};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
 use crate::ledger::clock::SystemClock;
@@ -29,7 +28,7 @@ use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
 use crate::policy_step::{self, Reads};
-use crate::{keys, replace, settings};
+use crate::{models, replace, settings};
 
 /// The working directory is not inside a git repository.
 pub const NOT_A_REPOSITORY: &str = "not-a-repository";
@@ -427,9 +426,9 @@ pub struct LedgerObservation {
 /// replaces its id, then takes the empty-chain order: the fresh project has
 /// no chain yet.
 ///
-/// The policy step, like detection, is not a step of the plan: on every run
-/// that passes the refusals it runs after the steps and before detection,
-/// and it appends nothing while the policy is unchanged.
+/// The policy step, like seeding, is not a step of the plan: on every run
+/// that passes the refusals it runs after the steps and before seeding, and
+/// it appends nothing while the policy is unchanged.
 pub fn plan(file: FileAction, ledger: LedgerObservation) -> Vec<Step> {
     match (file, ledger) {
         // A new id has nothing to look up, and its chain is empty.
@@ -716,16 +715,26 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
             folders.home.display()
         ));
     }
-    // Silent whatever it finds: its outcome never changes what init prints
-    // or returns. The providers run side by side, so a dead network costs
-    // one request timeout.
-    let keys = keys::load(&folders.config);
-    let _ = detect_blocking(&store, keys.as_ref(), &Trigger::Automatic, started_at);
+    // After the steps, so the "already initialized" run seeds too. Nothing
+    // here sends a request.
+    lines.extend(seed_step(&store, started_at));
     Ok(Render {
         lines,
         code: 0,
         error: false,
     })
+}
+
+/// Init's seed step: records the model catalog seed when it is due, as
+/// install and `baley update seed` do, and gives the line init prints.
+fn seed_step(store: &(impl Admin + Views + Ledger), at: &str) -> Option<String> {
+    seed_outcome_line(&models::seed(store, new_request_id(), at))
+}
+
+/// The line init prints for a seed result. A failure prints nothing and never
+/// fails init (CFG-R21): the next catalog use seeds again.
+fn seed_outcome_line(result: &Result<bool, StoreError>) -> Option<String> {
+    matches!(result, Ok(true)).then(models::seed_line)
 }
 
 /// The line printed when this run appended `project.initialized`.
@@ -1026,6 +1035,36 @@ mod tests {
             .stream(&project, &StreamName(stream.into()), 1, page)
             .unwrap()
             .items
+    }
+
+    // A matching hint version records nothing (design 0003 section 6), so
+    // the rerun prints no seed line and the stream keeps one event.
+    #[test]
+    fn init_run_twice_records_the_catalog_seed_once() {
+        let (_dir, store) = store();
+        let line = format!(
+            "seeded the model catalog with hint table version {}",
+            baley_core::catalog::HINT_VERSION
+        );
+        assert_eq!(seed_step(&store, T0), Some(line));
+        assert_eq!(seed_step(&store, T1), None);
+        let seeded: Vec<String> = events(&store, baley_core::catalog::USER_PROJECT, "models")
+            .into_iter()
+            .map(|event| event.type_name)
+            .collect();
+        assert_eq!(seeded, ["models.seeded"]);
+    }
+
+    #[test]
+    fn a_seed_failure_never_fails_init_and_nothing_unrecorded_is_printed() {
+        let line = format!(
+            "seeded the model catalog with hint table version {}",
+            baley_core::catalog::HINT_VERSION
+        );
+        assert_eq!(seed_outcome_line(&Ok(true)), Some(line));
+        assert_eq!(seed_outcome_line(&Ok(false)), None);
+        let locked = Err(StoreError::Unavailable("database is locked".into()));
+        assert_eq!(seed_outcome_line(&locked), None);
     }
 
     #[test]
