@@ -1,21 +1,20 @@
-//! One provider's detection recorded as a command of its own on `user`, and
-//! the entries a keyless provider can no longer verify (design 0003
-//! section 6, CFG-R20, CFG-R21).
+//! One provider's imported model list recorded as a command of its own on
+//! `user` (design 0003 section 6, CFG-R20, CFG-R21).
 
 use baley_core::catalog::detection::{
     Category, IdChange, Observation, Outcome, choose_event, classify,
 };
 use baley_core::catalog::{
-    Catalog, ListingRow, MODEL_CATALOG_VIEW, MODELS_STREAM, Provider, Source, USER_PROJECT,
-    catalog_key, listing, read_state, state_key,
+    Catalog, MODEL_CATALOG_VIEW, MODELS_STREAM, Provider, USER_PROJECT, catalog_key, read_state,
+    state_key,
 };
 use baley_store::{
-    Admin, Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind, ProjectId,
-    Refusal, RequestId, StoreError, StreamName, Views, request_digest,
+    Actor, Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind, ProjectId,
+    Refusal, RequestId, StoreError, StreamName, request_digest,
 };
 use serde_json::{Value, json};
 
-use super::trigger::Trigger;
+use super::trigger::IMPORT_COMMAND;
 
 fn user() -> ProjectId {
     ProjectId(USER_PROJECT.into())
@@ -23,11 +22,11 @@ fn user() -> ProjectId {
 
 /// The request-digest input of one provider's record. It names the
 /// provider and never a key or anything a provider sent.
-pub fn detection_request(provider: Provider, trigger: &Trigger) -> Value {
+pub fn detection_request(provider: Provider) -> Value {
     json!({
-        "kind": trigger.kind(),
+        "kind": IMPORT_COMMAND,
         "project": USER_PROJECT,
-        "actor": trigger.actor().as_str(),
+        "actor": Actor::Owner.as_str(),
         "policy_version": 0,
         "provider": provider.name(),
         "scope": [],
@@ -44,33 +43,32 @@ pub struct Recording {
     pub version: u64,
 }
 
-/// Records `provider`'s outcome: what the lister saw, or the category the
-/// judge gave without listing. The diff runs inside the transaction on the
+/// Records `provider`'s import as the owner under `models.import`: what the
+/// fetched list showed, or the category its bytes gave. The diff runs inside the transaction on the
 /// documents read there, so an owner change committed since the listing is
 /// never overwritten. The version it returns is read inside the same
 /// transaction, after the event, so a command another process commits
 /// later is never paired with this report. It assumes `user` exists: the
-/// run seeds first.
+/// import seeds first.
 pub fn record(
     store: &impl Ledger,
     provider: Provider,
-    trigger: &Trigger,
     seen: Result<&Observation, Category>,
     request_id: RequestId,
     at: &str,
 ) -> Result<Recording, StoreError> {
     let classified = seen.and_then(classify);
-    let digest = request_digest(&detection_request(provider, trigger))
+    let digest = request_digest(&detection_request(provider))
         .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
     let command = Command {
         project: user(),
-        kind: CommandKind(trigger.kind().into()),
+        kind: CommandKind(IMPORT_COMMAND.into()),
         request_id,
         digest,
         scope: vec![],
         policy_version: 0,
         recorded_at: at.into(),
-        actor: trigger.actor(),
+        actor: Actor::Owner,
         caller: None,
     };
     let mut recording = None;
@@ -133,38 +131,15 @@ fn answer(event: &str, outcome: &Outcome) -> Value {
     }
 }
 
-/// `provider`'s accepted detected entries, which a run without its key
-/// cannot verify. An absent `user` holds none and is not created. Nothing
-/// is recorded, so each entry keeps its last-verified time.
-pub fn unverifiable(
-    store: &(impl Admin + Views),
-    provider: Provider,
-) -> Result<Vec<ListingRow>, StoreError> {
-    if !store.projects()?.iter().any(|(known, _)| *known == user()) {
-        return Ok(vec![]);
-    }
-    let catalog = Catalog::Provider(provider);
-    let document = store.get(&user(), MODEL_CATALOG_VIEW, &catalog_key(catalog))?;
-    let rows = listing(
-        &[(catalog, document.as_ref().map(|document| &document.body))],
-        None,
-    )
-    .rows;
-    Ok(rows
-        .into_iter()
-        .filter(|row| row.source == Source::Detected)
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use baley_core::catalog::detection::ObservedResponse;
-    use baley_core::catalog::{HINT_VERSION, OwnerChange, Placement, Tier, accepted_names};
+    use baley_core::catalog::{HINT_VERSION, OwnerChange, accepted_names};
     use std::ops::RangeInclusive;
 
     use baley_store::{
-        Actor, Anchor, Claim, ClaimId, ClaimOwner, Claimed, Decide, DecideClaim, DecideReconcile,
-        Event, Head, HistoryFilter, Page, PageRequest, ReconcileAuthority, Recorded, VerifyReport,
+        Anchor, Claim, ClaimId, ClaimOwner, Claimed, Decide, DecideClaim, DecideReconcile, Event,
+        Head, HistoryFilter, Page, PageRequest, ReconcileAuthority, Recorded, VerifyReport, Views,
     };
     use baley_store_sqlite::SqliteStore;
 
@@ -256,40 +231,6 @@ mod tests {
         }
     }
 
-    /// Appends one hand-written `models.*` event in a command of its own.
-    fn append(store: &SqliteStore, n: u8, type_name: &str, payload: Value) {
-        let command = Command {
-            project: user(),
-            kind: CommandKind("test.append".into()),
-            request_id: request(n),
-            digest: request_digest(&json!({ "request": n })).unwrap(),
-            scope: vec![],
-            policy_version: 0,
-            recorded_at: at(n),
-            actor: Actor::Owner,
-            caller: None,
-        };
-        store
-            .transact(&command, &mut |tx| {
-                tx.append(NewEvent {
-                    stream: StreamName(MODELS_STREAM.into()),
-                    type_name: type_name.into(),
-                    type_version: 1,
-                    git: None,
-                    payload: payload.clone(),
-                    attachments: vec![],
-                })?;
-                Ok(Decision {
-                    kind: OutcomeKind::Done,
-                    answer: json!(null),
-                    sensitive: false,
-                    observed: Observed::default(),
-                    git: None,
-                })
-            })
-            .unwrap();
-    }
-
     fn added_ids(event: &Event) -> Vec<&str> {
         event.payload["added"]
             .as_array()
@@ -302,65 +243,42 @@ mod tests {
     #[test]
     fn a_listing_records_detected_at_policy_zero_with_the_prior_catalog_and_compiled_hint_versions()
     {
-        for (trigger, kind, actor) in [
-            (Trigger::Owner(vec![]), "models.import", Actor::Owner),
-            (Trigger::Automatic, "models.detect", Actor::Baley),
-        ] {
-            let (_dir, store) = seeded();
-            let before = state_version(&store);
-            assert!(before > 0, "seeding moved the version");
-            let listed = openai_body(&["gpt-6-astra", "gpt-6-luna-2026-09-01", "whisper-9"]);
+        let (_dir, store) = seeded();
+        let before = state_version(&store);
+        assert!(before > 0, "seeding moved the version");
+        let listed = openai_body(&["gpt-6-astra", "gpt-6-luna-2026-09-01", "whisper-9"]);
 
-            record(
-                &store,
-                Provider::OpenAi,
-                &trigger,
-                Ok(&listed),
-                request(2),
-                &at(2),
-            )
-            .unwrap();
+        record(&store, Provider::OpenAi, Ok(&listed), request(2), &at(2)).unwrap();
 
-            let recorded = events(&store, "models");
-            assert_eq!(recorded.len(), 2, "the seed and one detection");
-            let event = &recorded[1];
-            assert_eq!(event.type_name, "models.detected");
-            assert_eq!(event.policy_version, 0);
-            assert_eq!(event.actor, actor);
-            assert_eq!(event.request_id, request(2));
-            assert_eq!(event.payload["provider"], "openai");
-            assert_eq!(event.payload["catalog_version"], before);
-            assert_eq!(event.payload["hint_version"], HINT_VERSION);
-            let completed = events(&store, &format!("command/{kind}"));
-            assert_eq!(completed.len(), 1);
-            assert_eq!(completed[0].payload["kind"], kind);
-            assert_eq!(completed[0].actor, actor);
-        }
+        let recorded = events(&store, "models");
+        assert_eq!(recorded.len(), 2, "the seed and one detection");
+        let event = &recorded[1];
+        assert_eq!(event.type_name, "models.detected");
+        assert_eq!(event.policy_version, 0);
+        assert_eq!(event.actor, Actor::Owner);
+        assert_eq!(event.request_id, request(2));
+        assert_eq!(event.payload["provider"], "openai");
+        assert_eq!(event.payload["catalog_version"], before);
+        assert_eq!(event.payload["hint_version"], HINT_VERSION);
+        let completed = events(&store, "command/models.import");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].payload["kind"], "models.import");
+        assert_eq!(completed[0].actor, Actor::Owner);
     }
 
     #[test]
     fn two_providers_record_in_two_commands_each_with_its_own_request_and_event() {
         let (_dir, store) = seeded();
-        let owner = Trigger::Owner(vec![]);
         let deepseek = answered(
             200,
             r#"{"object": "list", "data": [{"id": "deepseek-v4-pro", "object": "model"}]}"#,
         );
 
         let openai = openai_body(&["gpt-6-astra"]);
-        record(
-            &store,
-            Provider::OpenAi,
-            &owner,
-            Ok(&openai),
-            request(2),
-            &at(2),
-        )
-        .unwrap();
+        record(&store, Provider::OpenAi, Ok(&openai), request(2), &at(2)).unwrap();
         record(
             &store,
             Provider::DeepSeek,
-            &owner,
             Ok(&deepseek),
             request(3),
             &at(3),
@@ -388,15 +306,7 @@ mod tests {
     fn a_failure_of_any_category_after_a_detection_keeps_every_accepted_id_and_the_version() {
         let (_dir, store) = seeded();
         let listed = openai_body(&["gpt-6-astra", "gpt-6-luna", "whisper-9"]);
-        record(
-            &store,
-            Provider::OpenAi,
-            &Trigger::Automatic,
-            Ok(&listed),
-            request(2),
-            &at(2),
-        )
-        .unwrap();
+        record(&store, Provider::OpenAi, Ok(&listed), request(2), &at(2)).unwrap();
         let ids = accepted(&store);
         assert_eq!(ids, vec!["gpt-6-astra", "gpt-6-luna", "whisper-9"]);
         let version = state_version(&store);
@@ -413,15 +323,8 @@ mod tests {
             Category::KeysFileUnreadable,
         ];
         for (n, category) in (3..).zip(categories) {
-            let recording = record(
-                &store,
-                Provider::OpenAi,
-                &Trigger::Automatic,
-                Err(category),
-                request(n),
-                &at(n),
-            )
-            .unwrap();
+            let recording =
+                record(&store, Provider::OpenAi, Err(category), request(n), &at(n)).unwrap();
             assert_eq!(recording.outcome, Outcome::Failed(category));
             assert_eq!(recording.version, version, "{}", category.name());
             assert_eq!(accepted(&store), ids, "{}", category.name());
@@ -447,15 +350,7 @@ mod tests {
         )
         .unwrap();
 
-        record(
-            &store,
-            Provider::OpenAi,
-            &Trigger::Automatic,
-            Ok(&listed),
-            request(3),
-            &at(3),
-        )
-        .unwrap();
+        record(&store, Provider::OpenAi, Ok(&listed), request(3), &at(3)).unwrap();
 
         let recorded = events(&store, "models");
         let detected = recorded.last().unwrap();
@@ -467,7 +362,6 @@ mod tests {
     #[test]
     fn a_body_carrying_the_key_never_reaches_an_event_an_answer_or_the_digest_input() {
         let (_dir, store) = seeded();
-        let trigger = Trigger::Owner(vec![]);
         let listed = answered(
             200,
             &json!({"object": "list", "data": [
@@ -482,24 +376,8 @@ mod tests {
                 .to_string(),
         );
 
-        let detected = record(
-            &store,
-            Provider::OpenAi,
-            &trigger,
-            Ok(&listed),
-            request(2),
-            &at(2),
-        )
-        .unwrap();
-        let failed = record(
-            &store,
-            Provider::OpenAi,
-            &trigger,
-            Ok(&refused),
-            request(3),
-            &at(3),
-        )
-        .unwrap();
+        let detected = record(&store, Provider::OpenAi, Ok(&listed), request(2), &at(2)).unwrap();
+        let failed = record(&store, Provider::OpenAi, Ok(&refused), request(3), &at(3)).unwrap();
 
         assert!(matches!(detected.outcome, Outcome::Detected(_)));
         assert_eq!(failed.outcome, Outcome::Failed(Category::Unauthorized));
@@ -529,78 +407,8 @@ mod tests {
                 &json!({"event": "models.detection_failed", "category": "unauthorized"}),
             ]
         );
-        let digest = detection_request(Provider::OpenAi, &trigger).to_string();
+        let digest = detection_request(Provider::OpenAi).to_string();
         assert!(!digest.contains(SENTINEL));
-    }
-
-    #[test]
-    fn the_unverifiable_read_neither_creates_user_nor_counts_seed_owner_or_removed_entries() {
-        let (_dir, store) = open();
-        assert_eq!(unverifiable(&store, Provider::OpenAi).unwrap(), vec![]);
-        assert_eq!(store.projects().unwrap(), vec![]);
-
-        assert!(seed(&store, request(1), &at(1)).unwrap());
-        let listed = openai_body(&["gpt-6-astra", "whisper-9", "dall-e-9"]);
-        record(
-            &store,
-            Provider::OpenAi,
-            &Trigger::Automatic,
-            Ok(&listed),
-            request(2),
-            &at(2),
-        )
-        .unwrap();
-        change(
-            &store,
-            OPENAI,
-            "dall-e-9",
-            OwnerChange::Removed,
-            request(3),
-            &at(3),
-        )
-        .unwrap();
-        let tier = Some(Tier::Cheap);
-        change(
-            &store,
-            OPENAI,
-            "gpt-mine",
-            OwnerChange::Added(tier),
-            request(4),
-            &at(4),
-        )
-        .unwrap();
-        let row = json!({"provider": "openai", "name": "gpt-seed-only", "tier": "cheap", "high_effort": false});
-        let seeded = json!({"hint_version": HINT_VERSION, "catalog_version": 0, "rows": [row]});
-        append(&store, 5, "models.seeded", seeded);
-        let held = accepted(&store);
-        assert_eq!(
-            held,
-            vec!["gpt-6-astra", "gpt-mine", "gpt-seed-only", "whisper-9"]
-        );
-
-        let rows = unverifiable(&store, Provider::OpenAi).unwrap();
-
-        let names: Vec<(&str, Source, Option<Tier>, Option<Placement>)> = rows
-            .iter()
-            .map(|row| (row.name.as_str(), row.source, row.tier, row.placed))
-            .collect();
-        assert_eq!(
-            names,
-            vec![
-                (
-                    "gpt-6-astra",
-                    Source::Detected,
-                    Some(Tier::Flagship),
-                    Some(Placement::Hint)
-                ),
-                (
-                    "whisper-9",
-                    Source::Detected,
-                    Some(Tier::Balanced),
-                    Some(Placement::BestFit)
-                ),
-            ]
-        );
     }
 
     /// The real store, with an owner removal committed right after each
@@ -713,15 +521,7 @@ mod tests {
             removes: "whisper-9",
         };
 
-        let recording = record(
-            &racing,
-            Provider::OpenAi,
-            &Trigger::Automatic,
-            Ok(&listed),
-            request(2),
-            &at(2),
-        )
-        .unwrap();
+        let recording = record(&racing, Provider::OpenAi, Ok(&listed), request(2), &at(2)).unwrap();
 
         // The catalog version is the sequence of the event that last changed
         // the accepted set: the detection's for its report, the removal's now.

@@ -49,7 +49,7 @@ pub mod checkout;
 pub mod committed;
 /// `baley config`, the owner's settings commands.
 pub mod config_command;
-/// Detection: refreshes each provider's catalog from its model-list endpoint.
+/// Detection: records the provider model lists `baley models import` reads.
 pub mod detection;
 /// Finds the checkout's project: the nearest `baley.toml` at or below the repository root.
 pub mod discovery;
@@ -71,8 +71,6 @@ pub mod init;
 pub mod install;
 /// The compiled instruction registry: every instruction served to a model, by identity, with no disk loader and no override.
 pub mod instruction;
-/// The owner's provider keys, read from `keys.env`.
-pub mod keys;
 /// Owner commands over the evidence ledger.
 pub mod ledger;
 /// The per-session server: the session context, client selection, the operation baseline, the tool list and the order faults are answered in, then per-request preparation of a project read or write from the session's own project directory.

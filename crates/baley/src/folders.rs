@@ -55,7 +55,7 @@ impl Environment {
 /// Baley's configuration folder and ledger home.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Folders {
-    /// Holds `config.toml` and `keys.env`.
+    /// Holds `config.toml`. A `keys.env` an older Baley used stays here unread.
     pub config: PathBuf,
     /// Holds the ledger and its store files.
     pub home: PathBuf,

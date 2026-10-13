@@ -24,7 +24,7 @@ use baley_store_sqlite::SqliteStore;
 use serde_json::{Value, json};
 
 use crate::config_command::reviewers;
-use crate::detection::{MAX_BODY_BYTES, Recording, Trigger, fetch_command, parse_fetched, record};
+use crate::detection::{MAX_BODY_BYTES, Recording, fetch_command, parse_fetched, record};
 use crate::folders::{Environment, Folders, Platform};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
@@ -591,7 +591,6 @@ pub fn record_import(
     record(
         store,
         provider,
-        &Trigger::Owner(vec![provider]),
         seen.as_ref().map_err(|category| *category),
         request_id,
         at,
