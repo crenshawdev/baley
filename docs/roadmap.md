@@ -368,7 +368,7 @@ Milestones close and archive. A finished phase lands on GitHub one step at a tim
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0004 starting a project and changing scope](design/0004-starting-a-project-and-changing-scope.md), [0008 review](design/0008-review.md), [0011 milestones, landing, undo and pause](design/0011-milestones-landing-undo-pause.md)
 - ADRs: [0007 forge anchors](adr/0007-forge-anchors.md), [0031 one term per concept](adr/0031-one-term-per-concept.md)
-- Carries: no bugs
+- Carries: [#68](https://github.com/crenshawdev/baley/issues/68), its landing part: git's error text in `landing/effects.rs` and the remote URLs landing shows go through `checkout::redact_git_text`
 - Blocked by: Build 5 ([#26](https://github.com/crenshawdev/baley/issues/26))
 
 ## Build 7: Next action and progress
@@ -438,7 +438,7 @@ Every issue here except the Build 3 issues blocks the release design #14. GitHub
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#40](https://github.com/crenshawdev/baley/issues/40) | Read a command's cheap git facts inside the write transaction | Evidence | Carried by Build 4 |
-| [#68](https://github.com/crenshawdev/baley/issues/68) | Git error text is stored and shown unredacted (URL credentials) | Evidence | Carried by Build 4 |
+| [#68](https://github.com/crenshawdev/baley/issues/68) | Git error text is stored and shown unredacted (URL credentials) | Evidence | Carried by Build 4 (built paths) and Build 6 (landing) |
 | [#69](https://github.com/crenshawdev/baley/issues/69) | `model.escalate_on_failure` never applies to automatic retries | Evidence | Carried by Build 4 |
 | [#72](https://github.com/crenshawdev/baley/issues/72) | The provider schema accepts whitespace-only text the validator refuses | Evidence | Carried by Build 4 |
 | [#93](https://github.com/crenshawdev/baley/issues/93) | The audit admits any bold span as a requirement id and skips unreadable rows | Evidence | Carried by Build 9 |
