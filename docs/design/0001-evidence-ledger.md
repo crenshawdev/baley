@@ -1080,7 +1080,7 @@ The judgement reads the project's `checkout` view, which holds one row per path 
 | `doctor` | discovery for the discovered project's remote, every other project checked locally | no: it reads the settings and appends nothing | none |
 | `scrub` | none | no: no event is appended | none |
 | `baley update` and detached updater (`baley update detached`) | per-user project `user` | no | 0 |
-| `baley models add` and `remove`, detection through `baley models update`, seeding | the per-user project `user` | no | 0 |
+| `baley models add`, `remove` and `import`, seeding | the per-user project `user` | no | 0 |
 | a session server's project call | discovery at the session's `CLAUDE_PROJECT_DIR` | a write: yes, under the host's key, after checkout admission. A read: no. A write the ledger already holds: no | a write: the version the step returned, recorded on its own command, and checkout admission carries the version stored for the checkout and no host. A read: none, it records nothing. A write the ledger already holds: none, it gets its original receipt |
 | the guard hook | discovery at the hook's `CLAUDE_PROJECT_DIR`, for the policy a commit is judged under. Its records go to the per-user project `user` | no: it reads the settings within its budget and merges Claude Code's sections, admits no checkout and records no `policy.effective` | 0 on every guard record |
 | `policy.effective` itself | the command it belongs to | it is the step's own record | the version it replaces, 0 for the first of its key |
@@ -1406,14 +1406,14 @@ Families are moved by what is written together, not one at a time:
 | Milestones, landing, undo | Undo edits `ROADMAP.md` and `REQUIREMENTS.md` | Progress |
 | Captures, config and routing, task, debug, spike, guard | Their own families | Their own readers |
 
-`baley init` still invokes HTTPS detection (`crates/baley/src/init.rs:719-723`). Its replacement with seeding and removal of the key reader and lister belong to Build 4 (#25) under [ADR 0039](../adr/0039-session-owned-provider-credentials.md).
+`baley init` records the shipped catalog seed through the shared seeding step, with no list call (`crates/baley/src/init.rs:718-720`, `crates/baley/src/init.rs:728-738`). The key reader, `baley exec --key` and the HTTPS lister are removed under [ADR 0039](../adr/0039-session-owned-provider-credentials.md).
 
 Builds:
 
 1. **Foundation.** The workspace split, the port, the SQLite adapter, the conformance suite, payloads and references, the hash chain, anchors and the command line: `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`. The inherited command surface stays beside these. Nothing in the lifecycle uses the ledger yet.
-2. **Identity, settings and keys.** Folders and open checks, settings and `policy.effective`, `baley init`, discovery, checkouts and the model catalog. Its built key reader, `baley exec --key` and HTTPS lister await removal under [ADR 0039](../adr/0039-session-owned-provider-credentials.md) in Build 4 (#25).
+2. **Identity, settings and keys.** Folders and open checks, settings and `policy.effective`, `baley init`, discovery, checkouts and the model catalog. Its key reader, `baley exec --key` and HTTPS lister were removed in Build 4 (#25) under [ADR 0039](../adr/0039-session-owned-provider-credentials.md).
 3. **Hosts.** The per-session stdio server, install, the guard's answer in Claude Code's hook form, Claude Code's sandbox and file-tool deny rules over the home and the config folder, stubs and captures.
-4. **Planning.** Project start, stories, phases, plans, plan review and risk scan, the first dispatches, and routing finished. Build 4 (#25) removes the built `keys.env` reader, `baley exec --key` credential wrapper and HTTPS model lister and switches `baley init` to seeding.
+4. **Planning.** Project start, stories, phases, plans, plan review and risk scan, the first dispatches, and routing finished. Build 4 (#25) removed the `keys.env` reader, the `baley exec --key` credential wrapper and the HTTPS model lister, and switched `baley init` to seeding.
 5. **Doing the work.** Execution, runs, verification, diff review and the completion risk scan.
 6. **Milestones, landing, undo and pause.** The anchor triggers and the forge check.
 7. **Next action and progress.**
