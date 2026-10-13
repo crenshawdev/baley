@@ -78,8 +78,8 @@ pub fn read(
 /// refuses one.
 const GUARD_OUTPUT_LIMIT: usize = settings::GUARD_LIMIT;
 
-/// Bytes kept of git's first stderr line in a guard read's error, so the
-/// error cannot carry a flood of output or any later line.
+/// Bytes kept of git's redacted first stderr line in a guard read's error,
+/// so the error cannot carry a flood of output or any later line.
 const GUARD_EXCERPT_LIMIT: usize = 256;
 
 /// A guard read's refusal, with git's own words kept apart from Baley's.
@@ -87,8 +87,8 @@ const GUARD_EXCERPT_LIMIT: usize = 256;
 pub struct GuardRefusal {
     /// The refusal as the live answer states it, git's excerpt included.
     pub refusal: Unavailable,
-    /// The excerpt of git's stderr that ends the refusal's cause, when it
-    /// carries one. A guard record keeps the cause without it.
+    /// The excerpt of git's redacted stderr that ends the refusal's cause,
+    /// when it carries one. A guard record keeps the cause without it.
     pub excerpt: Option<String>,
 }
 
@@ -99,8 +99,8 @@ pub struct GuardRefusal {
 /// they share git's one allowance with the branch lookup. With no time left
 /// nothing launches and the read is refused. Each stream keeps at most
 /// `GUARD_OUTPUT_LIMIT` bytes (1 MiB), and an error keeps at most
-/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line, which the
-/// refusal also gives apart.
+/// `GUARD_EXCERPT_LIMIT` bytes (256) of git's first stderr line, redacted
+/// before the cut, which the refusal also gives apart.
 ///
 /// The guard hook is its caller: it reads HEAD's copy at the session
 /// project's root after the branch lookup, on the same budget.
@@ -198,13 +198,13 @@ fn sequence(
     })
 }
 
-/// Keeps only the start of git's first stderr line, cut on a character
-/// boundary, for a guard read's error text.
+/// Keeps only the start of git's first stderr line as `stderr_text` gives it,
+/// cut on a character boundary, for a guard read's error text. The cut comes
+/// after redaction, so a URL crossing it still has its `@` for the scan.
 fn first_line_excerpt(mut output: Output) -> Output {
-    let first = output.stderr.split(|&b| b == b'\n').next().unwrap_or(&[]);
-    let text = String::from_utf8_lossy(first);
-    let end = text.floor_char_boundary(GUARD_EXCERPT_LIMIT);
-    output.stderr = text.as_bytes()[..end].to_vec();
+    let mut text = stderr_text(&output);
+    text.truncate(text.floor_char_boundary(GUARD_EXCERPT_LIMIT));
+    output.stderr = text.into_bytes();
     output
 }
 
@@ -735,6 +735,31 @@ mod tests {
                 !text.contains("alice") && !text.contains("ghp_tok"),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn a_token_crossing_the_guard_excerpt_cut_left_in_the_answer_is_caught() {
+        // The token spans bytes 244 to 279 and its `@` is byte 280, past the cut.
+        let lead = format!("fatal: {}", "a ".repeat(111));
+        let stderr = format!(
+            "{lead}'https://alice:ghp_0123456789abcdef0123456789abcdef@host/o/r.git/': \
+             Could not resolve host: host\n"
+        );
+        let excerpt = format!("{lead}'https://host/o/r.git/': Co");
+        assert_eq!(excerpt.len(), 256);
+
+        let mut fake = Recorded::new().fail(128, stderr);
+        let refused = guard_read(&mut fake, &mut budget_at(secs(0))).unwrap_err();
+
+        assert_eq!(refused.excerpt.as_deref(), Some(excerpt.as_str()));
+        let cause = cause(&refused.refusal);
+        assert_eq!(
+            cause,
+            format!("HEAD's copy: git rev-parse --verify -q HEAD exited with code 128: {excerpt}")
+        );
+        for text in [cause, &excerpt] {
+            assert!(!text.contains("alice") && !text.contains("ghp_"), "{text}");
         }
     }
 
