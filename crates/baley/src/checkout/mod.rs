@@ -16,7 +16,7 @@ use baley_store::{Caller, Ledger, ProjectId, RequestId, StoreError, Views};
 
 pub use admit::{ADMIT_COMMAND, AdmitError, admit};
 pub use gather::{Facts, gather, root_commit};
-pub use strip::strip_user_information;
+pub use strip::{redact_git_text, strip_user_information};
 
 use crate::process::Process;
 
