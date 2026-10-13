@@ -6,6 +6,7 @@
 mod fetch;
 mod lister;
 mod record;
+mod trailer;
 mod trigger;
 
 use baley_core::catalog::{ListingRow, Provider};
@@ -14,6 +15,7 @@ use baley_store::{Admin, Ledger, StoreError, Views};
 pub use fetch::fetch_command;
 pub use lister::{HttpLister, ModelLister};
 pub use record::{Recording, detection_request, record, unverifiable};
+pub use trailer::parse_fetched;
 pub use trigger::{
     Action, DETECT_COMMAND, KeysRead, Steps, Trigger, UPDATE_COMMAND, judge, key_name,
     list_address, refusal_category,
