@@ -1,5 +1,5 @@
 //! Detection's pure decisions (design 0003 section 6, CFG-R20, CFG-R21):
-//! reading each provider's list body into its ids, judging what a lister saw
+//! reading each provider's list body into its ids, judging a returned list
 //! as a listing or a failure category, tagging each listed id, comparing a
 //! listing with the catalog, and choosing the event a provider's detection
 //! records.

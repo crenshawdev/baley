@@ -497,7 +497,7 @@ A detection that fails records `models.detection_failed` with exactly one catego
 - `unauthorized`: 401 or 403.
 - `rate-limited`: 429.
 - `http-<status>`: any other status that is not 2xx, an unfollowed redirect included.
-- `incomplete`: the body passed the 4 MiB bound or the fetch reported a cut-short body.
+- `incomplete`: the body passed the 4 MiB bound, the fetch reported a cut-short body, or the fetched bytes carry no valid trailer or could not be read.
 - `malformed`: a 2xx body not in the list shape, or one item without a non-empty string `id`, which rejects the whole listing.
 
 A category holds at most a status number. Error bodies and transport error text are not retained or printed by Baley. This is not a key scrubber: Baley cannot recognize an unknown credential in returned content. An empty, complete 2xx list is valid. A failed or cut list removes nothing. Without a returned observation there is no detection event and no claim that the provider's list was checked.
