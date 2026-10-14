@@ -1,11 +1,19 @@
-//! The judgement of an approval by digest (design 0004 section 5).
+//! The judgement of an approval by digest, and the records an approved
+//! start becomes (design 0004 sections 5 and 6).
 //!
 //! An approval is judged on facts the binary read: whether the target draft
 //! is recorded, whether a start is already approved, and which draft is the
 //! newest. The order is fixed, so one approval always gets one answer.
 
+use baley_store::{NewEvent, PayloadRef, StreamName};
 use serde_json::Value;
 
+use super::event::{
+    PHASE_DECLARED, PHASE_DECLARED_VERSION, PHASE_REORDERED, PHASE_REORDERED_VERSION,
+    PROJECT_DESCRIBED, PROJECT_DESCRIBED_VERSION, PROJECT_STREAM, ROADMAP_STREAM, SCOPE_APPROVED,
+    SCOPE_APPROVED_VERSION, START_KIND, STORY_DECLARED, STORY_DECLARED_VERSION, approved_payload,
+    described_payload, phase_declared_payload, phase_reordered_payload, story_declared_payload,
+};
 use super::submission::{PROJECT_ALREADY_STARTED, STALE_DRAFT, Submission, UNKNOWN_DRAFT};
 
 /// Why an approval is refused.
@@ -138,6 +146,122 @@ fn list(
     })
 }
 
+/// The events an approved start appends, each on its stream, in order:
+/// `project.described`; one `story.declared` per story in submission order;
+/// one `phase.declared` per phase in roadmap order; one `phase.reordered`
+/// with every new number in roadmap order; and `scope.approved` last, after
+/// what it approves.
+///
+/// Story ids continue from `highest_story` and phase numbers from
+/// `highest_phase`, the highest ever declared, so neither is ever reused
+/// (D-09, D-10). Each story's phase is the number of the phase that lists it
+/// by label, or none. `details` holds one stored detail reference per phase
+/// in roadmap order. `owner` and `at` are the approval's owner and time.
+pub fn start_events(
+    submission: &Submission,
+    highest_phase: u32,
+    highest_story: u32,
+    details: &[PayloadRef],
+    owner: &str,
+    at: &str,
+) -> Vec<NewEvent> {
+    assert_eq!(
+        details.len(),
+        submission.phases.len(),
+        "one detail reference per phase"
+    );
+    let digest = submission.digest();
+    let story_id = |index: usize| highest_story + 1 + index as u32;
+    let phase_number = |index: usize| highest_phase + 1 + index as u32;
+    let numbers: Vec<u32> = (0..submission.phases.len()).map(phase_number).collect();
+
+    let mut events = vec![event(
+        PROJECT_STREAM,
+        PROJECT_DESCRIBED,
+        PROJECT_DESCRIBED_VERSION,
+        described_payload(&submission.description, digest),
+        Vec::new(),
+    )];
+    for (index, story) in submission.stories.iter().enumerate() {
+        // Phases list stories by label, already resolved to story indexes.
+        let phase = submission
+            .phases
+            .iter()
+            .position(|phase| phase.stories.contains(&index))
+            .map(phase_number);
+        events.push(event(
+            ROADMAP_STREAM,
+            STORY_DECLARED,
+            STORY_DECLARED_VERSION,
+            story_declared_payload(
+                story_id(index),
+                &story.sentence,
+                story.status,
+                phase,
+                digest,
+            ),
+            Vec::new(),
+        ));
+    }
+    for ((index, phase), detail) in submission.phases.iter().enumerate().zip(details) {
+        // Dependencies are 1-based roadmap positions.
+        let depends_on: Vec<u32> = phase
+            .depends_on
+            .iter()
+            .map(|position| phase_number(position - 1))
+            .collect();
+        let stories: Vec<u32> = phase.stories.iter().map(|&story| story_id(story)).collect();
+        events.push(event(
+            ROADMAP_STREAM,
+            PHASE_DECLARED,
+            PHASE_DECLARED_VERSION,
+            phase_declared_payload(
+                numbers[index],
+                &phase.name,
+                &phase.goal,
+                detail,
+                &depends_on,
+                &stories,
+                digest,
+            ),
+            vec![detail.clone()],
+        ));
+    }
+    // A start declares its whole roadmap at once, so one order states it.
+    events.push(event(
+        ROADMAP_STREAM,
+        PHASE_REORDERED,
+        PHASE_REORDERED_VERSION,
+        phase_reordered_payload(&numbers, digest),
+        Vec::new(),
+    ));
+    events.push(event(
+        PROJECT_STREAM,
+        SCOPE_APPROVED,
+        SCOPE_APPROVED_VERSION,
+        approved_payload(digest, START_KIND, owner, at),
+        Vec::new(),
+    ));
+    events
+}
+
+fn event(
+    stream: &str,
+    type_name: &str,
+    type_version: u32,
+    payload: Value,
+    attachments: Vec<PayloadRef>,
+) -> NewEvent {
+    NewEvent {
+        stream: StreamName(stream.into()),
+        type_name: type_name.into(),
+        type_version,
+        git: None,
+        payload,
+        attachments,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Submissions are written out as design 0004's start shape, and every
@@ -257,5 +381,146 @@ mod tests {
         ] {
             assert_eq!(judge_approval(&case), expected, "{case:?}");
         }
+    }
+
+    const T2: &str = "2026-10-13T09:00:02Z";
+
+    fn detail(byte: u8) -> PayloadRef {
+        PayloadRef {
+            hash: baley_store::Hash([byte; 32]),
+            bytes: 24,
+            class: baley_store::RetentionClass::Record,
+        }
+    }
+
+    fn events_for(value: &Value, highest_phase: u32, highest_story: u32) -> Vec<NewEvent> {
+        start_events(
+            &accepted(value),
+            highest_phase,
+            highest_story,
+            &[detail(0xa1), detail(0xa2)],
+            "Ada Owner",
+            T2,
+        )
+    }
+
+    fn of<'a>(events: &'a [NewEvent], type_name: &str) -> Vec<&'a Value> {
+        events
+            .iter()
+            .filter(|event| event.type_name == type_name)
+            .map(|event| &event.payload)
+            .collect()
+    }
+
+    /// Each story's id and phase, and each phase's number, dependencies,
+    /// stories and detail hash.
+    fn numbering(events: &[NewEvent]) -> (Vec<(Value, Value)>, Vec<Value>) {
+        let stories = of(events, "story.declared")
+            .into_iter()
+            .map(|story| (story["id"].clone(), story["phase"].clone()))
+            .collect();
+        let phases = of(events, "phase.declared")
+            .into_iter()
+            .map(|phase| {
+                json!([
+                    phase["number"],
+                    phase["depends_on"],
+                    phase["stories"],
+                    phase["detail"]["payload"]
+                ])
+            })
+            .collect();
+        (stories, phases)
+    }
+
+    #[test]
+    fn a_phase_number_or_story_id_reused_after_earlier_declarations_is_caught() {
+        let events = events_for(&s1(), 3, 5);
+        let (stories, phases) = numbering(&events);
+        assert_eq!(
+            stories,
+            [
+                (json!(6), json!(4)),
+                (json!(7), json!(5)),
+                (json!(8), Value::Null)
+            ]
+        );
+        assert_eq!(
+            phases,
+            [
+                json!([4, [], [6], "a1".repeat(32)]),
+                json!([5, [4], [7], "a2".repeat(32)])
+            ]
+        );
+        let reordered = of(&events, "phase.reordered");
+        assert_eq!(reordered.len(), 1);
+        assert_eq!(reordered[0]["order"], json!([4, 5]));
+    }
+
+    #[test]
+    fn a_story_given_to_a_phase_by_position_instead_of_its_label_is_caught() {
+        let s3 = s1_with(&[
+            ("/roadmap/0/stories", json!(["approve"])),
+            ("/roadmap/1/stories", json!(["record"])),
+        ]);
+        let events = events_for(&s3, 3, 5);
+        let sentences: Vec<&Value> = of(&events, "story.declared")
+            .into_iter()
+            .map(|story| &story["sentence"])
+            .collect();
+        assert_eq!(
+            sentences,
+            [
+                "Every step is recorded",
+                "The owner approves scope",
+                "Teammates see the backlog"
+            ]
+        );
+        let (stories, phases) = numbering(&events);
+        assert_eq!(
+            stories,
+            [
+                (json!(6), json!(5)),
+                (json!(7), json!(4)),
+                (json!(8), Value::Null)
+            ]
+        );
+        assert_eq!(phases[0][2], json!([7]));
+        assert_eq!(phases[1][2], json!([6]));
+    }
+
+    #[test]
+    fn an_approval_appending_its_events_in_another_order_or_stream_is_caught() {
+        let submission = accepted(&s1());
+        let events = start_events(
+            &submission,
+            0,
+            0,
+            &[detail(0xa1), detail(0xa2)],
+            "Ada Owner",
+            T2,
+        );
+        let placed: Vec<(&str, &str)> = events
+            .iter()
+            .map(|event| (event.type_name.as_str(), event.stream.0.as_str()))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                ("project.described", "project"),
+                ("story.declared", "roadmap"),
+                ("story.declared", "roadmap"),
+                ("story.declared", "roadmap"),
+                ("phase.declared", "roadmap"),
+                ("phase.declared", "roadmap"),
+                ("phase.reordered", "roadmap"),
+                ("scope.approved", "project"),
+            ]
+        );
+        assert_eq!(
+            events[7].payload,
+            json!({"submission": submission.digest().to_hex(), "kind": "start",
+                "owner": "Ada Owner", "at": T2})
+        );
     }
 }
