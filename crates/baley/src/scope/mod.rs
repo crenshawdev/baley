@@ -1,7 +1,8 @@
 //! The scope records of design 0004 over the storage port: a start
 //! submission recorded as a draft, the start-once read every scope write
-//! is checked against first, the draft preview read by digest, and the
-//! owner's approval of a draft by digest.
+//! is checked against first, the draft preview read by digest, the reads of
+//! accepted scope, and the owner's approval of a draft by digest, which only
+//! the command line gives.
 
 /// Records one start submission as a draft in its own domain transaction.
 pub mod submit;
@@ -11,6 +12,9 @@ pub mod read;
 
 /// Approves a draft by its digest under the owner: the judgement first, then the records.
 pub mod approve;
+
+/// The owner's `baley scope` commands.
+pub mod command;
 
 #[cfg(test)]
 pub(crate) mod fixtures {

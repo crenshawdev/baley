@@ -30,6 +30,8 @@ enum Command {
     Init(baley::init::InitArgs),
     /// List, add, remove and import the model names Baley accepts per host and provider, and print a provider's fetch command.
     Models(baley::models::ModelsArgs),
+    /// Approve a start submission by its digest as the owner.
+    Scope(baley::scope::command::ScopeArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),
     /// Install Claude Code's user-level wiring and seed the model catalog.
@@ -113,6 +115,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::Init(args) => return baley::init::run(args),
         Command::Config(args) => return baley::config_command::run(args),
         Command::Models(args) => return baley::models::run(args),
+        Command::Scope(args) => return baley::scope::command::run(args),
         Command::Update(args) => return baley::update::command::run(args),
         Command::Install(args) => return baley::install::command::run(args),
         other => other,
@@ -123,6 +126,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         | Command::Init(_)
         | Command::Config(_)
         | Command::Models(_)
+        | Command::Scope(_)
         | Command::Install(_)
         | Command::Update(_) => {
             unreachable!("dispatched above")
