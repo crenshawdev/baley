@@ -1,12 +1,13 @@
 //! Scope records' pure half (design 0004 sections 5 and 6): the judgement
 //! of a start submission and its digest, the six scope events, and the
-//! `draft` and `roadmap` views.
+//! `draft`, `roadmap` and `phase` views.
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges, and stores any body before an event names it.
 
 mod draft;
 mod event;
+mod phase;
 mod roadmap;
 mod submission;
 
@@ -18,6 +19,7 @@ pub use event::{
     STORY_DECLARED_VERSION, approved_payload, described_payload, phase_declared_payload,
     phase_reordered_payload, register_scope_events, story_declared_payload, submitted_payload,
 };
+pub use phase::{PHASE_STATUS_INDEX, PHASE_VIEW, PhaseProjector, phase_key, phase_spec};
 pub use roadmap::{ROADMAP_VIEW, RoadmapProjector, roadmap_key, roadmap_spec};
 pub use submission::{
     DEPENDENCY_CYCLE, Description, MALFORMED_SUBMISSION, PROJECT_ALREADY_STARTED, Phase,
