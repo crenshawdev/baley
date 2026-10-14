@@ -3,9 +3,10 @@
 //! `owner.name` when the global settings set it, and git's `user.name` when
 //! they do not.
 
+use baley_core::policy::{EffectivePolicy, Value};
+
 use crate::committed::{Ran, failed, finished};
 use crate::git_process::{self, Caller};
-use crate::ledger::display::Render;
 use crate::process::{Launch, Process};
 
 /// The code of a refusal when no owner name can be read.
@@ -37,12 +38,16 @@ pub(crate) fn owner(name: Option<&str>, process: &mut dyn Process) -> Result<Str
     })
 }
 
-/// Reads git's `user.name` through `process`. A name that cannot be had
-/// refuses `owner-identity-missing`, because an acknowledgement without an
-/// owner is not recorded.
-pub(crate) fn read(process: &mut dyn Process) -> Result<String, Render> {
-    owner(None, process)
-        .map_err(|text| Render::refusal(format!("{text} and run the interview again")))
+/// The `owner.name` value of `policy`, `None` when it is absent.
+pub(crate) fn owner_name(policy: &EffectivePolicy) -> Option<&str> {
+    match policy
+        .settings
+        .get(OWNER_NAME)
+        .and_then(|effective| effective.value.as_ref())
+    {
+        Some(Value::PersonName(name)) => Some(name),
+        _ => None,
+    }
 }
 
 /// Interprets git's answer: the name, or why there is none.
@@ -84,8 +89,6 @@ mod tests {
     use std::io;
     use std::path::Path;
 
-    use baley_core::policy::Value;
-
     use super::*;
     use crate::git_process::{Deadline, deadline};
     use crate::policy_step::{self, Reads};
@@ -108,11 +111,7 @@ mod tests {
             head: None,
         };
         let policy = policy_step::build(&reads, None).map_err(|refusal| refusal.to_string())?;
-        let name = match &policy.settings["owner.name"].value {
-            Some(Value::PersonName(name)) => Some(name.as_str()),
-            _ => None,
-        };
-        owner(name, process)
+        owner(owner_name(&policy), process)
     }
 
     #[test]
