@@ -1,10 +1,12 @@
 //! Scope records' pure half (design 0004 sections 5 and 6): the judgement
-//! of a start submission and its digest, the six scope events, and the
-//! `draft`, `roadmap`, `phase` and `backlog` views.
+//! of a start submission and its digest, the judgement of an approval, the
+//! six scope events, and the `draft`, `roadmap`, `phase` and `backlog`
+//! views.
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges, and stores any body before an event names it.
 
+mod approval;
 mod backlog;
 mod draft;
 mod event;
@@ -12,6 +14,7 @@ mod phase;
 mod roadmap;
 mod submission;
 
+pub use approval::{ApprovalFacts, ApprovalRefusal, judge_approval};
 pub use backlog::{BACKLOG_VIEW, BacklogProjector, backlog_key, backlog_spec};
 pub use draft::{DRAFT_NEWEST_INDEX, DRAFT_VIEW, DraftProjector, draft_key, draft_spec};
 pub use event::{
