@@ -1,12 +1,16 @@
 //! The scope records of design 0004 over the storage port: a start
 //! submission recorded as a draft, the start-once read every scope write
-//! is checked against first, and the draft preview read by digest.
+//! is checked against first, the draft preview read by digest, and the
+//! owner's approval of a draft by digest.
 
 /// Records one start submission as a draft in its own domain transaction.
 pub mod submit;
 
 /// Reads a draft back by its digest, as its latest submission recorded it.
 pub mod read;
+
+/// Approves a draft by its digest under the owner: the judgement first, then the records.
+pub mod approve;
 
 #[cfg(test)]
 pub(crate) mod fixtures {
@@ -35,6 +39,7 @@ pub(crate) mod fixtures {
     pub const R1: &str = "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f";
     pub const R2: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     pub const R3: &str = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+    pub const R5: &str = "7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d";
 
     /// The digest of M's canonical JSON, from `sha256sum` over those bytes.
     pub const M_DIGEST: &str = "1b11196b8f9f4ffd5c08a4d97643f80867194c5e1a6d8cc51d2929f8db38d68e";
