@@ -1,17 +1,22 @@
-//! The owner's scope commands (design 0004 section 5, D-20): `baley scope
-//! approve <digest>` approves the newest start draft as the owner, the only
-//! way scope is approved (D-24). A submission comes only from a session,
-//! so no command here submits scope.
+//! The owner's scope commands (design 0004 sections 5 and 6, D-20): `baley
+//! scope approve <digest>` approves the newest start draft as the owner, the
+//! only way scope is approved (D-24), and `baley scope preview|show`, `baley
+//! phase show`, `baley backlog show` and `baley story show` print what the
+//! ledger holds through the same reads as `document`, recording nothing. A
+//! submission comes only from a session, so no command here submits scope.
 //!
-//! Gathering finds the project and opens the ledger; judging, the digest
-//! argument, the command an approval is recorded under and what is printed,
-//! is done by the pure functions below.
+//! Gathering finds the project and opens the ledger; judging, the arguments,
+//! the command an approval is recorded under and what is printed, is done by
+//! the pure functions below. Every text from the ledger is printed as
+//! `escape_debug` writes it, so a recorded line break cannot forge a line.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use baley_core::capture::NO_SUCH_PHASE;
 use baley_core::policy::recorded::recorded_policy;
 use baley_core::policy::{CONFIG_UNAVAILABLE, SettingsFile};
+use baley_core::scope::{UNKNOWN_DRAFT, judge_submission};
 use baley_store::{
     Actor, Admin, CanonicalError, Command, CommandKind, Hash, ProjectId, RequestId, request_digest,
 };
@@ -24,13 +29,16 @@ use crate::folders::{Environment, Folders, Platform};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
-use crate::mcp::prepare::{NOT_A_PROJECT, PROJECT_NOT_IN_LEDGER};
+use crate::mcp::prepare::{LEDGER_UNAVAILABLE, NOT_A_PROJECT, PROJECT_NOT_IN_LEDGER};
 use crate::providers::identity;
 use crate::scope::approve::{self, APPROVE_COMMAND};
+use crate::scope::read::{
+    self, BacklogStory, NO_SUCH_STORY, Phase, Preview, PreviewError, ReadError, Roadmap, Story,
+};
 use crate::scope::submit;
 use crate::{init, policy_step, settings};
 
-/// `baley scope`: the owner's approval of scope.
+/// `baley scope`: the owner's approval of scope, and its reads.
 #[derive(clap::Args, Debug)]
 pub struct ScopeArgs {
     #[command(subcommand)]
@@ -47,19 +55,116 @@ enum ScopeCommand {
         #[arg(value_name = "DIGEST")]
         digest: String,
     },
+    /// Print a draft by its digest, exactly as an approval would record it.
+    Preview {
+        /// The draft's digest from the scope-submit receipt.
+        #[arg(value_name = "DIGEST")]
+        digest: String,
+    },
+    /// Print the accepted roadmap: the description, phases and stories.
+    Show,
+}
+
+/// `baley phase`: the owner's reads of accepted phases.
+#[derive(clap::Args, Debug)]
+pub struct PhaseArgs {
+    #[command(subcommand)]
+    command: PhaseCommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum PhaseCommand {
+    /// Print one accepted phase with its detail text.
+    Show {
+        /// The phase number Baley assigned at approval.
+        #[arg(value_name = "NUMBER")]
+        number: String,
+    },
+}
+
+/// `baley backlog`: the owner's read of the backlog.
+#[derive(clap::Args, Debug)]
+pub struct BacklogArgs {
+    #[command(subcommand)]
+    command: BacklogCommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum BacklogCommand {
+    /// Print every accepted story in priority order.
+    Show,
+}
+
+/// `baley story`: the owner's reads of accepted stories.
+#[derive(clap::Args, Debug)]
+pub struct StoryArgs {
+    #[command(subcommand)]
+    command: StoryCommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum StoryCommand {
+    /// Print one accepted story.
+    Show {
+        /// The story id Baley assigned at approval.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
 }
 
 /// Runs one `baley scope` command and prints its result.
 pub fn run(args: ScopeArgs) -> ExitCode {
-    let result = match args.command {
+    emit(match args.command {
         ScopeCommand::Approve { digest } => approve(&digest),
-    }
-    .unwrap_or_else(|e| e);
+        ScopeCommand::Preview { digest } => judge_digest(&digest).and_then(|digest| {
+            reading(|store, project| preview_render(read::preview(store, project, digest)))
+        }),
+        ScopeCommand::Show => {
+            reading(|store, project| roadmap_render(read::roadmap(store, project)))
+        }
+    })
+}
+
+/// Runs one `baley phase` command and prints its result.
+pub fn run_phase(args: PhaseArgs) -> ExitCode {
+    let PhaseCommand::Show { number } = args.command;
+    emit(judge_number(&number).and_then(|number| {
+        reading(|store, project| phase_render(read::phase(store, project, number)))
+    }))
+}
+
+/// Runs one `baley backlog` command and prints its result.
+pub fn run_backlog(args: BacklogArgs) -> ExitCode {
+    let BacklogCommand::Show = args.command;
+    emit(reading(|store, project| {
+        backlog_render(read::backlog(store, project))
+    }))
+}
+
+/// Runs one `baley story` command and prints its result.
+pub fn run_story(args: StoryArgs) -> ExitCode {
+    let StoryCommand::Show { id } = args.command;
+    emit(
+        judge_number(&id)
+            .and_then(|id| reading(|store, project| story_render(read::story(store, project, id)))),
+    )
+}
+
+fn emit(result: Result<Render, Render>) -> ExitCode {
     ExitCode::from(display::emit(
-        &result,
+        &result.unwrap_or_else(|e| e),
         &mut std::io::stdout().lock(),
         &mut std::io::stderr().lock(),
     ))
+}
+
+/// Finds the project and opens the ledger only to read: no checkout
+/// admission, no policy step and nothing recorded, as `document` records
+/// nothing.
+fn reading(render: impl FnOnce(&SqliteStore, &ProjectId) -> Render) -> Result<Render, Render> {
+    let checkout = checkout()?;
+    let store = open(&checkout)?;
+    Ok(render(&store, &checkout.project))
 }
 
 /// The checkout a command runs in: its project, repository root and
@@ -278,9 +383,249 @@ fn escaped(text: &str) -> String {
     text.escape_debug().to_string()
 }
 
+/// A phase number or story id argument: a whole number above 0, since
+/// numbering starts at 1. Anything else names nothing and is refused before
+/// the ledger is read.
+pub(crate) fn judge_number(text: &str) -> Result<u32, Render> {
+    text.parse::<u32>()
+        .ok()
+        .filter(|number| *number > 0)
+        .ok_or_else(|| Render::refusal("phase numbers and story ids are whole numbers from 1"))
+}
+
+/// What `scope preview` prints for a draft read: the header, the
+/// description, the stories by label and the phases by position, each with
+/// its detail and dependencies, since that is what the owner approves.
+pub(crate) fn preview_render(read: Result<Preview, PreviewError>) -> Render {
+    let preview = match read {
+        Ok(preview) => preview,
+        Err(PreviewError::UnknownDraft) => {
+            return Render::refusal(format!(
+                "{UNKNOWN_DRAFT}: no submission in this project has that digest"
+            ));
+        }
+        Err(PreviewError::Unreadable(reason)) => return unavailable(&reason),
+        Err(PreviewError::Store(error)) => return display::store_error(&error, None),
+    };
+    let Ok(submission) = judge_submission(&preview.submission) else {
+        return unavailable("the draft is recorded, but its body no longer judges as a submission");
+    };
+    let mut lines = vec![format!(
+        "draft {} ({}), submitted {}",
+        preview.digest.to_hex(),
+        escaped(&preview.kind),
+        escaped(&preview.recorded_at)
+    )];
+    let description = &submission.description;
+    describe(
+        &mut lines,
+        &description.what,
+        &description.core_value,
+        &description.constraints,
+    );
+    for story in &submission.stories {
+        lines.push(format!(
+            "story {} ({}): {}",
+            escaped(&story.label),
+            story.status.as_str(),
+            escaped(&story.sentence)
+        ));
+    }
+    for (position, phase) in submission.phases.iter().enumerate() {
+        let labels: Vec<String> = phase
+            .stories
+            .iter()
+            .filter_map(|index| submission.stories.get(*index))
+            .map(|story| escaped(&story.label))
+            .collect();
+        lines.extend([
+            format!("phase {}: {}", position + 1, escaped(&phase.name)),
+            format!("  goal: {}", escaped(&phase.goal)),
+            format!("  detail: {}", escaped(&phase.detail)),
+            format!("  depends on: {}", list(&phase.depends_on)),
+            format!("  stories: {}", or_none(labels)),
+        ]);
+    }
+    printed(lines)
+}
+
+/// What `scope show` prints for a roadmap read: the description, the phases
+/// in roadmap order and the stories in priority order, or one line when
+/// nothing is approved yet, which is not an error.
+pub(crate) fn roadmap_render(read: Result<Roadmap, ReadError>) -> Render {
+    let roadmap = match read {
+        Ok(roadmap) => roadmap,
+        Err(error) => return read_error(error),
+    };
+    if roadmap.description.is_none() && roadmap.phases.is_empty() && roadmap.stories.is_empty() {
+        return Render::line("no scope has been approved for this project", 0);
+    }
+    let mut lines = Vec::new();
+    if let Some(description) = &roadmap.description {
+        describe(
+            &mut lines,
+            &description.what,
+            &description.core_value,
+            &description.constraints,
+        );
+    }
+    for phase in &roadmap.phases {
+        lines.extend([
+            format!(
+                "phase {} ({}): {}",
+                phase.number,
+                escaped(&phase.status),
+                escaped(&phase.name)
+            ),
+            format!("  goal: {}", escaped(&phase.goal)),
+            format!("  depends on: {}", list(&phase.depends_on)),
+            format!("  stories: {}", list(&phase.stories)),
+        ]);
+    }
+    for story in &roadmap.stories {
+        lines.push(format!(
+            "story {} ({}, {}): {}",
+            story.id,
+            escaped(&story.status),
+            committed(story.phase),
+            escaped(&story.sentence)
+        ));
+    }
+    printed(lines)
+}
+
+/// What `phase show` prints for a phase read.
+pub(crate) fn phase_render(read: Result<Phase, ReadError>) -> Render {
+    match read {
+        Ok(phase) => printed(vec![
+            format!(
+                "phase {} ({}): {}",
+                phase.number,
+                escaped(&phase.status),
+                escaped(&phase.name)
+            ),
+            format!("goal: {}", escaped(&phase.goal)),
+            format!("detail: {}", escaped(&phase.detail)),
+            format!("depends on: {}", list(&phase.depends_on)),
+            format!("stories: {}", list(&phase.stories)),
+        ]),
+        Err(error) => read_error(error),
+    }
+}
+
+/// What `backlog show` prints for a backlog read: one line per story in
+/// priority order, or one line when it is empty.
+pub(crate) fn backlog_render(read: Result<Vec<BacklogStory>, ReadError>) -> Render {
+    match read {
+        Ok(stories) if stories.is_empty() => Render::line("the backlog is empty", 0),
+        Ok(stories) => printed(
+            stories
+                .iter()
+                .map(|story| {
+                    format!(
+                        "story {} ({}, {}, {}, {} truths): {}",
+                        story.id,
+                        escaped(&story.status),
+                        committed(story.phase),
+                        escaped(&story.refinement),
+                        story.truths,
+                        escaped(&story.sentence)
+                    )
+                })
+                .collect(),
+        ),
+        Err(error) => read_error(error),
+    }
+}
+
+/// What `story show` prints for a story read.
+pub(crate) fn story_render(read: Result<Story, ReadError>) -> Render {
+    match read {
+        Ok(story) => printed(vec![
+            format!(
+                "story {} ({}): {}",
+                story.id,
+                escaped(&story.status),
+                escaped(&story.sentence)
+            ),
+            format!(
+                "phase: {}",
+                story
+                    .phase
+                    .map_or_else(|| "backlog".to_owned(), |phase| phase.to_string())
+            ),
+            format!("truths: {}", story.truths),
+        ]),
+        Err(error) => read_error(error),
+    }
+}
+
+/// The description's lines, as both the preview and the roadmap print them.
+fn describe(lines: &mut Vec<String>, what: &str, core_value: &str, constraints: &[String]) {
+    lines.push(format!("what: {}", escaped(what)));
+    lines.push(format!("core value: {}", escaped(core_value)));
+    for constraint in constraints {
+        lines.push(format!("constraint: {}", escaped(constraint)));
+    }
+}
+
+/// Where a story is committed: `phase <n>`, or `backlog`.
+fn committed(phase: Option<u32>) -> String {
+    phase.map_or_else(|| "backlog".to_owned(), |phase| format!("phase {phase}"))
+}
+
+/// Numbers joined by `, `, or `none`.
+fn list<T: ToString>(numbers: &[T]) -> String {
+    or_none(numbers.iter().map(ToString::to_string).collect())
+}
+
+fn or_none(items: Vec<String>) -> String {
+    if items.is_empty() {
+        "none".into()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn printed(lines: Vec<String>) -> Render {
+    Render {
+        lines,
+        code: 0,
+        error: false,
+    }
+}
+
+/// A ledger that holds the record but cannot give it whole, exit 1.
+fn unavailable(reason: &str) -> Render {
+    Render {
+        lines: vec![format!("{LEDGER_UNAVAILABLE}: {reason}")],
+        code: 1,
+        error: true,
+    }
+}
+
+/// Why accepted scope could not be read: a missing phase or story is a
+/// refusal, exit 2; a body no longer held or a broken record is exit 1.
+fn read_error(error: ReadError) -> Render {
+    match error {
+        ReadError::NoSuchPhase => {
+            Render::refusal(format!("{NO_SUCH_PHASE}: this project has no such phase"))
+        }
+        ReadError::NoSuchStory => {
+            Render::refusal(format!("{NO_SUCH_STORY}: this project has no such story"))
+        }
+        ReadError::BodyGone => {
+            unavailable("the phase is recorded, but its detail body is no longer held")
+        }
+        ReadError::Unreadable(reason) => unavailable(&reason),
+        ReadError::Store(error) => display::store_error(&error, None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scope::read::{Description, RoadmapPhase};
 
     const PROJECT: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
     const D: &str = "1b11196b8f9f4ffd5c08a4d97643f80867194c5e1a6d8cc51d2929f8db38d68e";
@@ -359,5 +704,210 @@ mod tests {
             busy.lines
         );
         assert_eq!((busy.code, busy.error), (1, true));
+    }
+
+    fn text(value: &str) -> String {
+        value.into()
+    }
+
+    fn story(id: u32, sentence: &str, status: &str, phase: Option<u32>) -> Story {
+        Story {
+            id,
+            sentence: text(sentence),
+            status: text(status),
+            phase,
+            truths: 0,
+        }
+    }
+
+    /// The approved S1's roadmap, as the plan's Notes give it.
+    fn s1_roadmap() -> Roadmap {
+        let phase = |number, name: &str, goal: &str, depends_on, stories| RoadmapPhase {
+            number,
+            name: text(name),
+            goal: text(goal),
+            status: text("declared"),
+            depends_on,
+            stories,
+        };
+        Roadmap {
+            description: Some(Description {
+                what: text("A ledger for agent work"),
+                core_value: text("Nothing moves on an unproven claim"),
+                constraints: vec![text("One binary")],
+            }),
+            phases: vec![
+                phase(1, "Records", "Steps are recorded", vec![], vec![1]),
+                phase(2, "Approval", "The owner approves", vec![1], vec![2]),
+            ],
+            stories: vec![
+                story(1, "Every step is recorded", "active", Some(1)),
+                story(2, "The owner approves scope", "active", Some(2)),
+                story(3, "Teammates see the backlog", "deferred", None),
+            ],
+        }
+    }
+
+    fn shown(render: &Render) -> Vec<&str> {
+        assert_eq!(
+            (render.code, render.error),
+            (0, false),
+            "{:?}",
+            render.lines
+        );
+        render.lines.iter().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn a_preview_that_leaves_out_what_the_owner_approves_is_caught() {
+        let preview = Preview {
+            kind: text("start"),
+            digest: Hash::from_hex(D).unwrap(),
+            seq: 2,
+            recorded_at: text(T),
+            submission: crate::scope::fixtures::s1(),
+        };
+        let render = preview_render(Ok(preview));
+        assert_eq!(
+            shown(&render),
+            [
+                format!("draft {D} (start), submitted {T}").as_str(),
+                "what: A ledger for agent work",
+                "core value: Nothing moves on an unproven claim",
+                "constraint: One binary",
+                "story record (active): Every step is recorded",
+                "story approve (active): The owner approves scope",
+                "story later (deferred): Teammates see the backlog",
+                "phase 1: Records",
+                "  goal: Steps are recorded",
+                "  detail: The ledger and its views",
+                "  depends on: none",
+                "  stories: record",
+                "phase 2: Approval",
+                "  goal: The owner approves",
+                "  detail: Approval by digest",
+                "  depends on: 1",
+                "  stories: approve",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_roadmap_shown_out_of_order_or_unstarted_shown_as_an_error_is_caught() {
+        let render = roadmap_render(Ok(s1_roadmap()));
+        assert_eq!(
+            shown(&render),
+            [
+                "what: A ledger for agent work",
+                "core value: Nothing moves on an unproven claim",
+                "constraint: One binary",
+                "phase 1 (declared): Records",
+                "  goal: Steps are recorded",
+                "  depends on: none",
+                "  stories: 1",
+                "phase 2 (declared): Approval",
+                "  goal: The owner approves",
+                "  depends on: 1",
+                "  stories: 2",
+                "story 1 (active, phase 1): Every step is recorded",
+                "story 2 (active, phase 2): The owner approves scope",
+                "story 3 (deferred, backlog): Teammates see the backlog",
+            ]
+        );
+        let empty = roadmap_render(Ok(Roadmap {
+            description: None,
+            phases: vec![],
+            stories: vec![],
+        }));
+        assert_eq!(
+            shown(&empty),
+            ["no scope has been approved for this project"]
+        );
+    }
+
+    #[test]
+    fn a_phase_shown_without_its_detail_or_dependencies_is_caught() {
+        let render = phase_render(Ok(Phase {
+            number: 2,
+            name: text("Approval"),
+            goal: text("The owner approves"),
+            status: text("declared"),
+            detail: text("Approval by digest"),
+            depends_on: vec![1],
+            stories: vec![2],
+        }));
+        assert_eq!(
+            shown(&render),
+            [
+                "phase 2 (declared): Approval",
+                "goal: The owner approves",
+                "detail: Approval by digest",
+                "depends on: 1",
+                "stories: 2",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_backlog_or_story_shown_without_its_phase_or_refinement_is_caught() {
+        let listed = |id, sentence: &str, status: &str, phase| BacklogStory {
+            id,
+            sentence: text(sentence),
+            status: text(status),
+            phase,
+            refinement: text("unrefined"),
+            truths: 0,
+            size: None,
+        };
+        let backlog = backlog_render(Ok(vec![
+            listed(1, "Every step is recorded", "active", Some(1)),
+            listed(2, "The owner approves scope", "active", Some(2)),
+            listed(3, "Teammates see the backlog", "deferred", None),
+        ]));
+        assert_eq!(
+            shown(&backlog),
+            [
+                "story 1 (active, phase 1, unrefined, 0 truths): Every step is recorded",
+                "story 2 (active, phase 2, unrefined, 0 truths): The owner approves scope",
+                "story 3 (deferred, backlog, unrefined, 0 truths): Teammates see the backlog",
+            ]
+        );
+        assert_eq!(shown(&backlog_render(Ok(vec![]))), ["the backlog is empty"]);
+        let one = story_render(Ok(story(1, "Every step is recorded", "active", Some(1))));
+        assert_eq!(
+            shown(&one),
+            [
+                "story 1 (active): Every step is recorded",
+                "phase: 1",
+                "truths: 0"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_recorded_control_character_printed_raw_is_caught() {
+        for (sentence, expected) in [
+            (
+                "one\nstory 9 (active): forged",
+                "story 1 (active): one\\nstory 9 (active): forged",
+            ),
+            ("one\rtwo\u{1b}[2J", "story 1 (active): one\\rtwo\\u{1b}[2J"),
+        ] {
+            let render = story_render(Ok(story(1, sentence, "active", Some(1))));
+            let first = &shown(&render)[0];
+            assert_eq!(*first, expected);
+            assert!(!first.chars().any(char::is_control), "{first:?}");
+        }
+    }
+
+    #[test]
+    fn a_phase_number_or_story_id_of_zero_or_text_accepted_is_caught() {
+        // `phase show` takes `0` and `x`, `story show` takes `0`, through the
+        // one judgement both use.
+        for text in ["0", "x", "0"] {
+            let refusal = judge_number(text).expect_err(text);
+            assert_eq!((refusal.code, refusal.error), (2, true), "{text}");
+        }
+        assert_eq!(judge_number("1").ok(), Some(1));
     }
 }
