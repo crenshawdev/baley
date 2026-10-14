@@ -971,6 +971,9 @@ mod tests {
                 second["body"].as_str().unwrap()
             );
             assert_eq!(serde_json::from_str::<Value>(&joined).unwrap(), whole);
+            // A request that names no part still gets a bounded first page.
+            let unnamed = draft_answer(&draft(), Ok(preview(submission.clone())), None);
+            assert_eq!(unnamed, first);
             let third = draft_answer(&draft(), Ok(preview(submission)), Some(3));
             refused(&third, "document-part-not-found", "part");
         }
