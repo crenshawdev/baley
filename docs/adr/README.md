@@ -50,3 +50,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0040](0040-guard-commit-checkout.md) | Judge and remember a commit at its target checkout | Accepted, supersedes 0036 in part |
 | [0042](0042-mocked-boundary-integration-checks.md) | Prove assembled behavior with mocked-boundary integration checks | Accepted |
 | [0043](0043-submissions-recorded-as-drafts.md) | Record every submission in the ledger as a draft | Accepted |
+| [0044](0044-owner-acts-on-the-command-line.md) | Give the owner's acts and reads command-line forms, and serve approvals only there | Accepted |
