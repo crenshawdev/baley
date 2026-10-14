@@ -196,9 +196,9 @@ UPK-R10 and UPK-Q3 require the measurement specified in section 5, full per-file
 | Topics | `rust`, `mcp`, `ai-agents`, `claude-code`, `sqlite`, `event-sourcing` | GitHub repository metadata |
 | Wiki | Disabled | GitHub repository settings |
 | Product status | Designed and being built, not ready to use; no release is implied by accepting a design | [README:5](../../README.md#L5) |
-| Host scope | Claude Code | [README:23](../../README.md#L23), ADR 0033 |
+| Host scope | Claude Code | [README hosts and platforms](../../README.md#hosts-and-platforms), ADR 0033 |
 | Contributions | Issues welcome; pull requests by invitation | [README contribution policy](../../README.md#issues-and-contributions) |
-| CI description | Names the checks actually required on `main` | [README required checks](../../README.md#following-the-work) |
+| CI description | Names the checks actually required on `main` | [README required checks](../../README.md#how-it-is-designed-and-built) |
 
 ### Labels
 
@@ -244,7 +244,7 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | UPK-R4 | Built | The six retained passages and unnamed benchmark material are cited in section 6 |
 | UPK-R5 | Built | [test.yml:121-140](../../.github/workflows/test.yml#L121) runs `fmt` beside the three other jobs, and the applied rules require all four from one producer with strict checks, as the note below records |
 | UPK-R6 | Built | [test.yml:127-140](../../.github/workflows/test.yml#L127) reads the exact channel from [rust-toolchain.toml:11](../../rust-toolchain.toml#L11), installs and selects it, explicitly adds its `rustfmt` component and runs `cargo fmt --all --check` |
-| UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#how-it-works), [four required checks](../../README.md#following-the-work), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary and its unbuilt removal](../../README.md#api-keys-and-outside-review-risks). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
+| UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#hosts-and-platforms), [four required checks](../../README.md#how-it-is-designed-and-built), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary](../../README.md#outside-reviews-and-your-api-keys) and [what is still unbuilt](../../README.md#current-state). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
 | UPK-R8 | Built | Section 9's six labels remain; the seven no issue or pull request used are removed, and `enhancement` keeps its 53 closed issues without being used for new work |
 | UPK-R9 | Built | [bug.yml:12-21](../../.github/ISSUE_TEMPLATE/bug.yml#L12) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [5-11](../../.github/ISSUE_TEMPLATE/bug.yml#L5) and [22-35](../../.github/ISSUE_TEMPLATE/bug.yml#L22) |
 | UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
