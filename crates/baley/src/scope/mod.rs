@@ -6,7 +6,7 @@
 /// Records one start submission as a draft in its own domain transaction.
 pub mod submit;
 
-/// Reads a draft back by its digest, as its latest submission recorded it.
+/// Reads a draft back by its digest, and accepted scope from its views.
 pub mod read;
 
 /// Approves a draft by its digest under the owner: the judgement first, then the records.
@@ -168,6 +168,14 @@ pub(crate) mod fixtures {
 
     pub fn head(store: &SqliteStore) -> u64 {
         store.head(&project()).unwrap().map_or(0, |head| head.seq)
+    }
+
+    /// Approves the draft with `digest` as the owner `Ada Owner` at T3,
+    /// through the approval's two steps.
+    pub fn approve_draft(store: &SqliteStore, digest: Hash) {
+        let judged = crate::scope::approve::judge(store, &project(), digest).unwrap();
+        let command = command(crate::scope::approve::APPROVE_COMMAND, R5, 5, T3);
+        crate::scope::approve::record(store, &command, Some(&judged), "Ada Owner").unwrap();
     }
 
     /// Appends a `scope.approved` of kind `start` under a test command of
