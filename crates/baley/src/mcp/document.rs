@@ -1,12 +1,15 @@
-//! `document` on `baley_query`: a record read back by identity. A capture is
-//! the only kind so far. Its text comes from the `capture` view when inline,
-//! or from its body by hash, and a body this project purged answers a
-//! tombstone (design 0012 operations, design 0014 section 6).
+//! `document` on `baley_query`: a record read back by identity. A capture's
+//! text comes from the `capture` view when inline, or from its body by hash,
+//! and a body this project purged answers a tombstone (design 0012
+//! operations, design 0014 section 6). A draft by its digest, the accepted
+//! roadmap and an accepted story come from `scope::read` (design 0004
+//! section 5), the same reads the owner's commands print.
 
 use std::io::Read;
 use std::path::Path;
 
-use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW};
+use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW, NO_SUCH_PHASE};
+use baley_core::scope::UNKNOWN_DRAFT;
 use baley_store::{
     Hash, IndexQuery, KeyValue, PageRequest, PayloadBody, PayloadStatus, Payloads, ProjectId, Views,
 };
@@ -19,6 +22,9 @@ use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::handler::Preparation;
 use crate::mcp::parts::{Cut, PART_BOUND, cut};
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, prepare};
+use crate::scope::read::{
+    self as scope, NO_SUCH_STORY, Preview, PreviewError, ReadError, Roadmap, Story,
+};
 
 /// The code for a capture id the project's `capture` view does not hold.
 pub const NO_SUCH_CAPTURE: &str = "no-such-capture";
@@ -45,6 +51,21 @@ pub enum Identity {
     Capture {
         /// The capture id from the capture's receipt.
         id: String,
+    },
+    /// A scope draft as its latest submission recorded it.
+    #[serde(rename = "draft")]
+    Draft {
+        /// The draft's digest from the scope-submit receipt.
+        digest: String,
+    },
+    /// The project's accepted roadmap: its description, phases and stories.
+    #[serde(rename = "roadmap")]
+    Roadmap {},
+    /// One accepted story.
+    #[serde(rename = "story")]
+    Story {
+        /// The story id Baley assigned when the scope was approved.
+        id: u32,
     },
 }
 
@@ -147,14 +168,7 @@ pub fn answer(
                 answer["body"] = json!(body);
                 answer["next"] = json!(next);
             }
-            Cut::Absent => {
-                return Refusal::new(
-                    "document-part-not-found",
-                    "the requested document part is absent",
-                )
-                .slot("part")
-                .value();
-            }
+            Cut::Absent => return part_not_found(),
         },
     }
     answer
@@ -209,18 +223,138 @@ pub fn serve(arguments: &Value, preparation: &Preparation) -> Value {
 /// A busy ledger's reason when a capture was not read.
 const NOT_READ_BUSY: &str = "the ledger is busy, so the capture was not read. Try it again";
 
-/// Reads the capture `shape` names from `project` in `store`: its view
-/// document by id, then its body only when the view says this project still
-/// holds it. Nothing is appended.
+/// A busy ledger's reason when scope was not read.
+const SCOPE_NOT_READ_BUSY: &str = "the ledger is busy, so the scope was not read. Try it again";
+
+/// Reads the record `shape` names from `project` in `store`. A capture is
+/// read from its view document by id, then its body only when the view says
+/// this project still holds it; a draft, the roadmap and a story through
+/// `scope::read`. Nothing is appended.
 pub fn read<S: Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
     shape: &DocumentShape,
 ) -> Value {
-    match find_capture(store, project, shape) {
-        Ok(document) => read_document(store, project, shape, &document),
-        Err(answer) => answer,
+    let identity = &shape.identity;
+    match identity {
+        Identity::Capture { .. } => match find_capture(store, project, shape) {
+            Ok(document) => read_document(store, project, shape, &document),
+            Err(answer) => answer,
+        },
+        // A digest not written as the receipt writes it names no draft.
+        Identity::Draft { digest } => {
+            match Hash::from_hex(digest).filter(|h| h.to_hex() == *digest) {
+                Some(hash) => {
+                    draft_answer(identity, scope::preview(store, project, hash), shape.part)
+                }
+                None => draft_answer(identity, Err(PreviewError::UnknownDraft), shape.part),
+            }
+        }
+        Identity::Roadmap {} => {
+            roadmap_answer(identity, scope::roadmap(store, project), shape.part)
+        }
+        Identity::Story { id } => {
+            story_answer(identity, scope::story(store, project, *id), shape.part)
+        }
     }
+}
+
+/// The answer for a draft read: its preview, in parts when large, or why it
+/// has none. An unknown draft echoes none of the digest.
+pub fn draft_answer(
+    identity: &Identity,
+    read: Result<Preview, PreviewError>,
+    part: Option<usize>,
+) -> Value {
+    match read {
+        Ok(preview) => in_parts(
+            json!({"status": "ok", "identity": identity, "kind": preview.kind,
+                "digest": preview.digest.to_hex(), "recorded_at": preview.recorded_at,
+                "submission": preview.submission}),
+            part,
+        ),
+        Err(PreviewError::UnknownDraft) => Refusal::new(
+            UNKNOWN_DRAFT,
+            "no submission in this project has that digest",
+        )
+        .slot("identity")
+        .value(),
+        Err(PreviewError::Unreadable(reason)) => failed(LEDGER_UNAVAILABLE, reason, PLACE_LEDGER),
+        Err(PreviewError::Store(error)) => store_failed(&error, SCOPE_NOT_READ_BUSY),
+    }
+}
+
+/// The answer for a roadmap read, in parts when large.
+pub fn roadmap_answer(
+    identity: &Identity,
+    read: Result<Roadmap, ReadError>,
+    part: Option<usize>,
+) -> Value {
+    match read {
+        Ok(roadmap) => in_parts(
+            json!({"status": "ok", "identity": identity, "description": roadmap.description,
+                "phases": roadmap.phases, "stories": roadmap.stories}),
+            part,
+        ),
+        Err(error) => read_failed(error),
+    }
+}
+
+/// The answer for a story read, in parts when large. The story's own status
+/// is nested under `story`, so it never stands in for the answer's.
+pub fn story_answer(
+    identity: &Identity,
+    read: Result<Story, ReadError>,
+    part: Option<usize>,
+) -> Value {
+    match read {
+        Ok(story) => in_parts(
+            json!({"status": "ok", "identity": identity, "story": story}),
+            part,
+        ),
+        Err(error) => read_failed(error),
+    }
+}
+
+/// Why accepted scope was not read. A missing phase or story echoes none of
+/// its number, as a missing capture echoes none of its id.
+fn read_failed(error: ReadError) -> Value {
+    match error {
+        ReadError::NoSuchPhase => Refusal::new(NO_SUCH_PHASE, "this project has no such phase")
+            .slot("identity")
+            .value(),
+        ReadError::NoSuchStory => Refusal::new(NO_SUCH_STORY, "this project has no such story")
+            .slot("identity")
+            .value(),
+        ReadError::BodyGone => failed(
+            LEDGER_UNAVAILABLE,
+            "the scope is recorded, but a body it names is no longer held",
+            PLACE_LEDGER,
+        ),
+        ReadError::Unreadable(reason) => failed(LEDGER_UNAVAILABLE, reason, PLACE_LEDGER),
+        ReadError::Store(error) => store_failed(&error, SCOPE_NOT_READ_BUSY),
+    }
+}
+
+/// `answer` whole when its JSON text fits one part, or one numbered part of
+/// that text, as `help` cuts its answer.
+fn in_parts(answer: Value, part: Option<usize>) -> Value {
+    let text = serde_json::to_string(&answer).expect("a document answer serializes");
+    match cut(&text, part) {
+        Cut::Whole(_) => answer,
+        Cut::Part { body, part, next } => json!({"status": "ok", "bound": PART_BOUND,
+            "part": part, "body": body, "next": next}),
+        Cut::Absent => part_not_found(),
+    }
+}
+
+fn part_not_found() -> Value {
+    Refusal::new(
+        "document-part-not-found",
+        "the requested document part is absent",
+    )
+    .slot("part")
+    .value()
 }
 
 fn find_capture<S: Views + ?Sized>(
@@ -228,7 +362,9 @@ fn find_capture<S: Views + ?Sized>(
     project: &ProjectId,
     shape: &DocumentShape,
 ) -> Result<CaptureDocument, Value> {
-    let Identity::Capture { id } = &shape.identity;
+    let Identity::Capture { id } = &shape.identity else {
+        return Err(no_such_capture());
+    };
     let query = IndexQuery {
         index: CAPTURE_ID_INDEX.into(),
         equals: vec![KeyValue::Text(id.clone())],
@@ -680,6 +816,197 @@ mod tests {
             assert_eq!(value["code"], "no-such-capture");
             assert_eq!(value["slot"], "identity");
             assert_eq!(head(&store, A), before);
+        }
+    }
+
+    mod scope_kinds {
+        use super::super::*;
+        use crate::scope::fixtures::{M_DIGEST, m};
+        use crate::scope::read::{Description, RoadmapPhase};
+
+        const AT: &str = "2026-10-13T09:00:01Z";
+
+        fn draft() -> Identity {
+            Identity::Draft {
+                digest: M_DIGEST.into(),
+            }
+        }
+
+        fn preview(submission: Value) -> Preview {
+            Preview {
+                kind: "start".into(),
+                digest: Hash::from_hex(M_DIGEST).unwrap(),
+                seq: 2,
+                recorded_at: AT.into(),
+                submission,
+            }
+        }
+
+        fn deferred() -> Story {
+            Story {
+                id: 3,
+                sentence: "Teammates see the backlog".into(),
+                status: "deferred".into(),
+                phase: None,
+                truths: 0,
+            }
+        }
+
+        fn refused(value: &Value, code: &str, slot: &str) {
+            assert_eq!(value["status"], "refused", "{value}");
+            assert_eq!(value["code"], code, "{value}");
+            assert_eq!(value["slot"], slot, "{value}");
+        }
+
+        #[test]
+        fn a_draft_answer_missing_its_submission_or_identity_is_caught() {
+            assert_eq!(
+                draft_answer(&draft(), Ok(preview(m())), None),
+                json!({"status": "ok", "identity": {"kind": "draft", "digest": M_DIGEST},
+                    "kind": "start", "digest": M_DIGEST, "recorded_at": AT,
+                    "submission": {"description": {"what": "w", "core_value": "v",
+                            "constraints": []},
+                        "stories": [{"label": "s", "sentence": "t", "status": "active"}],
+                        "roadmap": [{"name": "n", "goal": "g", "detail": "d",
+                            "depends_on": [], "stories": ["s"]}]}})
+            );
+        }
+
+        #[test]
+        fn a_story_whose_status_overwrites_the_answer_status_is_caught() {
+            assert_eq!(
+                story_answer(&Identity::Story { id: 3 }, Ok(deferred()), None),
+                json!({"status": "ok", "identity": {"kind": "story", "id": 3},
+                    "story": {"id": 3, "sentence": "Teammates see the backlog",
+                        "status": "deferred", "phase": null, "truths": 0}})
+            );
+        }
+
+        #[test]
+        fn a_roadmap_answer_out_of_order_or_missing_its_description_is_caught() {
+            let phase = |number, name: &str, goal: &str, depends_on, stories| RoadmapPhase {
+                number,
+                name: name.into(),
+                goal: goal.into(),
+                status: "declared".into(),
+                depends_on,
+                stories,
+            };
+            let story = |id, sentence: &str, phase| Story {
+                id,
+                sentence: sentence.into(),
+                status: "active".into(),
+                phase,
+                truths: 0,
+            };
+            let roadmap = Roadmap {
+                description: Some(Description {
+                    what: "A ledger for agent work".into(),
+                    core_value: "Nothing moves on an unproven claim".into(),
+                    constraints: vec!["One binary".into()],
+                }),
+                phases: vec![
+                    phase(1, "Records", "Steps are recorded", vec![], vec![1]),
+                    phase(2, "Approval", "The owner approves", vec![1], vec![2]),
+                ],
+                stories: vec![
+                    story(1, "Every step is recorded", Some(1)),
+                    story(2, "The owner approves scope", Some(2)),
+                    deferred(),
+                ],
+            };
+            let value = roadmap_answer(&Identity::Roadmap {}, Ok(roadmap), None);
+            assert_eq!(value["status"], "ok", "{value}");
+            assert_eq!(value["identity"], json!({"kind": "roadmap"}));
+            assert_eq!(
+                value["description"],
+                json!({"what": "A ledger for agent work",
+                    "core_value": "Nothing moves on an unproven claim",
+                    "constraints": ["One binary"]})
+            );
+            assert_eq!(
+                value["phases"],
+                json!([
+                    {"number": 1, "name": "Records", "goal": "Steps are recorded",
+                        "status": "declared", "depends_on": [], "stories": [1]},
+                    {"number": 2, "name": "Approval", "goal": "The owner approves",
+                        "status": "declared", "depends_on": [1], "stories": [2]}
+                ])
+            );
+            assert_eq!(
+                value["stories"],
+                json!([
+                    {"id": 1, "sentence": "Every step is recorded", "status": "active",
+                        "phase": 1, "truths": 0},
+                    {"id": 2, "sentence": "The owner approves scope", "status": "active",
+                        "phase": 2, "truths": 0},
+                    {"id": 3, "sentence": "Teammates see the backlog", "status": "deferred",
+                        "phase": null, "truths": 0}
+                ])
+            );
+        }
+
+        #[test]
+        fn a_large_answer_served_whole_or_cut_off_its_json_is_caught() {
+            let mut submission = m();
+            submission["roadmap"][0]["detail"] = json!("a".repeat(30_000));
+            let whole = json!({"status": "ok", "identity": {"kind": "draft", "digest": M_DIGEST},
+                "kind": "start", "digest": M_DIGEST, "recorded_at": AT,
+                "submission": submission.clone()});
+            let first = draft_answer(&draft(), Ok(preview(submission.clone())), Some(1));
+            let second = draft_answer(&draft(), Ok(preview(submission.clone())), Some(2));
+            for (value, part, next) in [(&first, 1, json!(2)), (&second, 2, Value::Null)] {
+                let mut keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+                keys.sort();
+                assert_eq!(keys, ["body", "bound", "next", "part", "status"], "{value}");
+                assert_eq!(value["status"], "ok");
+                assert_eq!(value["bound"], 24_576);
+                assert_eq!(value["part"], part);
+                assert_eq!(value["next"], next);
+            }
+            assert_eq!(first["body"].as_str().unwrap().len(), 24_576);
+            let joined = format!(
+                "{}{}",
+                first["body"].as_str().unwrap(),
+                second["body"].as_str().unwrap()
+            );
+            assert_eq!(serde_json::from_str::<Value>(&joined).unwrap(), whole);
+            let third = draft_answer(&draft(), Ok(preview(submission)), Some(3));
+            refused(&third, "document-part-not-found", "part");
+        }
+
+        #[test]
+        fn an_identity_of_a_new_kind_with_a_wrong_or_extra_field_accepted_is_caught() {
+            for identity in [
+                json!({"kind": "story", "id": "1"}),
+                json!({"kind": "roadmap", "id": 1}),
+                json!({"kind": "draft"}),
+            ] {
+                let arguments = json!({"operation": "document", "identity": identity});
+                let refusal = judge_arguments(&arguments).expect_err("refused");
+                refused(&refusal, "invalid-arguments", "arguments");
+            }
+        }
+
+        #[test]
+        fn an_unknown_draft_or_story_answered_ok_or_echoing_its_argument_is_caught() {
+            let digest = "ab".repeat(32);
+            let unknown = draft_answer(
+                &Identity::Draft {
+                    digest: digest.clone(),
+                },
+                Err(PreviewError::UnknownDraft),
+                None,
+            );
+            refused(&unknown, "unknown-draft", "identity");
+            assert!(!unknown["reason"].as_str().unwrap().contains(&digest));
+            let missing = story_answer(
+                &Identity::Story { id: 99 },
+                Err(ReadError::NoSuchStory),
+                None,
+            );
+            refused(&missing, "no-such-story", "identity");
+            assert!(!missing["reason"].as_str().unwrap().contains("99"));
         }
     }
 
