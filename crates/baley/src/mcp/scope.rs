@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed};
+use crate::mcp::client::MAX_ECHOED_BYTES;
 use crate::mcp::handler::Preparation;
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, WriteRequest, prepare_checked};
 use crate::scope::submit::{self, SUBMIT_COMMAND};
@@ -61,9 +62,11 @@ pub fn judge_arguments(arguments: &Value) -> Result<JudgedSubmission, Value> {
     let shape = match serde_json::from_value::<SubmitCall>(arguments.clone()) {
         Ok(SubmitCall::Submit(shape)) => shape,
         Err(error) => {
-            return Err(Refusal::new("invalid-arguments", error.to_string())
-                .slot("arguments")
-                .value());
+            return Err(
+                Refusal::new("invalid-arguments", bounded(error.to_string()))
+                    .slot("arguments")
+                    .value(),
+            );
         }
     };
     // One spelling per id, so a retry cannot miss its replay by changing
@@ -95,6 +98,21 @@ pub fn judge_arguments(arguments: &Value) -> Result<JudgedSubmission, Value> {
         },
         submission,
     })
+}
+
+/// Serde's text for a shape fault, cut to the echo limit with a closing
+/// `...`, since it repeats an unknown field's name at whatever length the
+/// caller sent.
+fn bounded(text: String) -> String {
+    const CUT: &str = "...";
+    if text.len() <= MAX_ECHOED_BYTES {
+        return text;
+    }
+    let mut end = MAX_ECHOED_BYTES - CUT.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{CUT}", &text[..end])
 }
 
 /// The `refused` answer for a submission judged unacceptable, with the
@@ -196,6 +214,18 @@ mod tests {
         let refusal = refused(&extra);
         assert_eq!(refusal["code"], "invalid-arguments");
         assert_eq!(refusal["slot"], "arguments");
+    }
+
+    #[test]
+    fn an_unknown_argument_name_echoed_at_any_length_is_caught() {
+        // Three bytes a character, so the cut cannot land on a whole one by luck.
+        let mut extra = arguments(R1, m());
+        extra["名".repeat(10_000)] = json!(true);
+        let refusal = refused(&extra);
+        assert_eq!(refusal["code"], "invalid-arguments");
+        assert_eq!(refusal["slot"], "arguments");
+        let reason = refusal["reason"].as_str().expect("a reason");
+        assert!(reason.len() <= MAX_ECHOED_BYTES, "{} bytes", reason.len());
     }
 
     #[test]
