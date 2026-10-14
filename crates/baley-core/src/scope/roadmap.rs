@@ -362,6 +362,14 @@ mod tests {
                 16,
                 phase_reordered_payload(&[1, 2], digest()),
             ),
+            // A start's order is always 1 to n, so a later insertion gives
+            // the order a sort by number cannot reproduce.
+            phase(17, 3, "Reads", "Teammates read the roadmap", &[], &[]),
+            event(
+                "phase.reordered",
+                18,
+                phase_reordered_payload(&[3, 1, 2], digest()),
+            ),
         ]);
         let submission = "5c".repeat(32);
         assert_eq!(
@@ -375,9 +383,11 @@ mod tests {
                     {"number": 1, "name": "Records", "goal": "Steps are recorded",
                         "depends_on": [], "stories": [1], "status": "declared"},
                     {"number": 2, "name": "Approval", "goal": "The owner approves",
-                        "depends_on": [1], "stories": [2], "status": "declared"}
+                        "depends_on": [1], "stories": [2], "status": "declared"},
+                    {"number": 3, "name": "Reads", "goal": "Teammates read the roadmap",
+                        "depends_on": [], "stories": [], "status": "declared"}
                 ],
-                "order": [1, 2],
+                "order": [3, 1, 2],
                 "stories": [
                     {"id": 1, "sentence": "Every step is recorded", "status": "active",
                         "phase": 1, "truths": 0},
@@ -386,7 +396,7 @@ mod tests {
                     {"id": 3, "sentence": "Teammates see the backlog", "status": "deferred",
                         "phase": null, "truths": 0}
                 ],
-                "highest_phase": 2,
+                "highest_phase": 3,
                 "highest_story": 3
             })
         );

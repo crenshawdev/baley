@@ -214,15 +214,40 @@ mod tests {
 
     #[test]
     fn a_backlog_out_of_priority_order_or_missing_refinement_and_truths_is_caught() {
+        // Ids declared out of ascending order, so a sort by id cannot pass
+        // for declaration order.
+        let events = [
+            story(
+                11,
+                3,
+                "Teammates see the backlog",
+                StoryStatus::Deferred,
+                None,
+            ),
+            story(
+                12,
+                1,
+                "Every step is recorded",
+                StoryStatus::Active,
+                Some(1),
+            ),
+            story(
+                13,
+                2,
+                "The owner approves scope",
+                StoryStatus::Active,
+                Some(2),
+            ),
+        ];
         assert_eq!(
-            fold(&approved_s1()),
+            fold(&events),
             json!([
+                {"id": 3, "sentence": "Teammates see the backlog", "status": "deferred",
+                    "phase": null, "refinement": "unrefined", "truths": 0, "size": null},
                 {"id": 1, "sentence": "Every step is recorded", "status": "active", "phase": 1,
                     "refinement": "unrefined", "truths": 0, "size": null},
                 {"id": 2, "sentence": "The owner approves scope", "status": "active",
-                    "phase": 2, "refinement": "unrefined", "truths": 0, "size": null},
-                {"id": 3, "sentence": "Teammates see the backlog", "status": "deferred",
-                    "phase": null, "refinement": "unrefined", "truths": 0, "size": null}
+                    "phase": 2, "refinement": "unrefined", "truths": 0, "size": null}
             ])
         );
     }
