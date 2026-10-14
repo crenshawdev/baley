@@ -1,9 +1,12 @@
 //! The scope records of design 0004 over the storage port: a start
-//! submission recorded as a draft, and the start-once read every scope
-//! write is checked against first.
+//! submission recorded as a draft, the start-once read every scope write
+//! is checked against first, and the draft preview read by digest.
 
 /// Records one start submission as a draft in its own domain transaction.
 pub mod submit;
+
+/// Reads a draft back by its digest, as its latest submission recorded it.
+pub mod read;
 
 #[cfg(test)]
 pub(crate) mod fixtures {
@@ -11,15 +14,17 @@ pub(crate) mod fixtures {
     //! submissions are written out as design 0004's start shape, never
     //! produced by the code under test.
 
-    use baley_core::scope::{PROJECT_STREAM, SCOPE_APPROVED, approved_payload};
+    use baley_core::scope::{PROJECT_STREAM, SCOPE_APPROVED, approved_payload, judge_submission};
     use baley_store::{
-        Actor, Admin, Command, CommandKind, Decision, Event, Hash, HistoryFilter, Ledger, NewEvent,
-        Observed, OutcomeKind, PageRequest, ProjectId, RequestId, ServerCaller, StreamName,
+        Actor, Admin, Answer, Command, CommandKind, Decision, Event, Hash, HistoryFilter, Ledger,
+        NewEvent, Observed, OutcomeKind, PageRequest, ProjectId, Recorded, RequestId, ServerCaller,
+        StoreError, StreamName,
     };
     use baley_store_sqlite::SqliteStore;
     use serde_json::{Value, json};
 
     use crate::mcp::prepare::{WriteRequest, prepared_command};
+    use crate::scope::submit::SUBMIT_COMMAND;
 
     pub const T0: &str = "2026-10-13T09:00:00Z";
     pub const T1: &str = "2026-10-13T09:00:01Z";
@@ -101,6 +106,32 @@ pub(crate) mod fixtures {
             digest: Hash([digest; 32]),
         };
         prepared_command(&project(), &request, 0, at, &caller())
+    }
+
+    /// Records `value`, judged whole, as a submission under `request_id`
+    /// with a write digest of `digest` bytes, at `at`.
+    pub fn submit(
+        store: &SqliteStore,
+        value: &Value,
+        request_id: &str,
+        digest: u8,
+        at: &str,
+    ) -> Result<Recorded, StoreError> {
+        let submission = judge_submission(value).unwrap();
+        crate::scope::submit::record(
+            store,
+            &command(SUBMIT_COMMAND, request_id, digest, at),
+            &submission,
+        )
+    }
+
+    /// The inline answer a command recorded or replayed.
+    pub fn receipt(recorded: &Recorded) -> Value {
+        let (Recorded::New { outcome, .. } | Recorded::Replayed { outcome }) = recorded;
+        match &outcome.answer {
+            Answer::Inline(value) => value.clone(),
+            other => panic!("expected an inline answer, got {other:?}"),
+        }
     }
 
     pub fn history(store: &SqliteStore) -> Vec<Event> {

@@ -187,36 +187,13 @@ pub fn answer(result: Result<Recorded, StoreError>, payloads: &dyn Payloads) -> 
 mod tests {
     use std::io::Read;
 
-    use baley_core::scope::{DRAFT_NEWEST_INDEX, DRAFT_VIEW, judge_submission};
+    use baley_core::scope::{DRAFT_NEWEST_INDEX, DRAFT_VIEW};
     use baley_store::{
-        Answer, Hash, IndexQuery, KeyValue, PayloadBody, PayloadRef, RequestId, StaleInput, Views,
+        Hash, IndexQuery, KeyValue, PayloadBody, PayloadRef, RequestId, StaleInput, Views,
     };
 
     use super::*;
     use crate::scope::fixtures::*;
-
-    fn submit(
-        store: &impl Ledger,
-        value: &Value,
-        request: &str,
-        digest: u8,
-        at: &str,
-    ) -> Result<Recorded, StoreError> {
-        let submission = judge_submission(value).unwrap();
-        record(
-            store,
-            &command(SUBMIT_COMMAND, request, digest, at),
-            &submission,
-        )
-    }
-
-    fn receipt(recorded: &Recorded) -> Value {
-        let (Recorded::New { outcome, .. } | Recorded::Replayed { outcome }) = recorded;
-        match &outcome.answer {
-            Answer::Inline(value) => value.clone(),
-            other => panic!("expected an inline answer, got {other:?}"),
-        }
-    }
 
     fn assert_failed(value: &Value, code: &str, place: &str, retryable: bool) {
         assert_eq!(value["status"], "failed", "{value}");
