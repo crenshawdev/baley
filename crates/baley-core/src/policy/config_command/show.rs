@@ -158,6 +158,7 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::BranchList => "list of branch names",
         Kind::ReviewerList => "list of host, openai or deepseek",
         Kind::HttpsAddress => "https:// address",
+        Kind::PersonName => "name",
     }
 }
 

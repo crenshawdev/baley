@@ -131,7 +131,7 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 20);
+    assert_eq!(schema.entries().len(), 21);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -697,7 +697,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 20);
+        assert_eq!(policy.settings.len(), 21);
         assert!(
             policy
                 .settings
@@ -1459,7 +1459,7 @@ fn an_update_setting_missing_or_open_to_project_files_is_caught() {
         (source.kind, source.default, source.scope, source.owner),
         (Kind::HttpsAddress, Builtin::Absent, Scope::Global, "0012")
     );
-    assert_eq!(schema.entries().len(), 20);
+    assert_eq!(schema.entries().len(), 21);
 }
 
 #[test]
@@ -1611,5 +1611,40 @@ fn a_reviewer_list_read_with_an_unknown_reviewer_or_the_wrong_type_is_caught() {
             .to_string()
             .ends_with("review.reviewers is a string, not a list of host, openai or deepseek"),
         "{wrong}"
+    );
+}
+
+#[test]
+fn an_owner_name_entry_with_another_kind_default_scope_or_owner_is_caught() {
+    let schema = Schema::standard();
+    let owner = schema.get("owner.name").expect("owner.name is missing");
+    assert_eq!(
+        (owner.kind, owner.default, owner.scope, owner.owner),
+        (Kind::PersonName, Builtin::Absent, Scope::Global, "0012")
+    );
+    assert_eq!(schema.entries().len(), 21);
+}
+
+#[test]
+fn an_owner_name_written_in_the_project_file_taken_as_the_owner_is_caught() {
+    let policy = standard(None, None, Some("[owner]\nname = \"Mallory\"\n")).unwrap();
+    assert_eq!(value_of(&policy, "owner.name").value, None);
+    assert_eq!(
+        policy
+            .diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["/r/baley.toml:2:1: owner.name is a global setting and was ignored in the project file"]
+    );
+}
+
+#[test]
+fn an_owner_name_with_a_line_break_reported_on_two_lines_is_caught() {
+    let message = global_fault("[owner]\nname = \"Ada\\nOwner\"\n").to_string();
+    assert_eq!(message.lines().count(), 1, "{message}");
+    assert_eq!(
+        message,
+        "config-unavailable: /c/config.toml:2:8: owner.name is \"Ada\\nOwner\"; write one line of text that is not blank and holds no control character, or remove the line"
     );
 }

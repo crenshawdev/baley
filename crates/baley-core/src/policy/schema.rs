@@ -186,6 +186,10 @@ pub enum Kind {
     /// whitespace, control character, query or fragment (`?` or `#`). Whether
     /// anything answers there is the fetcher's question, not the schema's.
     HttpsAddress,
+    /// A person's name: text that is not empty or only whitespace and holds no
+    /// control character, which also keeps it to one line. It is taken as
+    /// written, never trimmed.
+    PersonName,
 }
 
 /// The names a reviewer list may hold (design 0003 section 9): the host's own
@@ -200,6 +204,13 @@ pub(super) fn is_https_address(text: &str) -> bool {
         .is_some_and(|rest| !rest.is_empty())
         && !text.chars().any(|c| c.is_whitespace() || c.is_control())
         && !text.contains(['?', '#'])
+}
+
+/// Whether `text` is a name the schema accepts (design 0012 HST-R10): not
+/// blank, and no control character, so no line break either. The same rules
+/// apply to git's `user.name`, so both sources of the owner's name agree.
+pub(super) fn is_person_name(text: &str) -> bool {
+    !text.trim().is_empty() && !text.chars().any(char::is_control)
 }
 
 /// A setting's built-in value.
@@ -278,7 +289,7 @@ impl Schema {
 
     /// The schema: each role's model and effort, `escalate_on_failure`,
     /// `git.remote`, the guard's settings under `git`, the two `updates`
-    /// settings and `review.reviewers`.
+    /// settings, `review.reviewers` and `owner.name`.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -360,6 +371,14 @@ impl Schema {
                 default: Default::ReviewerList(&["host"]),
                 scope: Scope::Both,
                 owner: "0008",
+            });
+            // No default: an owner is never invented; the reader falls back to git.
+            entries.push(Entry {
+                name: "owner.name".into(),
+                kind: Kind::PersonName,
+                default: Default::Absent,
+                scope: Scope::Global,
+                owner: "0012",
             });
             Schema::new(entries)
         })
