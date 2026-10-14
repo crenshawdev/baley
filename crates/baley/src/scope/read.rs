@@ -466,9 +466,50 @@ mod tests {
         ]
     }
 
+    /// Appends a `phase.reordered` giving `order` under a test command, as
+    /// a later reorder would leave it.
+    fn reorder(store: &baley_store_sqlite::SqliteStore, order: &[u32]) {
+        use baley_core::scope::{PHASE_REORDERED, ROADMAP_STREAM, phase_reordered_payload};
+        use baley_store::{Decision, NewEvent, Observed, OutcomeKind, StreamName};
+
+        let command = baley_store::Command {
+            project: project(),
+            kind: baley_store::CommandKind("test.reorder".into()),
+            request_id: baley_store::RequestId("4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a".into()),
+            digest: Hash([0xdd; 32]),
+            scope: vec![],
+            policy_version: 0,
+            recorded_at: T3.into(),
+            actor: baley_store::Actor::Owner,
+            caller: None,
+        };
+        store
+            .transact(&command, &mut |tx| {
+                tx.append(NewEvent {
+                    stream: StreamName(ROADMAP_STREAM.into()),
+                    type_name: PHASE_REORDERED.into(),
+                    type_version: 1,
+                    git: None,
+                    payload: phase_reordered_payload(order, Hash([0x5c; 32])),
+                    attachments: Vec::new(),
+                })?;
+                Ok(Decision {
+                    kind: OutcomeKind::Done,
+                    answer: serde_json::json!({"status": "ok"}),
+                    sensitive: false,
+                    observed: Observed::default(),
+                    git: None,
+                })
+            })
+            .unwrap();
+    }
+
     #[test]
     fn a_roadmap_read_out_of_order_or_missing_a_story_is_caught() {
         let (_dir, store) = approved();
+        // The view keeps phases by number, so only an order other than
+        // 1, 2 tells the recorded order from the stored one.
+        reorder(&store, &[2, 1]);
         let read = roadmap(&store, &project()).unwrap();
         assert_eq!(
             read.description,
@@ -482,20 +523,20 @@ mod tests {
             read.phases,
             [
                 RoadmapPhase {
-                    number: 1,
-                    name: text("Records"),
-                    goal: text("Steps are recorded"),
-                    status: text("declared"),
-                    depends_on: vec![],
-                    stories: vec![1],
-                },
-                RoadmapPhase {
                     number: 2,
                     name: text("Approval"),
                     goal: text("The owner approves"),
                     status: text("declared"),
                     depends_on: vec![1],
                     stories: vec![2],
+                },
+                RoadmapPhase {
+                    number: 1,
+                    name: text("Records"),
+                    goal: text("Steps are recorded"),
+                    status: text("declared"),
+                    depends_on: vec![],
+                    stories: vec![1],
                 },
             ]
         );
