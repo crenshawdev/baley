@@ -13,6 +13,7 @@ use baley_core::capture::{
     stored_payload, text_form,
 };
 use baley_core::policy::Host;
+use baley_core::scope::{PHASE_VIEW, phase_key};
 use baley_store::{
     Command, CommandKind, Decision, InstructionEvidence, Ledger, NewEvent, Observed, OutcomeKind,
     Payloads, Recorded, Refusal as StoreRefusal, RequestId, RetentionClass, ServerCaller,
@@ -213,8 +214,9 @@ fn prepare_capture<S, T>(
 /// command preparation returned, in one domain transaction.
 ///
 /// The command is used as given, so the actor is Baley and the caller is the
-/// server caller preparation put on it. A named phase is refused inside the
-/// transaction, recording `command.completed` and nothing else. Text over
+/// server caller preparation put on it. A named phase the `phase` view does
+/// not hold is refused inside the transaction, recording `command.completed`
+/// and nothing else. Text over
 /// the inline limit is stored as a `record` payload the event attaches. The
 /// answer is the receipt, which never holds the text: a long receipt would be
 /// stored as its own answer payload that the capture's purge never releases.
@@ -228,8 +230,13 @@ pub fn record<L: Ledger + ?Sized>(
 ) -> Result<Recorded, StoreError> {
     let id = capture_id(&command.request_id.0, kind, text, phase);
     store.transact(command, &mut |tx| {
-        // Build 4 reads its `phase` view here; until then no phase exists.
-        if let (Err(code), Some(named)) = (judge_phase(phase, false), phase) {
+        // Only a phase an approval declared is in the `phase` view; a phase
+        // that exists only in a draft never reaches it.
+        let declared = match phase {
+            Some(number) => tx.get(PHASE_VIEW, &phase_key(number))?.is_some(),
+            None => false,
+        };
+        if let (Err(code), Some(named)) = (judge_phase(phase, declared), phase) {
             return Ok(decision(
                 OutcomeKind::Refused,
                 Refusal::new(
@@ -608,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn a_named_phase_recorded_as_a_capture_or_its_long_text_stored_anyway_is_caught() {
+    fn a_refused_capture_storing_its_long_text_anyway_is_caught() {
         let (_dir, store) = store();
         let before = head(&store);
         let long = over_limit();
@@ -634,6 +641,45 @@ mod tests {
         for event in &events {
             assert!(event.payload.get("body").is_none(), "{event:?}");
         }
+    }
+
+    #[test]
+    fn a_capture_naming_a_draft_only_or_undeclared_phase_recorded_or_an_approved_one_refused_is_caught()
+     {
+        use crate::scope::approve::{APPROVE_COMMAND, judge, record as approve};
+        use crate::scope::fixtures as scope;
+
+        let (_dir, store) = scope::store();
+        let draft =
+            scope::receipt(&scope::submit(&store, &scope::s1(), scope::R1, 1, scope::T1).unwrap());
+        let digest = Hash::from_hex(draft["digest"].as_str().unwrap()).unwrap();
+        let note = |request_id: &str, phase: u32, at: &str| {
+            let command = scope::command(CAPTURE_COMMAND, request_id, 9, at);
+            record(&store, &command, CaptureKind::Note, "x", Some(phase)).unwrap()
+        };
+        let captures = || of_type(&scope::history(&store), "capture.recorded").len();
+
+        let (kind, refusal) = outcome_answer(&note(REQUEST, 1, scope::T1));
+        assert_eq!(kind, OutcomeKind::Refused);
+        assert_eq!(refusal["code"], "no-such-phase", "{refusal}");
+        assert_eq!(refusal["slot"], "phase", "{refusal}");
+        assert_eq!(captures(), 0);
+
+        let judged = judge(&store, &scope::project(), digest).unwrap();
+        let command = scope::command(APPROVE_COMMAND, scope::R2, 2, scope::T2);
+        approve(&store, &command, Some(&judged), "Ada Owner").unwrap();
+
+        let (kind, receipt) = outcome_answer(&note(OTHER_REQUEST, 2, scope::T2));
+        assert_eq!(kind, OutcomeKind::Done, "{receipt}");
+        let events = scope::history(&store);
+        let recorded = of_type(&events, "capture.recorded");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].payload["phase"], 2);
+
+        let (kind, refusal) = outcome_answer(&note(scope::R3, 3, scope::T3));
+        assert_eq!(kind, OutcomeKind::Refused);
+        assert_eq!(refusal["code"], "no-such-phase", "{refusal}");
+        assert_eq!(captures(), 1);
     }
 
     #[test]
