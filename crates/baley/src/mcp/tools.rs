@@ -368,9 +368,8 @@ mod tests {
     fn a_served_operations_argument_left_out_of_the_tool_schema_is_caught() {
         // Design 0012: help takes name, schema takes tool and for, instruction
         // and document take identity, all four take part, and capture takes
-        // request_id, kind, text, phase and instruction, scope-submit takes
-        // request_id and submission, and scope-approve takes request_id and
-        // digest.
+        // request_id, kind, text, phase and instruction, and scope-submit takes
+        // request_id and submission.
         let names = |tool| {
             let schema = input_schema(tool);
             let mut names: Vec<String> = schema["properties"]
@@ -389,7 +388,6 @@ mod tests {
         assert_eq!(
             names(Tool::Apply),
             [
-                "digest",
                 "instruction",
                 "kind",
                 "operation",

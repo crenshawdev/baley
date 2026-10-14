@@ -7,9 +7,9 @@
 //! after the queue and then the operation. A call that needs a project reaches
 //! the operation with a [`Preparation`]: the caller the gate formed, the
 //! call's host, the session's ledger and the server's time. `capture`,
-//! `scope-submit`, `scope-approve` and `document` set `needs_project`, and in
-//! their [`operate`] arms `capture`, `scope-submit` and `scope-approve`
-//! prepare a write from it and `document` a read.
+//! `scope-submit` and `document` set `needs_project`, and in their
+//! [`operate`] arms `capture` and `scope-submit` prepare a write from it and
+//! `document` a read.
 //! rmcp has already validated the request's metadata by the time any
 //! of this runs, so a protocol-required metadata error stays a protocol error
 //! and runs nothing.
@@ -156,8 +156,8 @@ fn run_decision(
 /// The answer of an admitted operation. It matches the called operation and the
 /// project call's [`Preparation`] together, so an arm that needs a project
 /// names the input in its pattern and the arms that need none ignore it.
-/// `capture`, `scope-submit` and `scope-approve` prepare a write from the
-/// [`Preparation`], and `document` a read.
+/// `capture` and `scope-submit` prepare a write from the [`Preparation`], and
+/// `document` a read.
 fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
     match (called, project) {
@@ -174,9 +174,6 @@ fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparat
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "scope-submit" => {
             scope::serve(arguments_or_null, preparation)
-        }
-        (Called::Operation(_, spelling), Some(preparation)) if spelling == "scope-approve" => {
-            scope::serve_approve(arguments_or_null, preparation)
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "document" => {
             document::serve(arguments_or_null, preparation)
@@ -536,7 +533,35 @@ mod tests {
     }
 
     #[test]
-    fn a_scope_approve_argument_refusal_answered_after_preparation_or_recorded_is_caught() {
+    fn an_owner_approval_accepted_over_mcp_is_caught() {
+        // The owner approves on the command line only: nothing a session sends
+        // proves a person answered, so `scope-approve` is no apply spelling.
+        let expected = json!({
+            "status": "refused",
+            "code": "unknown-operation",
+            "slot": "operation",
+            "reason": format!(
+                "no baley_apply operation is named `scope-approve`; the operations are {}",
+                super::super::operations::expected::APPLY.join(", ")
+            ),
+        });
+        let arguments = json!({"operation": "scope-approve",
+            "request_id": "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f",
+            "digest": crate::scope::fixtures::M_DIGEST});
+        let selection = Selection::Supported {
+            host: Host::ClaudeCode,
+            client_version: "2.1.287".into(),
+        };
+        let spelling = super::super::operations::spelling(arguments.as_object());
+        let super::super::gate::Before::Answer(gate) =
+            super::super::gate::before_queue("baley_apply", &selection, spelling)
+        else {
+            panic!("the gate must answer scope-approve before the queue");
+        };
+        assert_eq!(gate.structured_content.as_ref(), Some(&expected));
+
+        // Past the gate too, a real store holding one project shows that
+        // nothing is prepared or recorded.
         let caller = ServerCaller::new(
             "/real/r",
             "/real/r",
@@ -545,10 +570,7 @@ mod tests {
             &json!(7),
         )
         .unwrap();
-        // A real store holding one project, so anything recorded shows in its
-        // head. A preparation that ran first would answer `failed`, since the
-        // caller's directory holds no project.
-        let at = "2026-10-13T09:00:00Z";
+        let at = "2026-10-14T09:00:00Z";
         let dir = tempfile::tempdir().unwrap();
         let store = crate::ledger::open::store(
             &dir.path().join("home"),
@@ -575,14 +597,10 @@ mod tests {
         };
         let answer = operate(
             &Called::Operation(Tool::Apply, "scope-approve".into()),
-            Some(&json!({"operation": "scope-approve",
-                "request_id": "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f",
-                "digest": crate::scope::fixtures::M_DIGEST,
-                "owner": "Mallory"})),
+            Some(&arguments),
             Some(&preparation),
         );
-        assert_eq!(answer["status"], "refused", "{answer}");
-        assert_eq!(answer["code"], "invalid-arguments", "{answer}");
+        assert_eq!(answer, expected);
         let ledger = preparation.ledger.as_deref().expect("a ledger");
         assert_eq!(head(&ledger.store), before);
     }
