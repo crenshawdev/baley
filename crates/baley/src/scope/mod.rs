@@ -39,6 +39,8 @@ pub(crate) mod fixtures {
     pub const T2: &str = "2026-10-13T09:00:02Z";
     pub const T3: &str = "2026-10-13T09:00:03Z";
     pub const ID: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+    /// A second project, for reads that must not see another project's purge.
+    pub const ID_B: &str = "7a2d3b5f-9c0e-4f1a-8b2c-3d4e5f6a7b8c";
     pub const SESSION: &str = "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f";
     pub const R1: &str = "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f";
     pub const R2: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
@@ -88,6 +90,10 @@ pub(crate) mod fixtures {
         ProjectId(ID.into())
     }
 
+    pub fn project_b() -> ProjectId {
+        ProjectId(ID_B.into())
+    }
+
     /// A real store in a fresh temporary directory, holding the project
     /// created at T0.
     pub fn store() -> (tempfile::TempDir, SqliteStore) {
@@ -106,15 +112,33 @@ pub(crate) mod fixtures {
         ServerCaller::new("/real/r", "/real/r/p", "claude-code", SESSION, &json!(7)).unwrap()
     }
 
+    /// A real store holding both the project and the second project.
+    pub fn two_projects() -> (tempfile::TempDir, SqliteStore) {
+        let (dir, store) = store();
+        store.create_project(&project_b(), "other", T0).unwrap();
+        (dir, store)
+    }
+
     /// The command preparation makes for a write of `kind` under
     /// `request_id`, with a digest of `digest` bytes, at `at`.
     pub fn command(kind: &str, request_id: &str, digest: u8, at: &str) -> Command {
+        command_in(&project(), kind, request_id, digest, at)
+    }
+
+    /// `command` for a write in `project`.
+    pub fn command_in(
+        project: &ProjectId,
+        kind: &str,
+        request_id: &str,
+        digest: u8,
+        at: &str,
+    ) -> Command {
         let request = WriteRequest {
             kind: CommandKind(kind.into()),
             request_id: RequestId(request_id.into()),
             digest: Hash([digest; 32]),
         };
-        prepared_command(&project(), &request, 0, at, &caller())
+        prepared_command(project, &request, 0, at, &caller())
     }
 
     /// Records `value`, judged whole, as a submission under `request_id`
@@ -126,12 +150,41 @@ pub(crate) mod fixtures {
         digest: u8,
         at: &str,
     ) -> Result<Recorded, StoreError> {
+        submit_in(store, &project(), value, request_id, digest, at)
+    }
+
+    /// `submit` in `project`.
+    pub fn submit_in(
+        store: &SqliteStore,
+        project: &ProjectId,
+        value: &Value,
+        request_id: &str,
+        digest: u8,
+        at: &str,
+    ) -> Result<Recorded, StoreError> {
         let submission = judge_submission(value).unwrap();
         crate::scope::submit::record(
             store,
-            &command(SUBMIT_COMMAND, request_id, digest, at),
+            &command_in(project, SUBMIT_COMMAND, request_id, digest, at),
             &submission,
         )
+    }
+
+    /// Releases `project`'s references to `hash` with `reason`, under a
+    /// purge command of the owner's at T3.
+    pub fn purge_in(store: &SqliteStore, project: &ProjectId, hash: Hash, reason: &str) {
+        let purge = Command {
+            project: project.clone(),
+            kind: CommandKind("payload.purge".into()),
+            request_id: RequestId("5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b".into()),
+            digest: Hash([9; 32]),
+            scope: Vec::new(),
+            policy_version: 0,
+            recorded_at: T3.into(),
+            actor: Actor::Owner,
+            caller: None,
+        };
+        store.purge(&purge, &[hash], reason).unwrap();
     }
 
     /// The inline answer a command recorded or replayed.
@@ -177,8 +230,13 @@ pub(crate) mod fixtures {
     /// Approves the draft with `digest` as the owner `Ada Owner` at T3,
     /// through the approval's two steps.
     pub fn approve_draft(store: &SqliteStore, digest: Hash) {
-        let judged = crate::scope::approve::judge(store, &project(), digest).unwrap();
-        let command = command(crate::scope::approve::APPROVE_COMMAND, R5, 5, T3);
+        approve_draft_in(store, &project(), digest);
+    }
+
+    /// `approve_draft` in `project`.
+    pub fn approve_draft_in(store: &SqliteStore, project: &ProjectId, digest: Hash) {
+        let judged = crate::scope::approve::judge(store, project, digest).unwrap();
+        let command = command_in(project, crate::scope::approve::APPROVE_COMMAND, R5, 5, T3);
         crate::scope::approve::record(store, &command, Some(&judged), "Ada Owner").unwrap();
     }
 

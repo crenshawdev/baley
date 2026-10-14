@@ -10,7 +10,8 @@ use baley_core::checkout::{CheckoutProjector, register_checkout_events};
 use baley_core::guard::{GuardPolicyProjector, GuardProjector, register_guard_events};
 use baley_core::policy::recorded::{PolicyProjector, register_policy_events};
 use baley_core::scope::{
-    BacklogProjector, DraftProjector, PhaseProjector, RoadmapProjector, register_scope_events,
+    BacklogProjector, DraftProjector, PhaseDetailProjector, PhaseProjector, RoadmapProjector,
+    register_scope_events,
 };
 use baley_core::{Registry, register_anchor_events, register_project_events};
 use baley_store_sqlite::Options;
@@ -27,10 +28,10 @@ use crate::update::events::register_update_events;
 /// scope types `scope.submitted`, `project.described`, `scope.approved`,
 /// `story.declared`, `phase.declared` and `phase.reordered` understood by
 /// the CLI, and declares view set version 9: `backlog capture checkout
-/// claim_scope draft guard guard_policy install model_catalog phase policy
-/// request roadmap`. The install view holds only install records. Update
-/// outcomes and provider acknowledgements are read from their streams and
-/// have no projector.
+/// claim_scope draft guard guard_policy install model_catalog phase
+/// phase_detail policy request roadmap`. The install view holds only
+/// install records. Update outcomes and provider acknowledgements are read
+/// from their streams and have no projector.
 /// A project brought to view set 9 is read-only for older binaries.
 /// The startup `quick_check` is off for command-line callers.
 pub(crate) fn options() -> Options {
@@ -59,6 +60,7 @@ pub(crate) fn options() -> Options {
             Box::new(DraftProjector::new()),
             Box::new(RoadmapProjector::new()),
             Box::new(PhaseProjector::new()),
+            Box::new(PhaseDetailProjector::new()),
             Box::new(BacklogProjector::new()),
         ],
         view_set_version: NonZeroU32::new(9).expect("nonzero"),
@@ -243,7 +245,7 @@ pub(crate) mod tests {
     }
 
     /// The domain views of view set 9, sorted.
-    const VIEW_SET_9: [&str; 11] = [
+    const VIEW_SET_9: [&str; 12] = [
         "backlog",
         "capture",
         "checkout",
@@ -253,6 +255,7 @@ pub(crate) mod tests {
         "install",
         "model_catalog",
         "phase",
+        "phase_detail",
         "policy",
         "roadmap",
     ];
@@ -612,7 +615,7 @@ pub(crate) mod tests {
     // views not built forward for it.
     #[test]
     fn a_ledger_written_at_view_set_8_refused_or_left_without_the_scope_views_is_caught() {
-        use baley_core::scope::{backlog_key, draft_key, phase_key, roadmap_key};
+        use baley_core::scope::{backlog_key, draft_key, phase_detail_key, phase_key, roadmap_key};
         use baley_store::{Admin, Hash, ProjectId, Views};
 
         let dir = tempfile::tempdir().unwrap();
@@ -627,6 +630,7 @@ pub(crate) mod tests {
             ("roadmap", roadmap_key()),
             ("draft", draft_key(Hash([0x5c; 32]))),
             ("phase", phase_key(1)),
+            ("phase_detail", phase_detail_key(1)),
             ("backlog", backlog_key()),
         ] {
             assert_eq!(reopened.get(&project, view, &key), Ok(None), "{view}");

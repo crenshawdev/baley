@@ -1,14 +1,16 @@
 //! The `draft` view: one document per submitted digest, holding the
 //! sequence of that digest's latest submission, so the newest draft of a
-//! kind is the first document its index gives (design 0004 section 5).
+//! kind is the first document its index gives (design 0004 section 5), and
+//! the purge state of a body its project released (design 0001 Views).
 
 use baley_store::{
     Change, DocKey, Event, FieldKind, FieldSpec, Hash, IndexField, IndexSpec, KeyValue, Order,
-    PayloadRef, Projector, ProjectorError, ViewSpec,
+    PAYLOAD_PURGED, PayloadRef, Projector, ProjectorError, PurgedEvent, ViewSpec,
 };
 use serde_json::{Value, json};
 
 use super::event::SCOPE_SUBMITTED;
+use super::mark_purged;
 
 /// The view's name.
 pub const DRAFT_VIEW: &str = "draft";
@@ -27,7 +29,7 @@ const SEQ_FIELD: &str = "seq";
 pub fn draft_spec() -> ViewSpec {
     ViewSpec {
         name: DRAFT_VIEW.into(),
-        version: 1,
+        version: 2,
         key: vec![FieldSpec {
             name: DIGEST_FIELD.into(),
             kind: FieldKind::Text,
@@ -56,12 +58,18 @@ pub fn draft_key(digest: Hash) -> DocKey {
     DocKey(vec![KeyValue::Text(digest.to_hex())])
 }
 
-/// Keeps the `draft` view current from `scope.submitted`.
+/// Keeps the `draft` view current from `scope.submitted` and the store's
+/// `payload.purged`.
 ///
 /// A document holds the digest, the change kind, the sequence and time of
 /// the digest's latest submission and the hex hash of its body. Submitting
 /// a digest again replaces its document, so it is the newest draft again.
 /// None of the body is copied in.
+///
+/// When this project releases the body of a draft's latest submission, the
+/// document gains `state` `purged` and the purge's reason, and is kept so
+/// the draft answers a tombstone. Another project holding the same bytes
+/// keeps its text.
 pub struct DraftProjector {
     spec: ViewSpec,
 }
@@ -85,21 +93,37 @@ impl Projector for DraftProjector {
     }
 
     fn handles(&self) -> &[&str] {
-        &[SCOPE_SUBMITTED]
+        &[SCOPE_SUBMITTED, PAYLOAD_PURGED]
     }
 
+    // A draft's digest is the hash of the canonical bytes stored as its
+    // body, so a purge's released hash is the key of the draft it held.
     fn keys(&self, event: &Event) -> Vec<DocKey> {
+        if event.type_name == PAYLOAD_PURGED {
+            let Some(purge) = PurgedEvent::from_value(&event.payload) else {
+                // `apply` refuses it with a reason.
+                return Vec::new();
+            };
+            let mut keys: Vec<DocKey> = purge
+                .released
+                .iter()
+                .map(|(_, hash)| draft_key(*hash))
+                .collect();
+            keys.sort();
+            keys.dedup();
+            return keys;
+        }
         submitted_digest(&event.payload)
             .map(draft_key)
             .into_iter()
             .collect()
     }
 
-    // The document is replaced whole, so the one already there is not read.
+    // A submission replaces its document whole, so only a purge reads one.
     fn apply(
         &self,
         event: &Event,
-        _documents: &[(DocKey, Value)],
+        documents: &[(DocKey, Value)],
     ) -> Result<Vec<Change>, ProjectorError> {
         let refuse = |message: &str| {
             ProjectorError(format!(
@@ -107,6 +131,12 @@ impl Projector for DraftProjector {
                 event.type_name, event.seq
             ))
         };
+        if event.type_name == PAYLOAD_PURGED {
+            let Some(purge) = PurgedEvent::from_value(&event.payload) else {
+                return Err(refuse("the purge payload cannot be read"));
+            };
+            return Ok(mark_purged(&purge, documents));
+        }
         let Some(digest) = submitted_digest(&event.payload) else {
             return Err(refuse("digest is missing or not a digest"));
         };
@@ -218,6 +248,74 @@ mod tests {
             view[&key("bb")],
             json!({"digest": "bb".repeat(32), "kind": "start", "seq": 5,
                 "recorded_at": "2026-10-13T09:00:05Z", "hash": "1b".repeat(32)})
+        );
+    }
+
+    /// Applies `event` to `view` as the store would, reading the documents
+    /// at its keys first.
+    fn fold(view: &mut BTreeMap<DocKey, Value>, event: &Event) {
+        let projector = DraftProjector::new();
+        let read: Vec<(DocKey, Value)> = projector
+            .keys(event)
+            .into_iter()
+            .filter_map(|key| view.get(&key).cloned().map(|body| (key, body)))
+            .collect();
+        for change in projector.apply(event, &read).unwrap() {
+            match change {
+                Change::Put { key, body } => {
+                    view.insert(key, body);
+                }
+                Change::Delete { key } => {
+                    view.remove(&key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_draft_this_project_purged_left_readable_or_another_draft_marked_is_caught() {
+        let mut view = BTreeMap::new();
+        // A draft's digest is its body's hash, as the submit path stores it.
+        for event in [
+            submitted(4, payload(0xaa, 0xaa)),
+            submitted(5, payload(0xbb, 0xbb)),
+            submitted(6, payload(0xaa, 0xaa)),
+        ] {
+            fold(&mut view, &event);
+        }
+        let purge = Event {
+            type_name: "payload.purged".into(),
+            stream: "retention".into(),
+            payload: baley_store::PurgedEvent {
+                requested: vec![Hash([0xaa; 32])],
+                released: vec![(4, Hash([0xaa; 32])), (6, Hash([0xaa; 32]))],
+                removed: vec![Hash([0xaa; 32])],
+                shared: vec![],
+                reason: "pasted a secret".into(),
+            }
+            .to_value(),
+            ..submitted(7, json!({}))
+        };
+        let key = |digest: &str| DocKey(vec![KeyValue::Text(digest.repeat(32))]);
+        assert_eq!(DraftProjector::new().keys(&purge), [key("aa")]);
+        fold(&mut view, &purge);
+        assert_eq!(
+            view[&key("aa")],
+            json!({"digest": "aa".repeat(32), "kind": "start", "seq": 6,
+                "recorded_at": "2026-10-13T09:00:06Z", "hash": "aa".repeat(32),
+                "state": "purged", "reason": "pasted a secret"})
+        );
+        assert_eq!(
+            view[&key("bb")],
+            json!({"digest": "bb".repeat(32), "kind": "start", "seq": 5,
+                "recorded_at": "2026-10-13T09:00:05Z", "hash": "bb".repeat(32)})
+        );
+        // Submitting the same bytes again attaches a new reference to them.
+        fold(&mut view, &submitted(8, payload(0xaa, 0xaa)));
+        assert_eq!(
+            view[&key("aa")],
+            json!({"digest": "aa".repeat(32), "kind": "start", "seq": 8,
+                "recorded_at": "2026-10-13T09:00:08Z", "hash": "aa".repeat(32)})
         );
     }
 

@@ -33,7 +33,8 @@ use crate::mcp::prepare::{LEDGER_UNAVAILABLE, NOT_A_PROJECT, PROJECT_NOT_IN_LEDG
 use crate::providers::identity;
 use crate::scope::approve::{self, APPROVE_COMMAND};
 use crate::scope::read::{
-    self, BacklogStory, NO_SUCH_STORY, Phase, Preview, PreviewError, ReadError, Roadmap, Story,
+    self, BacklogStory, Detail, Draft, NO_SUCH_STORY, Phase, PreviewError, ReadError, Roadmap,
+    Story,
 };
 use crate::scope::submit;
 use crate::{init, policy_step, settings};
@@ -117,7 +118,7 @@ pub fn run(args: ScopeArgs) -> ExitCode {
     emit(match args.command {
         ScopeCommand::Approve { digest } => approve(&digest),
         ScopeCommand::Preview { digest } => judge_digest(&digest).and_then(|digest| {
-            reading(|store, project| preview_render(read::preview(store, project, digest)))
+            reading(|store, project| preview_render(read::draft(store, project, digest)))
         }),
         ScopeCommand::Show => {
             reading(|store, project| roadmap_render(read::roadmap(store, project)))
@@ -395,10 +396,22 @@ pub(crate) fn judge_number(text: &str) -> Result<u32, Render> {
 
 /// What `scope preview` prints for a draft read: the header, the
 /// description, the stories by label and the phases by position, each with
-/// its detail and dependencies, since that is what the owner approves.
-pub(crate) fn preview_render(read: Result<Preview, PreviewError>) -> Render {
+/// its detail and dependencies, since that is what the owner approves. A
+/// draft this project purged prints its header and the purge's reason.
+pub(crate) fn preview_render(read: Result<Draft, PreviewError>) -> Render {
     let preview = match read {
-        Ok(preview) => preview,
+        Ok(Draft::Held(preview)) => preview,
+        Ok(Draft::Purged(tombstone)) => {
+            return printed(vec![
+                format!(
+                    "draft {} ({}), submitted {}",
+                    tombstone.digest.to_hex(),
+                    escaped(&tombstone.kind),
+                    escaped(&tombstone.recorded_at)
+                ),
+                format!("purged: {}", escaped(&tombstone.reason)),
+            ]);
+        }
         Err(PreviewError::UnknownDraft) => {
             return Render::refusal(format!(
                 "{UNKNOWN_DRAFT}: no submission in this project has that digest"
@@ -494,7 +507,9 @@ pub(crate) fn roadmap_render(read: Result<Roadmap, ReadError>) -> Render {
     printed(lines)
 }
 
-/// What `phase show` prints for a phase read.
+/// What `phase show` prints for a phase read. A detail this project purged
+/// prints as `detail purged:` and the reason, a prefix no detail text can
+/// take.
 pub(crate) fn phase_render(read: Result<Phase, ReadError>) -> Render {
     match read {
         Ok(phase) => printed(vec![
@@ -505,7 +520,10 @@ pub(crate) fn phase_render(read: Result<Phase, ReadError>) -> Render {
                 escaped(&phase.name)
             ),
             format!("goal: {}", escaped(&phase.goal)),
-            format!("detail: {}", escaped(&phase.detail)),
+            match &phase.detail {
+                Detail::Text(detail) => format!("detail: {}", escaped(detail)),
+                Detail::Purged(reason) => format!("detail purged: {}", escaped(reason)),
+            },
             format!("depends on: {}", list(&phase.depends_on)),
             format!("stories: {}", list(&phase.stories)),
         ]),
@@ -625,7 +643,7 @@ fn read_error(error: ReadError) -> Render {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scope::read::{Description, RoadmapPhase};
+    use crate::scope::read::{Description, Preview, RoadmapPhase};
 
     const PROJECT: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
     const D: &str = "1b11196b8f9f4ffd5c08a4d97643f80867194c5e1a6d8cc51d2929f8db38d68e";
@@ -767,7 +785,7 @@ mod tests {
             recorded_at: text(T),
             submission: crate::scope::fixtures::s1(),
         };
-        let render = preview_render(Ok(preview));
+        let render = preview_render(Ok(Draft::Held(preview)));
         assert_eq!(
             shown(&render),
             [
@@ -832,7 +850,7 @@ mod tests {
             name: text("Approval"),
             goal: text("The owner approves"),
             status: text("declared"),
-            detail: text("Approval by digest"),
+            detail: Detail::Text(text("Approval by digest")),
             depends_on: vec![1],
             stories: vec![2],
         }));
@@ -909,5 +927,76 @@ mod tests {
             assert_eq!((refusal.code, refusal.error), (2, true), "{text}");
         }
         assert_eq!(judge_number("1").ok(), Some(1));
+    }
+
+    /// The digest of S1 submitted in `project` of `store`.
+    fn s1_in(store: &SqliteStore, project: &baley_store::ProjectId) -> Hash {
+        use crate::scope::fixtures::{R1, T1, receipt, s1, submit_in};
+        let recorded = submit_in(store, project, &s1(), R1, 1, T1).unwrap();
+        Hash::from_hex(receipt(&recorded)["digest"].as_str().unwrap()).unwrap()
+    }
+
+    // Both projects hold S1, so the same bytes: the store would open them
+    // for either, and only the purging project's view says it released them.
+    #[test]
+    fn a_phase_detail_this_project_purged_shown_from_another_projects_copy_is_caught() {
+        use baley_core::scope::{PHASE_VIEW, phase_key};
+        use baley_store::Views;
+
+        use crate::scope::fixtures::{
+            approve_draft_in, project, project_b, purge_in, two_projects,
+        };
+
+        let (_dir, store) = two_projects();
+        for project in [project(), project_b()] {
+            let digest = s1_in(&store, &project);
+            approve_draft_in(&store, &project, digest);
+        }
+        let held = store
+            .get(&project(), PHASE_VIEW, &phase_key(2))
+            .unwrap()
+            .unwrap();
+        let detail = Hash::from_hex(held.body["detail"].as_str().unwrap()).unwrap();
+        purge_in(&store, &project(), detail, "pasted a secret");
+
+        let purged = phase_render(read::phase(&store, &project(), 2));
+        assert_eq!(
+            shown(&purged),
+            [
+                "phase 2 (declared): Approval",
+                "goal: The owner approves",
+                "detail purged: pasted a secret",
+                "depends on: 1",
+                "stories: 2",
+            ]
+        );
+        let other = phase_render(read::phase(&store, &project_b(), 2));
+        assert_eq!(shown(&other)[2], "detail: Approval by digest");
+    }
+
+    #[test]
+    fn a_draft_this_project_purged_previewed_from_another_projects_copy_is_caught() {
+        use crate::scope::fixtures::{T1, project, project_b, purge_in, two_projects};
+
+        let (_dir, store) = two_projects();
+        let digest = s1_in(&store, &project());
+        s1_in(&store, &project_b());
+        // The digest is the body's hash.
+        purge_in(&store, &project(), digest, "pasted a secret");
+
+        let purged = preview_render(read::draft(&store, &project(), digest));
+        assert_eq!(
+            shown(&purged),
+            [
+                format!("draft {} (start), submitted {T1}", digest.to_hex()).as_str(),
+                "purged: pasted a secret",
+            ]
+        );
+        let other = preview_render(read::draft(&store, &project_b(), digest));
+        assert!(
+            shown(&other).contains(&"  detail: Approval by digest"),
+            "{:?}",
+            other.lines
+        );
     }
 }

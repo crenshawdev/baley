@@ -2,16 +2,19 @@
 //! is read by its digest, as the latest submission of that digest recorded
 //! it, so the owner sees exactly what an approval would record; phase
 //! numbers and story ids are assigned at approval, so a preview has none.
-//! Accepted scope is read from the `roadmap`, `phase` and `backlog` views,
-//! which only an approval changes. `document` and the owner's `baley scope`,
-//! `phase`, `backlog` and `story` commands read through here. Nothing is
-//! appended.
+//! Accepted scope is read from the `roadmap`, `phase`, `phase_detail` and
+//! `backlog` views, which only an approval changes. A draft or phase detail
+//! whose body this project purged answers a tombstone with this project's
+//! reason and is never opened, even when another project still holds the
+//! same bytes (design 0001 Views). `document` and the owner's `baley
+//! scope`, `phase`, `backlog` and `story` commands read through here.
+//! Nothing is appended.
 
 use std::io::Read;
 
 use baley_core::scope::{
-    BACKLOG_VIEW, DRAFT_VIEW, PHASE_VIEW, ROADMAP_VIEW, backlog_key, draft_key, phase_key,
-    roadmap_key,
+    BACKLOG_VIEW, DRAFT_VIEW, PHASE_DETAIL_VIEW, PHASE_VIEW, ROADMAP_VIEW, backlog_key, draft_key,
+    phase_detail_key, phase_key, roadmap_key,
 };
 use baley_store::{Document, Hash, PayloadBody, Payloads, ProjectId, StoreError, Views};
 use serde::{Deserialize, Serialize};
@@ -35,13 +38,37 @@ pub struct Preview {
     pub submission: Value,
 }
 
+/// A draft whose body this project purged: what the view still knows of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tombstone {
+    /// The change kind, such as `start`.
+    pub kind: String,
+    /// The submission's digest.
+    pub digest: Hash,
+    /// When the latest submission of this digest was recorded.
+    pub recorded_at: String,
+    /// The reason this project's purge recorded.
+    pub reason: String,
+}
+
+/// A draft read by its digest: its submission, or the tombstone this
+/// project's purge of its body left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Draft {
+    /// The body is held, so the submission is read from it.
+    Held(Preview),
+    /// This project purged the body, so it is never opened.
+    Purged(Tombstone),
+}
+
 /// Why a preview could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewError {
     /// No submission has this digest, answered `unknown-draft`.
     UnknownDraft,
     /// The draft is recorded, but its document or body cannot be read: a
-    /// body no longer held, or one that is not JSON. Callers answer it
+    /// body no longer held, one that is not JSON, or, for a caller that
+    /// needs the submission, one this project purged. Callers answer it
     /// `failed` `ledger-unavailable`, never as a missing draft.
     Unreadable(String),
     /// The store's own error.
@@ -49,25 +76,58 @@ pub enum PreviewError {
 }
 
 /// Reads the draft with `digest` in `project`: its `draft` document, then
-/// its body by hash, parsed as JSON. Nothing is appended.
-pub fn preview<S: Views + Payloads + ?Sized>(
+/// its body by hash, parsed as JSON, unless this project purged it. Nothing
+/// is appended.
+pub fn draft<S: Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
     digest: Hash,
-) -> Result<Preview, PreviewError> {
+) -> Result<Draft, PreviewError> {
     match store.get(project, DRAFT_VIEW, &draft_key(digest)) {
-        Ok(Some(document)) => preview_of(store, &document),
+        Ok(Some(document)) => draft_of(store, &document),
         Ok(None) => Err(PreviewError::UnknownDraft),
         Err(error) => Err(PreviewError::Store(error)),
     }
 }
 
+/// Reads the draft with `digest` in `project` for a caller that needs its
+/// submission, such as the approval. A draft this project purged has none.
+pub fn preview<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    digest: Hash,
+) -> Result<Preview, PreviewError> {
+    draft(store, project, digest).and_then(held)
+}
+
 /// The preview a `draft` document stands for, its body opened through
-/// `payloads`.
+/// `payloads` unless this project purged it.
 pub(crate) fn preview_of<P: Payloads + ?Sized>(
     payloads: &P,
     document: &Document,
 ) -> Result<Preview, PreviewError> {
+    draft_of(payloads, document).and_then(held)
+}
+
+/// A purged draft has no submission to give, so the caller is told why,
+/// with this project's reason.
+fn held(draft: Draft) -> Result<Preview, PreviewError> {
+    match draft {
+        Draft::Held(preview) => Ok(preview),
+        Draft::Purged(tombstone) => Err(PreviewError::Unreadable(format!(
+            "this project purged the draft's body: {}",
+            tombstone.reason
+        ))),
+    }
+}
+
+/// The draft a `draft` document stands for. The view's purge state is
+/// checked before the body is opened, since a body is stored by hash for
+/// every project and another project may still hold the same bytes.
+fn draft_of<P: Payloads + ?Sized>(
+    payloads: &P,
+    document: &Document,
+) -> Result<Draft, PreviewError> {
     let unreadable = || PreviewError::Unreadable("the draft's view document cannot be read".into());
     let body = &document.body;
     let text = |name: &str| body.get(name).and_then(Value::as_str);
@@ -83,6 +143,18 @@ pub(crate) fn preview_of<P: Payloads + ?Sized>(
     let hash = text("hash")
         .and_then(Hash::from_hex)
         .ok_or_else(unreadable)?;
+    match text("state") {
+        None => {}
+        Some("purged") => {
+            return Ok(Draft::Purged(Tombstone {
+                kind: kind.into(),
+                digest,
+                recorded_at: recorded_at.into(),
+                reason: text("reason").ok_or_else(unreadable)?.into(),
+            }));
+        }
+        Some(_) => return Err(unreadable()),
+    }
     let mut reader = match payloads.open(&hash).map_err(PreviewError::Store)? {
         PayloadBody::Present(reader) => reader,
         PayloadBody::Gone(_) => {
@@ -98,13 +170,13 @@ pub(crate) fn preview_of<P: Payloads + ?Sized>(
     let submission = serde_json::from_slice(&bytes).map_err(|_| {
         PreviewError::Unreadable("the draft is recorded, but its body is not JSON".into())
     })?;
-    Ok(Preview {
+    Ok(Draft::Held(Preview {
         kind: kind.into(),
         digest,
         seq,
         recorded_at: recorded_at.into(),
         submission,
-    })
+    }))
 }
 
 /// The accepted project description.
@@ -163,7 +235,16 @@ pub struct Roadmap {
     pub stories: Vec<Story>,
 }
 
-/// One accepted phase with its detail text, read from its body.
+/// A phase's detail: its text, or the reason this project purged its body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Detail {
+    /// The detail text, as approved.
+    Text(String),
+    /// This project purged the body, for this reason, so it is never opened.
+    Purged(String),
+}
+
+/// One accepted phase with its detail, read from its body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phase {
     /// Its number.
@@ -174,8 +255,8 @@ pub struct Phase {
     pub goal: String,
     /// Its status, such as `declared`.
     pub status: String,
-    /// Its detail text, as approved.
-    pub detail: String,
+    /// Its detail text, or why this project no longer shows it.
+    pub detail: Detail,
     /// The numbers of the phases it depends on.
     pub depends_on: Vec<u32>,
     /// The ids of its stories.
@@ -208,8 +289,8 @@ pub enum ReadError {
     NoSuchPhase,
     /// No accepted story has this id, answered `no-such-story`.
     NoSuchStory,
-    /// The phase is recorded, but its detail body is no longer held.
-    /// Callers answer it `failed` `ledger-unavailable`, never as a phase
+    /// The phase is recorded and its detail not purged by this project, but
+    /// its body is no longer held. Callers answer it `failed` `ledger-unavailable`, never as a phase
     /// with empty or missing detail.
     BodyGone,
     /// A view document or body cannot be read as what it should hold.
@@ -228,16 +309,26 @@ struct RoadmapDocument {
     stories: Vec<Story>,
 }
 
-/// A `phase` document: its detail is the hex hash of the body.
+/// A `phase` document: its detail is found by the sequence it was declared
+/// at.
 #[derive(Deserialize)]
 struct PhaseDocument {
     number: u32,
     name: String,
     goal: String,
     status: String,
-    detail: String,
+    declared_seq: u64,
     depends_on: Vec<u32>,
     stories: Vec<u32>,
+}
+
+/// A `phase_detail` document: the detail body's hex hash, and this
+/// project's purge state and reason once it released the body.
+#[derive(Deserialize)]
+struct DetailDocument {
+    hash: String,
+    state: Option<String>,
+    reason: Option<String>,
 }
 
 /// The `backlog` document.
@@ -283,7 +374,9 @@ pub fn roadmap<S: Views + ?Sized>(store: &S, project: &ProjectId) -> Result<Road
 }
 
 /// Reads accepted phase `number` from the `phase` view, with its detail
-/// text from its body.
+/// from its body, or the tombstone its `phase_detail` document holds when
+/// this project purged that body. The purge state is checked before the
+/// body is opened, since a body is stored by hash for every project.
 pub fn phase<S: Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -291,19 +384,18 @@ pub fn phase<S: Views + Payloads + ?Sized>(
 ) -> Result<Phase, ReadError> {
     let document = read::<PhaseDocument, _>(store, project, PHASE_VIEW, &phase_key(number))?
         .ok_or(ReadError::NoSuchPhase)?;
-    let hash = Hash::from_hex(&document.detail).ok_or_else(|| unreadable(PHASE_VIEW))?;
-    let mut reader = match store.open(&hash).map_err(ReadError::Store)? {
-        PayloadBody::Present(reader) => reader,
-        PayloadBody::Gone(_) => return Err(ReadError::BodyGone),
+    let held = read::<DetailDocument, _>(
+        store,
+        project,
+        PHASE_DETAIL_VIEW,
+        &phase_detail_key(document.declared_seq),
+    )?
+    .ok_or_else(|| unreadable(PHASE_DETAIL_VIEW))?;
+    let detail = match (held.state.as_deref(), held.reason) {
+        (None, _) => Detail::Text(detail_text(store, &held.hash)?),
+        (Some("purged"), Some(reason)) => Detail::Purged(reason),
+        _ => return Err(unreadable(PHASE_DETAIL_VIEW)),
     };
-    let mut bytes = Vec::new();
-    reader
-        .read_to_end(&mut bytes)
-        .map_err(|error| ReadError::Store(StoreError::Unavailable(error.to_string())))?;
-    // The body was stored from the submission's UTF-8 text.
-    let detail = String::from_utf8(bytes).map_err(|_| {
-        ReadError::Unreadable("the phase is recorded, but its detail body is not text".into())
-    })?;
     Ok(Phase {
         number: document.number,
         name: document.name,
@@ -312,6 +404,23 @@ pub fn phase<S: Views + Payloads + ?Sized>(
         detail,
         depends_on: document.depends_on,
         stories: document.stories,
+    })
+}
+
+/// A detail body this project still holds, read as text.
+fn detail_text<P: Payloads + ?Sized>(payloads: &P, hash: &str) -> Result<String, ReadError> {
+    let hash = Hash::from_hex(hash).ok_or_else(|| unreadable(PHASE_DETAIL_VIEW))?;
+    let mut reader = match payloads.open(&hash).map_err(ReadError::Store)? {
+        PayloadBody::Present(reader) => reader,
+        PayloadBody::Gone(_) => return Err(ReadError::BodyGone),
+    };
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| ReadError::Store(StoreError::Unavailable(error.to_string())))?;
+    // The body was stored from the submission's UTF-8 text.
+    String::from_utf8(bytes).map_err(|_| {
+        ReadError::Unreadable("the phase is recorded, but its detail body is not text".into())
     })
 }
 
@@ -553,31 +662,63 @@ mod tests {
                 name: text("Approval"),
                 goal: text("The owner approves"),
                 status: text("declared"),
-                detail: text("Approval by digest"),
+                detail: Detail::Text(text("Approval by digest")),
                 depends_on: vec![1],
                 stories: vec![2],
             })
         );
         assert_eq!(phase(&store, &project(), 3), Err(ReadError::NoSuchPhase));
 
+        // The only reference goes, so the body is gone too: the purge is
+        // still answered from the view, never as a body that went missing.
+        purge_in(
+            &store,
+            &project(),
+            detail_hash(&store, &project(), 2),
+            "pasted a secret",
+        );
+        assert_eq!(
+            phase(&store, &project(), 2).map(|read| read.detail),
+            Ok(Detail::Purged(text("pasted a secret")))
+        );
+    }
+
+    /// The detail body hash of accepted phase `number` in `project`.
+    fn detail_hash(
+        store: &baley_store_sqlite::SqliteStore,
+        project: &ProjectId,
+        number: u32,
+    ) -> Hash {
         let held = store
-            .get(&project(), PHASE_VIEW, &phase_key(2))
+            .get(project, PHASE_VIEW, &phase_key(number))
             .unwrap()
             .unwrap();
-        let hash = Hash::from_hex(held.body["detail"].as_str().unwrap()).unwrap();
-        let purge = baley_store::Command {
-            project: project(),
-            kind: baley_store::CommandKind("payload.purge".into()),
-            request_id: baley_store::RequestId("5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b".into()),
-            digest: Hash([9; 32]),
-            scope: vec![],
-            policy_version: 0,
-            recorded_at: T3.into(),
-            actor: baley_store::Actor::Owner,
-            caller: None,
+        Hash::from_hex(held.body["detail"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_draft_this_project_purged_opened_for_approval_from_another_projects_copy_is_caught() {
+        let (_dir, store) = two_projects();
+        let digest = digest_of(&submit(&store, &s1(), R1, 1, T1).unwrap());
+        submit_in(&store, &project_b(), &s1(), R1, 1, T1).unwrap();
+        // The digest is the body's hash, and B still requires that body.
+        purge_in(&store, &project(), digest, "pasted a secret");
+        assert!(matches!(store.open(&digest), Ok(PayloadBody::Present(_))));
+
+        let held = |project: &ProjectId| {
+            store
+                .get(project, DRAFT_VIEW, &draft_key(digest))
+                .unwrap()
+                .unwrap()
         };
-        baley_store::Admin::purge(&store, &purge, &[hash], "pasted a secret").unwrap();
-        assert_eq!(phase(&store, &project(), 2), Err(ReadError::BodyGone));
+        let Err(PreviewError::Unreadable(reason)) = preview_of(&store, &held(&project())) else {
+            panic!("a draft this project purged gave its submission");
+        };
+        assert!(reason.contains("pasted a secret"), "{reason}");
+        assert_eq!(
+            preview_of(&store, &held(&project_b())).map(|read| read.submission),
+            Ok(s1())
+        );
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! and a body this project purged answers a tombstone (design 0012
 //! operations, design 0014 section 6). A draft by its digest, the accepted
 //! roadmap and an accepted story come from `scope::read` (design 0004
-//! section 5), the same reads the owner's commands print.
+//! section 5), the same reads the owner's commands print; a draft whose
+//! body this project purged answers a tombstone the same way.
 
 use std::io::Read;
 use std::path::Path;
@@ -23,7 +24,7 @@ use crate::mcp::handler::Preparation;
 use crate::mcp::parts::{Cut, PART_BOUND, cut};
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, prepare};
 use crate::scope::read::{
-    self as scope, NO_SUCH_STORY, Preview, PreviewError, ReadError, Roadmap, Story,
+    self as scope, Draft, NO_SUCH_STORY, PreviewError, ReadError, Roadmap, Story,
 };
 
 /// The code for a capture id the project's `capture` view does not hold.
@@ -245,7 +246,7 @@ pub fn read<S: Views + Payloads + ?Sized>(
         Identity::Draft { digest } => {
             match Hash::from_hex(digest).filter(|h| h.to_hex() == *digest) {
                 Some(hash) => {
-                    draft_answer(identity, scope::preview(store, project, hash), shape.part)
+                    draft_answer(identity, scope::draft(store, project, hash), shape.part)
                 }
                 None => draft_answer(identity, Err(PreviewError::UnknownDraft), shape.part),
             }
@@ -260,14 +261,22 @@ pub fn read<S: Views + Payloads + ?Sized>(
 }
 
 /// The answer for a draft read: its preview, in parts when large, or why it
-/// has none. An unknown draft echoes none of the digest.
+/// has none. A draft whose body this project purged answers `ok` with a
+/// tombstone and this project's reason, as a purged capture does. An
+/// unknown draft echoes none of the digest.
 pub fn draft_answer(
     identity: &Identity,
-    read: Result<Preview, PreviewError>,
+    read: Result<Draft, PreviewError>,
     part: Option<usize>,
 ) -> Value {
     match read {
-        Ok(preview) => in_parts(
+        Ok(Draft::Purged(tombstone)) => in_parts(
+            json!({"status": "ok", "identity": identity, "kind": tombstone.kind,
+                "digest": tombstone.digest.to_hex(), "recorded_at": tombstone.recorded_at,
+                "tombstone": {"state": "purged", "reason": tombstone.reason}}),
+            part,
+        ),
+        Ok(Draft::Held(preview)) => in_parts(
             json!({"status": "ok", "identity": identity, "kind": preview.kind,
                 "digest": preview.digest.to_hex(), "recorded_at": preview.recorded_at,
                 "submission": preview.submission}),
@@ -822,7 +831,7 @@ mod tests {
     mod scope_kinds {
         use super::super::*;
         use crate::scope::fixtures::{M_DIGEST, m};
-        use crate::scope::read::{Description, RoadmapPhase};
+        use crate::scope::read::{Description, Preview, RoadmapPhase};
 
         const AT: &str = "2026-10-13T09:00:01Z";
 
@@ -861,7 +870,7 @@ mod tests {
         #[test]
         fn a_draft_answer_missing_its_submission_or_identity_is_caught() {
             assert_eq!(
-                draft_answer(&draft(), Ok(preview(m())), None),
+                draft_answer(&draft(), Ok(Draft::Held(preview(m()))), None),
                 json!({"status": "ok", "identity": {"kind": "draft", "digest": M_DIGEST},
                     "kind": "start", "digest": M_DIGEST, "recorded_at": AT,
                     "submission": {"description": {"what": "w", "core_value": "v",
@@ -953,8 +962,16 @@ mod tests {
             let whole = json!({"status": "ok", "identity": {"kind": "draft", "digest": M_DIGEST},
                 "kind": "start", "digest": M_DIGEST, "recorded_at": AT,
                 "submission": submission.clone()});
-            let first = draft_answer(&draft(), Ok(preview(submission.clone())), Some(1));
-            let second = draft_answer(&draft(), Ok(preview(submission.clone())), Some(2));
+            let first = draft_answer(
+                &draft(),
+                Ok(Draft::Held(preview(submission.clone()))),
+                Some(1),
+            );
+            let second = draft_answer(
+                &draft(),
+                Ok(Draft::Held(preview(submission.clone()))),
+                Some(2),
+            );
             for (value, part, next) in [(&first, 1, json!(2)), (&second, 2, Value::Null)] {
                 let mut keys: Vec<&String> = value.as_object().unwrap().keys().collect();
                 keys.sort();
@@ -972,9 +989,10 @@ mod tests {
             );
             assert_eq!(serde_json::from_str::<Value>(&joined).unwrap(), whole);
             // A request that names no part still gets a bounded first page.
-            let unnamed = draft_answer(&draft(), Ok(preview(submission.clone())), None);
+            let unnamed =
+                draft_answer(&draft(), Ok(Draft::Held(preview(submission.clone()))), None);
             assert_eq!(unnamed, first);
-            let third = draft_answer(&draft(), Ok(preview(submission)), Some(3));
+            let third = draft_answer(&draft(), Ok(Draft::Held(preview(submission))), Some(3));
             refused(&third, "document-part-not-found", "part");
         }
 
@@ -1010,6 +1028,41 @@ mod tests {
             );
             refused(&missing, "no-such-story", "identity");
             assert!(!missing["reason"].as_str().unwrap().contains("99"));
+        }
+
+        #[test]
+        fn a_draft_this_project_purged_served_from_another_projects_copy_is_caught() {
+            use crate::scope::fixtures::{
+                R1, T1, project, project_b, purge_in, receipt, s1, submit_in, two_projects,
+            };
+
+            let (_dir, store) = two_projects();
+            let recorded = submit_in(&store, &project(), &s1(), R1, 1, T1).unwrap();
+            let digest = receipt(&recorded)["digest"].as_str().unwrap().to_owned();
+            submit_in(&store, &project_b(), &s1(), R1, 1, T1).unwrap();
+            // The digest is the body's hash, and B still requires that body,
+            // so only A's view can say A released it.
+            purge_in(
+                &store,
+                &project(),
+                Hash::from_hex(&digest).unwrap(),
+                "pasted a secret",
+            );
+            let shape = DocumentShape {
+                identity: Identity::Draft {
+                    digest: digest.clone(),
+                },
+                part: None,
+            };
+            assert_eq!(
+                read(&store, &project(), &shape),
+                json!({"status": "ok", "identity": {"kind": "draft", "digest": digest},
+                    "kind": "start", "digest": digest, "recorded_at": T1,
+                    "tombstone": {"state": "purged", "reason": "pasted a secret"}})
+            );
+            let from_b = read(&store, &project_b(), &shape);
+            assert_eq!(from_b["submission"], s1(), "{from_b}");
+            assert!(from_b.get("tombstone").is_none(), "{from_b}");
         }
     }
 
