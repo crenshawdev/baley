@@ -49,3 +49,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0039](0039-session-owned-provider-credentials.md) | Leave provider credentials and calls with the session | Accepted, supersedes 0013, 0016, 0027, 0028, 0032 and 0033 in part |
 | [0040](0040-guard-commit-checkout.md) | Judge and remember a commit at its target checkout | Accepted, supersedes 0036 in part |
 | [0042](0042-mocked-boundary-integration-checks.md) | Prove assembled behavior with mocked-boundary integration checks | Accepted |
+| [0043](0043-submissions-recorded-as-drafts.md) | Record every submission in the ledger as a draft | Accepted |
