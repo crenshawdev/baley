@@ -1,6 +1,6 @@
 //! The owner's approval of a draft by its digest (design 0004 section 5),
-//! in two steps that `scope-approve` and `baley scope approve` both call
-//! (D-20).
+//! in two steps that only `baley scope approve` calls: no approval is
+//! served over MCP (ADR 0044).
 //!
 //! The first step reads and judges outside any transaction, before its
 //! caller prepares the write, so a refusal records nothing at all: no
