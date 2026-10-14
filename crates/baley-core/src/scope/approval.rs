@@ -157,6 +157,9 @@ fn list(
 /// (D-09, D-10). Each story's phase is the number of the phase that lists it
 /// by label, or none. `details` holds one stored detail reference per phase
 /// in roadmap order. `owner` and `at` are the approval's owner and time.
+///
+/// When a number or id would pass `u32::MAX` it is [`NumbersExhausted`]
+/// and no events are given, since wrapping would reuse a number.
 pub fn start_events(
     submission: &Submission,
     highest_phase: u32,
@@ -164,16 +167,17 @@ pub fn start_events(
     details: &[PayloadRef],
     owner: &str,
     at: &str,
-) -> Vec<NewEvent> {
+) -> Result<Vec<NewEvent>, NumbersExhausted> {
     assert_eq!(
         details.len(),
         submission.phases.len(),
         "one detail reference per phase"
     );
     let digest = submission.digest();
-    let story_id = |index: usize| highest_story + 1 + index as u32;
-    let phase_number = |index: usize| highest_phase + 1 + index as u32;
-    let numbers: Vec<u32> = (0..submission.phases.len()).map(phase_number).collect();
+    let ids = next_numbers(highest_story, submission.stories.len())?;
+    let numbers = next_numbers(highest_phase, submission.phases.len())?;
+    let story_id = |index: usize| ids[index];
+    let phase_number = |index: usize| numbers[index];
 
     let mut events = vec![event(
         PROJECT_STREAM,
@@ -242,7 +246,25 @@ pub fn start_events(
         approved_payload(digest, START_KIND, owner, at),
         Vec::new(),
     ));
-    events
+    Ok(events)
+}
+
+/// Numbering an approved start would pass `u32::MAX`, so a phase number or
+/// story id would wrap onto one already used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumbersExhausted;
+
+/// The `count` whole numbers after `highest`, or [`NumbersExhausted`] when the
+/// last would pass `u32::MAX`.
+fn next_numbers(highest: u32, count: usize) -> Result<Vec<u32>, NumbersExhausted> {
+    (1..=count)
+        .map(|step| {
+            u32::try_from(step)
+                .ok()
+                .and_then(|step| highest.checked_add(step))
+                .ok_or(NumbersExhausted)
+        })
+        .collect()
 }
 
 fn event(
@@ -402,6 +424,7 @@ mod tests {
             "Ada Owner",
             T2,
         )
+        .expect("the numbers fit")
     }
 
     fn of<'a>(events: &'a [NewEvent], type_name: &str) -> Vec<&'a Value> {
@@ -458,6 +481,39 @@ mod tests {
     }
 
     #[test]
+    fn a_phase_number_or_story_id_wrapped_past_the_largest_is_caught() {
+        // S1 has three stories and two phases, so these leave exactly room.
+        let max = u64::from(u32::MAX);
+        let events = events_for(&s1(), u32::MAX - 2, u32::MAX - 3);
+        let (stories, phases) = numbering(&events);
+        assert_eq!(
+            stories,
+            [
+                (json!(max - 2), json!(max - 1)),
+                (json!(max - 1), json!(max)),
+                (json!(max), Value::Null)
+            ]
+        );
+        assert_eq!(phases[0][0], json!(max - 1));
+        assert_eq!(phases[1][0], json!(max));
+        assert_eq!(phases[1][1], json!([max - 1]));
+
+        // One fewer free number for either, and nothing is given.
+        let start = |highest_phase, highest_story| {
+            start_events(
+                &accepted(&s1()),
+                highest_phase,
+                highest_story,
+                &[detail(0xa1), detail(0xa2)],
+                "Ada Owner",
+                T2,
+            )
+        };
+        assert_eq!(start(u32::MAX - 1, 0), Err(NumbersExhausted));
+        assert_eq!(start(0, u32::MAX - 2), Err(NumbersExhausted));
+    }
+
+    #[test]
     fn a_story_given_to_a_phase_by_position_instead_of_its_label_is_caught() {
         let s3 = s1_with(&[
             ("/roadmap/0/stories", json!(["approve"])),
@@ -499,7 +555,8 @@ mod tests {
             &[detail(0xa1), detail(0xa2)],
             "Ada Owner",
             T2,
-        );
+        )
+        .expect("the numbers fit");
         let placed: Vec<(&str, &str)> = events
             .iter()
             .map(|event| (event.type_name.as_str(), event.stream.0.as_str()))

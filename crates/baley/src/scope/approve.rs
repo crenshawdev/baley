@@ -11,9 +11,9 @@
 use std::collections::BTreeMap;
 
 use baley_core::scope::{
-    ApprovalFacts, ApprovalRefusal, DRAFT_NEWEST_INDEX, DRAFT_VIEW, PHASE_DECLARED, PROJECT_STREAM,
-    ROADMAP_VIEW, SCOPE_SUBMITTED, START_KIND, STORY_DECLARED, Submission, draft_key,
-    judge_approval, judge_submission, roadmap_key, start_events,
+    ApprovalFacts, ApprovalRefusal, DRAFT_NEWEST_INDEX, DRAFT_VIEW, NumbersExhausted,
+    PHASE_DECLARED, PROJECT_STREAM, ROADMAP_VIEW, SCOPE_SUBMITTED, START_KIND, STORY_DECLARED,
+    Submission, draft_key, judge_approval, judge_submission, roadmap_key, start_events,
 };
 use baley_store::{
     Absence, Actor, Command, Decision, Document, EventMatch, Hash, HistoryFilter, IndexQuery,
@@ -134,6 +134,8 @@ pub fn record<L: Ledger + ?Sized>(
         for phase in &judged.submission.phases {
             details.push(tx.put_payload(phase.detail.as_bytes(), RetentionClass::Record)?);
         }
+        // Only a ledger already holding numbers near the largest gets here,
+        // so it is a ledger fault, and nothing is recorded.
         let events = start_events(
             &judged.submission,
             highest_phase,
@@ -141,7 +143,12 @@ pub fn record<L: Ledger + ?Sized>(
             &details,
             owner,
             &at,
-        );
+        )
+        .map_err(|NumbersExhausted| {
+            StoreError::Unavailable(
+                "the roadmap has no phase numbers or story ids left for this approval".into(),
+            )
+        })?;
         // The receipt reads the assigned values off the records themselves.
         let assigned = |type_name: &str, field: &str| -> Vec<Value> {
             events

@@ -14,7 +14,9 @@ mod phase;
 mod roadmap;
 mod submission;
 
-pub use approval::{ApprovalFacts, ApprovalRefusal, judge_approval, start_events};
+pub use approval::{
+    ApprovalFacts, ApprovalRefusal, NumbersExhausted, judge_approval, start_events,
+};
 pub use backlog::{BACKLOG_VIEW, BacklogProjector, backlog_key, backlog_spec};
 pub use draft::{DRAFT_NEWEST_INDEX, DRAFT_VIEW, DraftProjector, draft_key, draft_spec};
 pub use event::{
