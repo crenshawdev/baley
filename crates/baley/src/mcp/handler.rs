@@ -7,9 +7,9 @@
 //! after the queue and then the operation. A call that needs a project reaches
 //! the operation with a [`Preparation`]: the caller the gate formed, the
 //! call's host, the session's ledger and the server's time. `capture`,
-//! `scope-submit` and `document` set `needs_project`, and in their
-//! [`operate`] arms `capture` and `scope-submit` prepare a write from it and
-//! `document` a read.
+//! `scope-submit`, `scope-approve` and `document` set `needs_project`, and in
+//! their [`operate`] arms `capture`, `scope-submit` and `scope-approve`
+//! prepare a write from it and `document` a read.
 //! rmcp has already validated the request's metadata by the time any
 //! of this runs, so a protocol-required metadata error stays a protocol error
 //! and runs nothing.
@@ -156,8 +156,8 @@ fn run_decision(
 /// The answer of an admitted operation. It matches the called operation and the
 /// project call's [`Preparation`] together, so an arm that needs a project
 /// names the input in its pattern and the arms that need none ignore it.
-/// `capture` and `scope-submit` prepare a write from the [`Preparation`], and
-/// `document` a read.
+/// `capture`, `scope-submit` and `scope-approve` prepare a write from the
+/// [`Preparation`], and `document` a read.
 fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
     match (called, project) {
@@ -174,6 +174,9 @@ fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparat
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "scope-submit" => {
             scope::serve(arguments_or_null, preparation)
+        }
+        (Called::Operation(_, spelling), Some(preparation)) if spelling == "scope-approve" => {
+            scope::serve_approve(arguments_or_null, preparation)
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "document" => {
             document::serve(arguments_or_null, preparation)
@@ -528,6 +531,58 @@ mod tests {
             assert_eq!(answer["slot"], "submission", "{answer}");
             assert_eq!(answer["details"], details, "{answer}");
         }
+        let ledger = preparation.ledger.as_deref().expect("a ledger");
+        assert_eq!(head(&ledger.store), before);
+    }
+
+    #[test]
+    fn a_scope_approve_argument_refusal_answered_after_preparation_or_recorded_is_caught() {
+        let caller = ServerCaller::new(
+            "/real/r",
+            "/real/r",
+            "claude-code",
+            "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f",
+            &json!(7),
+        )
+        .unwrap();
+        // A real store holding one project, so anything recorded shows in its
+        // head. A preparation that ran first would answer `failed`, since the
+        // caller's directory holds no project.
+        let at = "2026-10-13T09:00:00Z";
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::ledger::open::store(
+            &dir.path().join("home"),
+            at,
+            crate::ledger::open::options(),
+        )
+        .unwrap();
+        let project = baley_store::ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        baley_store::Admin::create_project(&store, &project, "a", at).unwrap();
+        let head = |store: &SqliteStore| {
+            baley_store::Ledger::head(store, &project)
+                .unwrap()
+                .map(|head| head.seq)
+        };
+        let before = head(&store);
+        let preparation = Preparation {
+            ledger: Some(Arc::new(SessionLedger {
+                store,
+                config: dir.path().join("config"),
+            })),
+            host: Host::ClaudeCode,
+            caller,
+            at: at.into(),
+        };
+        let answer = operate(
+            &Called::Operation(Tool::Apply, "scope-approve".into()),
+            Some(&json!({"operation": "scope-approve",
+                "request_id": "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f",
+                "digest": crate::scope::fixtures::M_DIGEST,
+                "owner": "Mallory"})),
+            Some(&preparation),
+        );
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert_eq!(answer["code"], "invalid-arguments", "{answer}");
         let ledger = preparation.ledger.as_deref().expect("a ledger");
         assert_eq!(head(&ledger.store), before);
     }

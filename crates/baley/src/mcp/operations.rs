@@ -196,6 +196,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     retired("task-open", 8),
     retired("task-close", 8),
     with_project("scope-submit"),
+    with_project("scope-approve"),
 ];
 
 /// A spelling served only from a project, which its call prepares.
@@ -328,6 +329,9 @@ enum RequestShape {
     // `scope-submit` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "scope-submit")]
     ScopeSubmit(#[allow(dead_code)] crate::mcp::scope::SubmitShape),
+    // `scope-approve` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "scope-approve")]
+    ScopeApprove(#[allow(dead_code)] crate::mcp::scope::ApproveShape),
 }
 
 fn invalid_arguments(reason: impl Into<String>) -> Value {
@@ -593,6 +597,7 @@ pub(crate) mod expected {
         "task-open",
         "task-close",
         "scope-submit",
+        "scope-approve",
     ];
 }
 
@@ -646,6 +651,7 @@ mod tests {
                     "capture",
                     "document",
                     "scope-submit",
+                    "scope-approve",
                 ]
                 .contains(n)
             }) {
@@ -669,6 +675,12 @@ mod tests {
         );
         assert_eq!(
             lookup(Tool::Apply, Some("scope-submit")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
+        assert_eq!(
+            lookup(Tool::Apply, Some("scope-approve")),
             Lookup::Available {
                 needs_project: true
             }
@@ -844,6 +856,22 @@ mod tests {
             .collect();
         properties.sort_unstable();
         assert_eq!(properties, ["request_id", "submission"]);
+    }
+
+    #[test]
+    fn a_scope_approve_schema_left_out_of_the_request_shapes_is_caught() {
+        let answer =
+            schema_answer(&json!({"operation": "schema", "tool": "apply", "for": "scope-approve"}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        let mut properties: Vec<&str> = answer["schema"]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .filter(|name| *name != "operation")
+            .collect();
+        properties.sort_unstable();
+        assert_eq!(properties, ["digest", "request_id"]);
     }
 
     #[test]
