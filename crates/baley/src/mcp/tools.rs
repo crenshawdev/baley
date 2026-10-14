@@ -368,7 +368,8 @@ mod tests {
     fn a_served_operations_argument_left_out_of_the_tool_schema_is_caught() {
         // Design 0012: help takes name, schema takes tool and for, instruction
         // and document take identity, all four take part, and capture takes
-        // request_id, kind, text, phase and instruction.
+        // request_id, kind, text, phase and instruction, and scope-submit takes
+        // request_id and submission.
         let names = |tool| {
             let schema = input_schema(tool);
             let mut names: Vec<String> = schema["properties"]
@@ -392,6 +393,7 @@ mod tests {
                 "operation",
                 "phase",
                 "request_id",
+                "submission",
                 "text"
             ]
         );
@@ -434,9 +436,20 @@ mod tests {
             "{parts:?}"
         );
         let apply = input_schema(Tool::Apply);
+        let request_ids: Vec<String> = alternatives(&apply["properties"]["request_id"])
+            .iter()
+            .map(description)
+            .collect();
+        for taker in ["capture", "scope-submit"] {
+            let sentence = format!("Taken by {taker} (required).");
+            assert!(
+                request_ids.iter().any(|d| d.ends_with(&sentence)),
+                "{request_ids:?}"
+            );
+        }
         assert!(
-            description(&apply["properties"]["request_id"])
-                .ends_with("Taken by capture (required).")
+            description(&apply["properties"]["submission"])
+                .ends_with("Taken by scope-submit (required).")
         );
         assert!(description(&apply["properties"]["phase"]).ends_with("Taken by capture."));
     }

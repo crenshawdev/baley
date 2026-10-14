@@ -195,6 +195,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     retired("spike-close", 8),
     retired("task-open", 8),
     retired("task-close", 8),
+    with_project("scope-submit"),
 ];
 
 /// A spelling served only from a project, which its call prepares.
@@ -324,6 +325,9 @@ enum RequestShape {
     // `document` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "document")]
     Document(#[allow(dead_code)] crate::mcp::document::DocumentShape),
+    // `scope-submit` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "scope-submit")]
+    ScopeSubmit(#[allow(dead_code)] crate::mcp::scope::SubmitShape),
 }
 
 fn invalid_arguments(reason: impl Into<String>) -> Value {
@@ -588,6 +592,7 @@ pub(crate) mod expected {
         "spike-close",
         "task-open",
         "task-close",
+        "scope-submit",
     ];
 }
 
@@ -633,10 +638,17 @@ mod tests {
     #[test]
     fn every_spelling_but_the_three_reads_is_unavailable() {
         for tool in [Tool::Query, Tool::Apply] {
-            for name in names(tool)
-                .into_iter()
-                .filter(|n| !["help", "schema", "instruction", "capture", "document"].contains(n))
-            {
+            for name in names(tool).into_iter().filter(|n| {
+                ![
+                    "help",
+                    "schema",
+                    "instruction",
+                    "capture",
+                    "document",
+                    "scope-submit",
+                ]
+                .contains(n)
+            }) {
                 assert!(
                     matches!(lookup(tool, Some(name)), Lookup::Unavailable { .. }),
                     "{name} must be unavailable"
@@ -651,6 +663,12 @@ mod tests {
         );
         assert_eq!(
             lookup(Tool::Query, Some("document")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
+        assert_eq!(
+            lookup(Tool::Apply, Some("scope-submit")),
             Lookup::Available {
                 needs_project: true
             }
@@ -810,6 +828,22 @@ mod tests {
                 "{property} missing from {answer}"
             );
         }
+    }
+
+    #[test]
+    fn a_scope_submit_schema_left_out_of_the_request_shapes_is_caught() {
+        let answer =
+            schema_answer(&json!({"operation": "schema", "tool": "apply", "for": "scope-submit"}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        let mut properties: Vec<&str> = answer["schema"]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .filter(|name| *name != "operation")
+            .collect();
+        properties.sort_unstable();
+        assert_eq!(properties, ["request_id", "submission"]);
     }
 
     #[test]
