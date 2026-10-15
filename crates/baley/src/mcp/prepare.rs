@@ -4,8 +4,15 @@
 //! The plan is pure: from what has been observed so far it gives the next
 //! step to perform, the `failed` answer, or the prepared result. The entry
 //! performs each step and asks again, so a refusal always comes before the
-//! step after it. Every refusal is a `failed` answer with `recorded: false`:
-//! preparation records nothing itself. Checkout admission and the policy step
+//! step after it. Every refusal of preparation's own is a `failed` answer
+//! with `recorded: false`: preparation records nothing itself. A write may
+//! also be prepared with a check of its own, asked after the replay lookup
+//! and before the settings, which can end the call first with its own
+//! answer, a refusal included, and records nothing either: a scope refusal
+//! judged against the ledger cannot come after the steps that record
+//! (design 0004 section 5). A check that ends the call is followed by a
+//! second replay lookup, so a request recorded since the first is replayed
+//! rather than refused. Checkout admission and the policy step
 //! are separate transactions, as on the command line, so a store failure at
 //! the step can follow a checkout admission that already recorded
 //! `checkout.seen`. That record stands. Preparation creates no project, no
@@ -55,7 +62,8 @@ const PLACE_LEDGER: &str = "ledger";
 const PLACE_GIT: &str = "git";
 const PLACE_CHECKOUT: &str = "checkout";
 
-/// A project read or write ready to run.
+/// A project read or write ready to run, and for a write prepared fresh, the
+/// policy it was judged under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     /// The project the working tree's `baley.toml` names, known to the ledger.
@@ -65,6 +73,12 @@ pub struct Prepared {
     pub root: PathBuf,
     /// The domain command to run. `Some` exactly when a write was requested.
     pub command: Option<Command>,
+    /// The effective policy built with no host, the one the checkout's facts
+    /// come from and the one the command line builds, so a host section
+    /// cannot give a session another owner. `Some` exactly when a write was
+    /// prepared fresh: a read and a request the ledger already holds read no
+    /// settings.
+    pub policy: Option<EffectivePolicy>,
 }
 
 /// The identity a served write supplies, which preparation carries into the
@@ -159,6 +173,11 @@ struct Seen {
     /// The body of the request document for the write's kind and request id,
     /// `None` inside when the ledger holds none.
     replay: Option<Result<Option<Value>, LedgerFault>>,
+    /// The write's own check: on, or the answer the call ends with.
+    checked: Option<Result<(), Value>>,
+    /// The request document read again after the check refused, `None`
+    /// inside when the ledger still holds none.
+    relooked: Option<Result<Option<Value>, LedgerFault>>,
     /// The global file and HEAD's copy of the project file.
     reads: Option<Reads>,
     /// Checkout facts gathered and the checkout admitted.
@@ -167,12 +186,17 @@ struct Seen {
     stepped: Option<Result<u64, LedgerFault>>,
 }
 
+/// A write's own check, given the project preparation found: `Ok` lets
+/// preparation go on, and `Err` is the answer the call ends with.
+pub type Check<'a> = dyn Fn(&ProjectId) -> Result<(), Value> + 'a;
+
 /// What the call is, as the plan needs it.
 struct Call<'a> {
     caller: &'a ServerCaller,
     host: Host,
     at: &'a str,
     write: Option<&'a WriteRequest>,
+    check: Option<&'a Check<'a>>,
 }
 
 /// One step the entry performs for the plan.
@@ -187,6 +211,11 @@ enum Step {
     /// Read the request document under this key, to see whether the write is a
     /// retry of a request the ledger already holds.
     LookUpRequest { project: ProjectId, key: DocKey },
+    /// Run the write's own check for this project.
+    Check { project: ProjectId },
+    /// Read the request document under this key again, once the check
+    /// refused, to see whether the request was recorded since the first look.
+    LookUpRequestAgain { project: ProjectId, key: DocKey },
     /// Read the global file and HEAD's copy of this working-tree file.
     ReadSettings {
         root: PathBuf,
@@ -211,7 +240,10 @@ enum Step {
 enum Next {
     Do(Step),
     Failed(Envelope<Value>),
-    Ready(Prepared),
+    /// The write's own check ended the call with this answer.
+    Checked(Value),
+    /// Boxed, since a fresh write carries its whole policy.
+    Ready(Box<Prepared>),
 }
 
 fn failed(code: &str, reason: impl Into<String>, place: &str) -> Next {
@@ -263,8 +295,8 @@ fn fault_failed(fault: &LedgerFault) -> Next {
 /// The next step for the call, or its answer. Discovery starts from the
 /// project directory the caller holds and from nothing else. A read stops at
 /// the known-project check. A write goes on, in the command line's order, to
-/// the replay lookup, then the settings, checkout admission and the policy
-/// step.
+/// the replay lookup, its own check when it has one, then the settings,
+/// checkout admission and the policy step.
 fn next(call: &Call, seen: &Seen) -> Next {
     let caller = call.caller;
     let Some(ancestors) = &seen.ancestors else {
@@ -323,11 +355,12 @@ fn next(call: &Call, seen: &Seen) -> Next {
         Ok(_) => {}
     }
     let Some(request) = call.write else {
-        return Next::Ready(Prepared {
+        return Next::Ready(Box::new(Prepared {
             project,
             root,
             command: None,
-        });
+            policy: None,
+        }));
     };
     let Some(working) = working.as_ref().ok().and_then(Option::as_ref) else {
         return unavailable_file(&file);
@@ -335,8 +368,9 @@ fn next(call: &Call, seen: &Seen) -> Next {
     write_next(call, request, seen, project, root, working)
 }
 
-/// The write's steps after the known-project check: the replay lookup, then
-/// the settings, checkout admission and the policy step.
+/// The write's steps after the known-project check: the replay lookup, the
+/// write's own check when it has one, then the settings, checkout admission
+/// and the policy step.
 fn write_next(
     call: &Call,
     request: &WriteRequest,
@@ -347,7 +381,9 @@ fn write_next(
 ) -> Next {
     // A request the ledger already holds is answered by its own transaction, so
     // no implicit write is made for it and the settings are not read, which
-    // keeps a retry after the owner broke `baley.toml` a replay. The replay's
+    // keeps a retry after the owner broke `baley.toml` a replay. The write's
+    // own check is skipped too, so a retry of a completed request gets its
+    // recorded answer whatever the check would say now. The replay's
     // command carries version 0: it appends nothing, and the version stays out
     // of the digest.
     let replay = prepared_command(&project, request, 0, call.at, call.caller);
@@ -357,23 +393,32 @@ fn write_next(
             project,
         });
     };
-    match looked_up {
-        Err(fault) => return fault_failed(fault),
-        Ok(Some(body)) if request_state(body).is_some() => {
-            return Next::Ready(Prepared {
-                project,
-                root,
-                command: Some(replay),
-            });
+    if let Some(end) = held(looked_up, &project, &root, &replay) {
+        return end;
+    }
+    // Checked before anything records, so a scope refusal judged against the
+    // ledger leaves no checkout admission or policy step behind it.
+    if call.check.is_some() {
+        match &seen.checked {
+            None => return Next::Do(Step::Check { project }),
+            Some(Err(answer)) => {
+                // The original of a retry can commit between the lookup and
+                // the check, and the check may refuse because of it, such as
+                // its own start approved since. So the request is looked up
+                // again before a refusal is answered. A passing check needs
+                // no second look: the operation's transaction replays a
+                // request recorded since.
+                let Some(relooked) = &seen.relooked else {
+                    return Next::Do(Step::LookUpRequestAgain {
+                        key: request_key(&replay),
+                        project,
+                    });
+                };
+                return held(relooked, &project, &root, &replay)
+                    .unwrap_or_else(|| Next::Checked(answer.clone()));
+            }
+            Some(Ok(())) => {}
         }
-        Ok(Some(_)) => {
-            return failed(
-                LEDGER_UNAVAILABLE,
-                "the ledger holds a record of this request that cannot be read",
-                PLACE_LEDGER,
-            );
-        }
-        Ok(None) => {}
     }
     let Some(reads) = &seen.reads else {
         return Next::Do(Step::ReadSettings {
@@ -405,12 +450,38 @@ fn write_next(
         Some(Err(fault)) => fault_failed(fault),
         Some(Ok(version)) => {
             let command = prepared_command(&project, request, *version, call.at, call.caller);
-            Next::Ready(Prepared {
+            Next::Ready(Box::new(Prepared {
                 project,
                 root,
                 command: Some(command),
-            })
+                policy: Some(policies.facts),
+            }))
         }
+    }
+}
+
+/// What a replay lookup found decides the call when the ledger holds a record
+/// of the request: its replay, or a fault. `None` when it holds none.
+fn held(
+    looked_up: &Result<Option<Value>, LedgerFault>,
+    project: &ProjectId,
+    root: &Path,
+    replay: &Command,
+) -> Option<Next> {
+    match looked_up {
+        Err(fault) => Some(fault_failed(fault)),
+        Ok(Some(body)) if request_state(body).is_some() => Some(Next::Ready(Box::new(Prepared {
+            project: project.clone(),
+            root: root.to_path_buf(),
+            command: Some(replay.clone()),
+            policy: None,
+        }))),
+        Ok(Some(_)) => Some(failed(
+            LEDGER_UNAVAILABLE,
+            "the ledger holds a record of this request that cannot be read",
+            PLACE_LEDGER,
+        )),
+        Ok(None) => None,
     }
 }
 
@@ -435,7 +506,8 @@ fn unavailable_file(file: &Path) -> Next {
 /// transaction keeps the final say on a replay. Otherwise it reads and validates
 /// the settings, gathers the checkout's facts through `process` and admits
 /// the checkout, runs the policy step for `host`, and returns the domain
-/// command carrying the version the step returned. Checkout admission and the
+/// command carrying the version the step returned, with the policy built with
+/// no host that the write was judged under. Checkout admission and the
 /// policy step each record as Baley with the server caller at `at`, in their
 /// own transactions. `config` is the config folder, where the global file is.
 /// `store` is `None` when the ledger was not opened at startup.
@@ -455,13 +527,74 @@ pub fn prepare<S: Admin + Views + Ledger>(
         host,
         at,
         write,
+        check: None,
     };
+    match drive(store, &call, config, process) {
+        Ok(prepared) => Ok(prepared),
+        Err(Ended::Failed(answer)) => Err(answer),
+        // With no check there is no check step to end the call.
+        Err(Ended::Checked(_)) => unreachable!("a write with no check was ended by one"),
+    }
+}
+
+/// Prepares `write` as [`prepare`] does, with `check` asked once the replay
+/// lookup finds no record of the request and before the settings are read.
+/// So a check's answer comes before checkout admission and the policy step,
+/// and the call records nothing. A request the ledger already holds skips
+/// the check and is answered from its record by the operation's
+/// transaction, whatever the check would answer now (D-18). When the check
+/// ends the call, the request is looked up again first, and one recorded
+/// since the first lookup is replayed the same way.
+///
+/// Any end is the answer's JSON value: a check's answer as it is, refusals
+/// keeping their slot and details, and preparation's own faults as the
+/// `failed` answers [`prepare`] gives.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_checked<S: Admin + Views + Ledger>(
+    store: Option<&S>,
+    caller: &ServerCaller,
+    write: &WriteRequest,
+    config: &Path,
+    host: Host,
+    at: &str,
+    process: &mut dyn Process,
+    check: &Check<'_>,
+) -> Result<Prepared, Value> {
+    let call = Call {
+        caller,
+        host,
+        at,
+        write: Some(write),
+        check: Some(check),
+    };
+    drive(store, &call, config, process).map_err(|ended| match ended {
+        Ended::Failed(answer) => serde_json::to_value(*answer).expect("a failed answer serializes"),
+        Ended::Checked(answer) => answer,
+    })
+}
+
+/// How a preparation ended without a result.
+enum Ended {
+    /// Preparation's own `failed` answer.
+    Failed(Box<Envelope<Value>>),
+    /// The write's own check's answer.
+    Checked(Value),
+}
+
+/// Performs the plan's steps until it is ready or ends.
+fn drive<S: Admin + Views + Ledger>(
+    store: Option<&S>,
+    call: &Call,
+    config: &Path,
+    process: &mut dyn Process,
+) -> Result<Prepared, Ended> {
     let mut seen = Seen::default();
     loop {
-        match next(&call, &seen) {
-            Next::Ready(prepared) => return Ok(prepared),
-            Next::Failed(answer) => return Err(Box::new(answer)),
-            Next::Do(step) => perform(step, store, &call, config, process, &mut seen),
+        match next(call, &seen) {
+            Next::Ready(prepared) => return Ok(*prepared),
+            Next::Failed(answer) => return Err(Ended::Failed(Box::new(answer))),
+            Next::Checked(answer) => return Err(Ended::Checked(answer)),
+            Next::Do(step) => perform(step, store, call, config, process, &mut seen),
         }
     }
 }
@@ -492,13 +625,13 @@ fn perform<S: Admin + Views + Ledger>(
             });
         }
         Step::LookUpRequest { project, key } => {
-            seen.replay = Some(match store {
-                None => Err(LedgerFault::NoStore),
-                Some(store) => store
-                    .get(&project, REQUEST_VIEW, &key)
-                    .map(|found| found.map(|document| document.body))
-                    .map_err(LedgerFault::Store),
-            });
+            seen.replay = Some(look_up(store, &project, &key));
+        }
+        Step::Check { project } => {
+            seen.checked = Some(call.check.map_or(Ok(()), |check| check(&project)));
+        }
+        Step::LookUpRequestAgain { project, key } => {
+            seen.relooked = Some(look_up(store, &project, &key));
         }
         Step::ReadSettings { root, working } => {
             seen.reads = Some(policy_step::gather(config, &root, Some(&working), process));
@@ -544,6 +677,21 @@ fn perform<S: Admin + Views + Ledger>(
                 .map_err(LedgerFault::Store),
             });
         }
+    }
+}
+
+/// Reads the request document under `key`, its body or `None`.
+fn look_up<S: Views>(
+    store: Option<&S>,
+    project: &ProjectId,
+    key: &DocKey,
+) -> Result<Option<Value>, LedgerFault> {
+    match store {
+        None => Err(LedgerFault::NoStore),
+        Some(store) => store
+            .get(project, REQUEST_VIEW, key)
+            .map(|found| found.map(|document| document.body))
+            .map_err(LedgerFault::Store),
     }
 }
 
@@ -916,6 +1064,7 @@ mod tests {
             host: Host::ClaudeCode,
             at: AT,
             write: None,
+            check: None,
         }
     }
 
@@ -1026,6 +1175,41 @@ mod tests {
                 "a refused checkout admission must end the preparation"
             );
         }
+    }
+
+    #[test]
+    fn a_fresh_write_prepared_without_its_policy_or_a_replay_given_one_is_caught() {
+        let owned = |mut seen: Seen| {
+            let mut reads = reads(SECTIONED);
+            reads.global = Ok(Some(settings::file(
+                Path::new("/c/config.toml"),
+                b"[owner]\nname = \"Ada Owner\"\n".to_vec(),
+            )));
+            seen.reads = Some(reads);
+            seen
+        };
+        let mut fresh = admitted(owned(looked_up()));
+        fresh.stepped = Some(Ok(5));
+        let Next::Ready(prepared) = write_step(&fresh) else {
+            panic!("the step's version is observed, so the write is ready");
+        };
+        let policy = prepared.policy.expect("a fresh write carries its policy");
+        assert_eq!(
+            policy.settings["owner.name"].value,
+            Some(baley_core::policy::Value::PersonName("Ada Owner".into()))
+        );
+
+        let replay = owned(with_replay(known_project(), Ok(Some(completed_request()))));
+        let Next::Ready(prepared) = write_step(&replay) else {
+            panic!("a known request is ready with no other step");
+        };
+        assert_eq!(prepared.policy, None);
+
+        let caller = caller("/real/r/p", "/w");
+        let Next::Ready(prepared) = next(&read_call(&caller), &known_project()) else {
+            panic!("a read is ready at the known-project check");
+        };
+        assert_eq!(prepared.policy, None);
     }
 
     #[test]
@@ -1149,7 +1333,7 @@ mod tests {
         let caller = caller("/real/r/p", "/w");
         assert!(matches!(
             next(&read_call(&caller), &known_project()),
-            Next::Ready(Prepared { command: None, .. })
+            Next::Ready(prepared) if prepared.command.is_none()
         ));
     }
 
@@ -1163,6 +1347,98 @@ mod tests {
             let seen = with_replay(known_project(), Ok(Some(body)));
             assert_failed(write_step(&seen), "ledger-unavailable", "ledger", false);
         }
+    }
+
+    #[test]
+    fn a_write_check_run_after_the_settings_or_asked_on_a_replay_is_caught() {
+        let caller = caller("/real/r/p", "/w");
+        let request = write_request(1);
+        // The plan only asks for the check, so this one is never run.
+        let check: &Check = &|_| panic!("the pure plan ran the check");
+        let checked = Call {
+            check: Some(check),
+            ..write_call(&caller, &request)
+        };
+
+        let Next::Do(Step::Check { project }) = next(&checked, &looked_up()) else {
+            panic!("a request the ledger lacks is checked before the settings are read");
+        };
+        assert_eq!(project, ProjectId(ID.into()));
+
+        let refusal =
+            crate::envelope::Refusal::new("project-already-started", "a start is approved")
+                .slot("submission")
+                .value();
+        let mut seen = looked_up();
+        seen.checked = Some(Err(refusal.clone()));
+        seen.relooked = Some(Ok(None));
+        match next(&checked, &seen) {
+            Next::Checked(answer) => {
+                assert_eq!(answer, refusal);
+                assert_eq!(answer["status"], "refused");
+                assert_eq!(answer["slot"], "submission");
+            }
+            other => panic!("the check's refusal ends the call, got {other:?}"),
+        }
+
+        seen.checked = Some(Ok(()));
+        assert!(matches!(
+            next(&checked, &seen),
+            Next::Do(Step::ReadSettings { .. })
+        ));
+
+        let held = with_replay(known_project(), Ok(Some(completed_request())));
+        let Next::Ready(prepared) = next(&checked, &held) else {
+            panic!("a request the ledger holds is ready without the check");
+        };
+        assert_eq!(prepared.command.unwrap().policy_version, 0);
+
+        assert!(matches!(
+            next(&write_call(&caller, &request), &looked_up()),
+            Next::Do(Step::ReadSettings { .. })
+        ));
+    }
+
+    #[test]
+    fn a_retry_recorded_after_its_lookup_and_refused_by_the_check_is_caught() {
+        let caller = caller("/real/r/p", "/w");
+        let request = write_request(1);
+        let check: &Check = &|_| panic!("the pure plan ran the check");
+        let checked = Call {
+            check: Some(check),
+            ..write_call(&caller, &request)
+        };
+        let refusal =
+            crate::envelope::Refusal::new("project-already-started", "a start is approved")
+                .slot("submission")
+                .value();
+        let mut seen = looked_up();
+        seen.checked = Some(Err(refusal));
+
+        // The same key as the first lookup, asked before the refusal is given.
+        let Next::Do(Step::LookUpRequestAgain { project, key }) = next(&checked, &seen) else {
+            panic!("a refusing check is followed by a second lookup");
+        };
+        assert_eq!(project, ProjectId(ID.into()));
+        assert_eq!(
+            key,
+            baley_store::DocKey(vec![
+                baley_store::KeyValue::Text("capture.record".into()),
+                baley_store::KeyValue::Text(REQUEST.into()),
+            ])
+        );
+
+        seen.relooked = Some(Ok(Some(completed_request())));
+        let Next::Ready(prepared) = next(&checked, &seen) else {
+            panic!("a request recorded since the first lookup is replayed, not refused");
+        };
+        let command = prepared.command.unwrap();
+        assert_eq!(command.request_id, RequestId(REQUEST.into()));
+        assert_eq!(command.policy_version, 0);
+
+        // Unable to tell, the call fails retryably rather than refusing.
+        seen.relooked = Some(Err(LedgerFault::Store(StoreError::Busy)));
+        assert_failed(next(&checked, &seen), "ledger-busy", "ledger", true);
     }
 
     #[test]

@@ -42,7 +42,7 @@ use crate::ledger::display::{self, Render};
 use crate::ledger::open;
 use crate::policy_step::{self, Reads};
 use crate::process::Process;
-use crate::providers::record;
+use crate::providers::{identity, record};
 use crate::settings;
 
 /// Asks the questions on `input` and `output`, then writes the answers.
@@ -236,7 +236,7 @@ struct Start {
     /// The pending note, set when the target is the project file and the
     /// working-tree file holds changes HEAD's copy does not.
     note: Option<String>,
-    /// What the global file stores for the reviewer list.
+    /// What the provider stage reads from the settings.
     stored: Stored,
     /// The global file's path.
     global_path: PathBuf,
@@ -247,13 +247,17 @@ struct Start {
     in_project: bool,
 }
 
-/// What the global file stores for `review.reviewers`.
+/// What the provider stage reads from the settings: the global file's
+/// `review.reviewers` and the owner's name.
 struct Stored {
     /// The outside providers, shown before the provider question.
     selection: Selection,
     /// The names the file lists at its top level, or none when it writes no
     /// such value.
     names: Option<Vec<String>>,
+    /// The `owner.name` value of the policy in force, which the provider
+    /// stage takes as the owner before asking git.
+    owner_name: Option<String>,
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
@@ -316,15 +320,17 @@ fn begin(
     let digest = target_read
         .map_err(|refusal| Render::refusal(refusal.to_string()))?
         .map(|file| file.digest);
+    let policy = merge(schema, host, layers.global.as_ref(), layers.head.as_ref());
     Ok(Start {
         stored: Stored {
             selection: reviewers::stored(layers.global.as_ref()),
             names: reviewers::written(layers.global.as_ref()),
+            owner_name: identity::owner_name(&policy).map(str::to_owned),
         },
         global_path,
         global_digest,
         in_project,
-        policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
+        policy,
         layer,
         target,
         digest,
@@ -599,7 +605,13 @@ fn converse(
     let Ready {
         answer,
         acknowledgement,
-    } = match providers::stage(&stored.selection, process, input, output)? {
+    } = match providers::stage(
+        &stored.selection,
+        stored.owner_name.as_deref(),
+        process,
+        input,
+        output,
+    )? {
         Staged::Declined => return Ok(Outcome::Declined),
         Staged::Refused(refusal) => return Ok(Outcome::Refused(refusal)),
         Staged::Ready(ready) => ready,
@@ -783,6 +795,7 @@ mod tests {
             &Stored {
                 selection: stored.clone(),
                 names,
+                owner_name: None,
             },
             &absent,
             process,

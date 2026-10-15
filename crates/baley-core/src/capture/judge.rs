@@ -41,9 +41,9 @@ pub fn is_blank(text: &str) -> bool {
 /// Whether a capture naming `phase` may be recorded, given whether that
 /// phase was observed to exist. No phase is always accepted.
 ///
-/// Until Build 4 there is no `phase` view, so the binary always observes a
-/// named phase absent and every named phase is refused. Build 4 supplies the
-/// observation from its `phase` view here.
+/// The binary observes the phase in its `phase` view, which holds only
+/// phases an approval declared, so a phase that exists only in a draft is
+/// refused.
 pub fn judge_phase(phase: Option<u32>, observed: bool) -> Result<(), &'static str> {
     match phase {
         Some(_) if !observed => Err(NO_SUCH_PHASE),

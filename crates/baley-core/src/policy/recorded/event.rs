@@ -112,6 +112,7 @@ fn value_json(value: Option<&Value>) -> Json {
         Some(Value::OnProtected(on)) => on.name().into(),
         Some(Value::BranchList(names) | Value::ReviewerList(names)) => names.clone().into(),
         Some(Value::HttpsAddress(address)) => address.clone().into(),
+        Some(Value::PersonName(name)) => name.clone().into(),
     }
 }
 

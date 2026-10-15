@@ -6,9 +6,10 @@
 //! admission, and hands an accepted call to the worker, which runs the gate
 //! after the queue and then the operation. A call that needs a project reaches
 //! the operation with a [`Preparation`]: the caller the gate formed, the
-//! call's host, the session's ledger and the server's time. `capture` and
-//! `document` set `needs_project`, and in their [`operate`] arms `capture`
-//! prepares a write from it and `document` a read.
+//! call's host, the session's ledger and the server's time. `capture`,
+//! `scope-submit` and `document` set `needs_project`, and in their
+//! [`operate`] arms `capture` and `scope-submit` prepare a write from it and
+//! `document` a read.
 //! rmcp has already validated the request's metadata by the time any
 //! of this runs, so a protocol-required metadata error stays a protocol error
 //! and runs nothing.
@@ -34,6 +35,7 @@ use super::context::{SessionContext, call_context};
 use super::document;
 use super::gate::{Admitted, After, Called, after_queue, encode};
 use super::operations::{help_answer, instruction_answer, schema_answer, unknown_operation};
+use super::scope;
 use super::tools::{info, supported_protocol_versions, tool_list, version_answer};
 use super::transport::RawFrameBytes;
 use super::worker::{Submission, Worker};
@@ -154,7 +156,8 @@ fn run_decision(
 /// The answer of an admitted operation. It matches the called operation and the
 /// project call's [`Preparation`] together, so an arm that needs a project
 /// names the input in its pattern and the arms that need none ignore it.
-/// `capture` prepares a write from the [`Preparation`], and `document` a read.
+/// `capture` and `scope-submit` prepare a write from the [`Preparation`], and
+/// `document` a read.
 fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparation>) -> Value {
     let arguments_or_null = arguments.unwrap_or(&Value::Null);
     match (called, project) {
@@ -168,6 +171,9 @@ fn operate(called: &Called, arguments: Option<&Value>, project: Option<&Preparat
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "capture" => {
             capture::serve(arguments_or_null, preparation)
+        }
+        (Called::Operation(_, spelling), Some(preparation)) if spelling == "scope-submit" => {
+            scope::serve(arguments_or_null, preparation)
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "document" => {
             document::serve(arguments_or_null, preparation)
@@ -426,6 +432,211 @@ mod tests {
         assert_eq!(answer["code"], "unknown-kind", "{answer}");
         let ledger = preparation.ledger.as_deref().expect("a ledger");
         assert_eq!(head(&ledger.store), before);
+    }
+
+    #[test]
+    fn a_refused_start_submission_answered_after_preparation_or_recorded_is_caught() {
+        let caller = ServerCaller::new(
+            "/real/r",
+            "/real/r",
+            "claude-code",
+            "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f",
+            &json!(7),
+        )
+        .unwrap();
+        // A real store holding one project, so anything recorded shows in its
+        // head. A preparation that ran first would answer `failed`, since the
+        // caller's directory holds no project.
+        let at = "2026-10-13T09:00:00Z";
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::ledger::open::store(
+            &dir.path().join("home"),
+            at,
+            crate::ledger::open::options(),
+        )
+        .unwrap();
+        let project = baley_store::ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        baley_store::Admin::create_project(&store, &project, "a", at).unwrap();
+        let head = |store: &SqliteStore| {
+            baley_store::Ledger::head(store, &project)
+                .unwrap()
+                .map(|head| head.seq)
+        };
+        let before = head(&store);
+        let preparation = Preparation {
+            ledger: Some(Arc::new(SessionLedger {
+                store,
+                config: dir.path().join("config"),
+            })),
+            host: Host::ClaudeCode,
+            caller,
+            at: at.into(),
+        };
+        let s1 = json!({"description": {"what": "A ledger for agent work",
+                "core_value": "Nothing moves on an unproven claim",
+                "constraints": ["One binary"]},
+            "stories": [
+                {"label": "record", "sentence": "Every step is recorded", "status": "active"},
+                {"label": "approve", "sentence": "The owner approves scope", "status": "active"},
+                {"label": "later", "sentence": "Teammates see the backlog", "status": "deferred"}],
+            "roadmap": [
+                {"name": "Records", "goal": "Steps are recorded",
+                    "detail": "The ledger and its views", "depends_on": [],
+                    "stories": ["record"]},
+                {"name": "Approval", "goal": "The owner approves",
+                    "detail": "Approval by digest", "depends_on": [1],
+                    "stories": ["approve"]}]});
+        let mut no_goal = s1.clone();
+        no_goal["roadmap"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("goal");
+        let mut double = s1.clone();
+        double["roadmap"][1]["stories"] = json!(["approve", "record"]);
+        let mut cycle = s1;
+        cycle["roadmap"][0]["depends_on"] = json!([2]);
+        for (request_id, submission, code, details) in [
+            (
+                "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+                no_goal,
+                "malformed-submission",
+                json!({"section": "roadmap", "field": "roadmap[0].goal"}),
+            ),
+            (
+                "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+                double,
+                "story-double-assigned",
+                json!({"story": "record", "phases": [1, 2]}),
+            ),
+            (
+                "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+                cycle,
+                "dependency-cycle",
+                json!({"phases": [1, 2]}),
+            ),
+        ] {
+            let answer = operate(
+                &Called::Operation(Tool::Apply, "scope-submit".into()),
+                Some(
+                    &json!({"operation": "scope-submit", "request_id": request_id,
+                    "submission": submission}),
+                ),
+                Some(&preparation),
+            );
+            assert_eq!(answer["status"], "refused", "{answer}");
+            assert_eq!(answer["code"], code, "{answer}");
+            assert_eq!(answer["slot"], "submission", "{answer}");
+            assert_eq!(answer["details"], details, "{answer}");
+        }
+        let ledger = preparation.ledger.as_deref().expect("a ledger");
+        assert_eq!(head(&ledger.store), before);
+    }
+
+    #[test]
+    fn an_owner_approval_accepted_over_mcp_is_caught() {
+        // The owner approves on the command line only: nothing a session sends
+        // proves a person answered, so `scope-approve` is no apply spelling.
+        let expected = json!({
+            "status": "refused",
+            "code": "unknown-operation",
+            "slot": "operation",
+            "reason": format!(
+                "no baley_apply operation is named `scope-approve`; the operations are {}",
+                super::super::operations::expected::APPLY.join(", ")
+            ),
+        });
+        let arguments = json!({"operation": "scope-approve",
+            "request_id": "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f",
+            "digest": crate::scope::fixtures::M_DIGEST});
+        let selection = Selection::Supported {
+            host: Host::ClaudeCode,
+            client_version: "2.1.287".into(),
+        };
+        let spelling = super::super::operations::spelling(arguments.as_object());
+        let super::super::gate::Before::Answer(gate) =
+            super::super::gate::before_queue("baley_apply", &selection, spelling)
+        else {
+            panic!("the gate must answer scope-approve before the queue");
+        };
+        assert_eq!(gate.structured_content.as_ref(), Some(&expected));
+
+        // Past the gate too, a real store holding one project shows that
+        // nothing is prepared or recorded.
+        let caller = ServerCaller::new(
+            "/real/r",
+            "/real/r",
+            "claude-code",
+            "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f",
+            &json!(7),
+        )
+        .unwrap();
+        let at = "2026-10-14T09:00:00Z";
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::ledger::open::store(
+            &dir.path().join("home"),
+            at,
+            crate::ledger::open::options(),
+        )
+        .unwrap();
+        let project = baley_store::ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        baley_store::Admin::create_project(&store, &project, "a", at).unwrap();
+        let head = |store: &SqliteStore| {
+            baley_store::Ledger::head(store, &project)
+                .unwrap()
+                .map(|head| head.seq)
+        };
+        let before = head(&store);
+        let preparation = Preparation {
+            ledger: Some(Arc::new(SessionLedger {
+                store,
+                config: dir.path().join("config"),
+            })),
+            host: Host::ClaudeCode,
+            caller,
+            at: at.into(),
+        };
+        let answer = operate(
+            &Called::Operation(Tool::Apply, "scope-approve".into()),
+            Some(&arguments),
+            Some(&preparation),
+        );
+        assert_eq!(answer, expected);
+        let ledger = preparation.ledger.as_deref().expect("a ledger");
+        assert_eq!(head(&ledger.store), before);
+    }
+
+    #[test]
+    fn a_valid_submission_answered_as_an_unknown_operation_is_caught() {
+        let caller = ServerCaller::new(
+            "/real/r",
+            "/real/r",
+            "claude-code",
+            "0b7e4a52-3c1d-4f6a-8e9b-1a2b3c4d5e6f",
+            &json!(7),
+        )
+        .unwrap();
+        // No ledger and no project at the caller's directory, so a submission
+        // that reaches preparation is answered `failed` there.
+        let preparation = Preparation {
+            ledger: None,
+            host: Host::ClaudeCode,
+            caller,
+            at: "2026-10-13T09:00:00Z".into(),
+        };
+        let answer = operate(
+            &Called::Operation(Tool::Apply, "scope-submit".into()),
+            Some(&json!({"operation": "scope-submit",
+                "request_id": "9d0c1b7e-2f4a-4b6c-8d1e-3a5b7c9d0e2f",
+                "submission": crate::scope::fixtures::m()})),
+            Some(&preparation),
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["recorded"], false, "{answer}");
+        assert!(
+            ["project-context-invalid", "not-a-project"]
+                .contains(&answer["code"].as_str().unwrap()),
+            "{answer}"
+        );
     }
 
     #[test]

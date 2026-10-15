@@ -12,6 +12,7 @@ use super::merge::FileRef;
 use super::project::ProjectProblem;
 use super::schema::{
     Entry, Host, Kind, OnProtected, REVIEWER_NAMES, Rung, Schema, Scope, is_https_address,
+    is_person_name,
 };
 
 /// The code of every refusal that leaves the policy unbuilt.
@@ -57,6 +58,8 @@ pub enum Value {
     ReviewerList(Vec<String>),
     /// An `https://` address.
     HttpsAddress(String),
+    /// A person's name, as written: not blank, with no control character.
+    PersonName(String),
 }
 
 /// One setting a file writes, typed and within its scope.
@@ -227,6 +230,8 @@ pub enum Expected {
     ReviewerList,
     /// An `https://` address.
     HttpsAddress,
+    /// A person's name.
+    PersonName,
 }
 impl From<Kind> for Expected {
     fn from(kind: Kind) -> Expected {
@@ -239,6 +244,7 @@ impl From<Kind> for Expected {
             Kind::BranchList => Expected::BranchList,
             Kind::ReviewerList => Expected::ReviewerList,
             Kind::HttpsAddress => Expected::HttpsAddress,
+            Kind::PersonName => Expected::PersonName,
         }
     }
 }
@@ -306,6 +312,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::BranchList => "a list of branch names".to_owned(),
                 Expected::ReviewerList => format!("a list of {}", reviewer_names()),
                 Expected::HttpsAddress => "an https:// address".to_owned(),
+                Expected::PersonName => "a name on one line".to_owned(),
             };
             write!(
                 f,
@@ -343,6 +350,10 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Kind::HttpsAddress => write!(
                     f,
                     "is \"{written}\"; write an https:// address without a query or fragment (? or #) or remove the line"
+                ),
+                Kind::PersonName => write!(
+                    f,
+                    "is \"{written}\"; write one line of text that is not blank and holds no control character, or remove the line"
                 ),
             }
         }
@@ -629,6 +640,14 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
             let written = value.as_str().ok_or_else(wrong)?;
             if is_https_address(written) {
                 Ok(Value::HttpsAddress(written.to_owned()))
+            } else {
+                Err(Mismatch::Grammar(written.to_owned(), None))
+            }
+        }
+        Kind::PersonName => {
+            let written = value.as_str().ok_or_else(wrong)?;
+            if is_person_name(written) {
+                Ok(Value::PersonName(written.to_owned()))
             } else {
                 Err(Mismatch::Grammar(written.to_owned(), None))
             }

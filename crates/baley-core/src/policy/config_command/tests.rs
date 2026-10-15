@@ -1984,3 +1984,40 @@ fn a_reviewer_list_set_from_the_command_line_not_refused_as_a_list_is_caught() {
         "{branches}"
     );
 }
+
+#[test]
+fn config_set_accepting_a_blank_multi_line_or_control_owner_name_or_trimming_a_valid_one_is_caught()
+{
+    let set = |value: &str| {
+        judge_pairs(
+            Schema::standard(),
+            FileLayer::Global,
+            false,
+            None,
+            &[("owner.name", value)],
+        )
+    };
+    for value in ["  ", "Ada\nOwner", "Ada\u{7}"] {
+        let refusal = set(value).expect_err(value);
+        assert_eq!(refusal.code(), "invalid-value", "{value:?}");
+        let message = refusal.to_string();
+        assert!(
+            message.ends_with(
+                "which is not one line of text that is not blank and holds no control character"
+            ),
+            "{message}"
+        );
+    }
+    for (value, written) in [
+        ("Ada Owner", "[owner]\nname = \"Ada Owner\"\n"),
+        (" Ada Owner ", "[owner]\nname = \" Ada Owner \"\n"),
+    ] {
+        let typed = set(value).expect(value);
+        assert_eq!(
+            typed,
+            [pair("owner.name", None, Value::PersonName(value.into()))]
+        );
+        let bytes = render_file(Schema::standard(), FileLayer::Global, None, &typed).unwrap();
+        assert_eq!(String::from_utf8(bytes).unwrap(), written, "{value:?}");
+    }
+}

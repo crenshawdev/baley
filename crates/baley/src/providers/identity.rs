@@ -1,14 +1,19 @@
-//! The owner identity an acknowledgement names: git's `user.name` (design 0003
-//! section 6, design 0012 HST-R10). `owner.name` is not read here, since that
-//! setting belongs to the approval build.
+//! The owner's identity: the name every provider acknowledgement and every
+//! scope approval records (design 0003 section 6, design 0012 HST-R10). It is
+//! `owner.name` when the global settings set it, and git's `user.name` when
+//! they do not.
+
+use baley_core::policy::{EffectivePolicy, Value};
 
 use crate::committed::{Ran, failed, finished};
 use crate::git_process::{self, Caller};
-use crate::ledger::display::Render;
 use crate::process::{Launch, Process};
 
-/// The code of a refusal when no owner name can be read from git.
+/// The code of a refusal when no owner name can be read.
 pub(crate) const OWNER_IDENTITY_MISSING: &str = "owner-identity-missing";
+
+/// The setting that names the owner.
+const OWNER_NAME: &str = "owner.name";
 
 /// The launch that reads the name, in the process's own working directory so
 /// a repository's own `user.name` applies as git applies it.
@@ -16,13 +21,33 @@ fn name_launch() -> Launch {
     git_process::launch(Caller::OwnerIdentity).args(["config", "--get", "user.name"])
 }
 
-/// Reads git's `user.name` through `process`. A name that cannot be had
-/// refuses `owner-identity-missing`, because an acknowledgement without an
-/// owner is not recorded.
-pub(crate) fn read(process: &mut dyn Process) -> Result<String, Render> {
+/// The owner's identity: `name`, the `owner.name` value, when it is set, and
+/// then nothing is launched; otherwise git's `user.name` read through
+/// `process`. With neither, the refusal text, which the interview, the session
+/// server and the command line each answer in their own way.
+pub(crate) fn owner(name: Option<&str>, process: &mut dyn Process) -> Result<String, String> {
+    if let Some(name) = name {
+        return Ok(name.to_owned());
+    }
     let launch = name_launch();
     let ran = git_process::run(&launch, process);
-    judge(&launch, ran).map_err(refusal)
+    judge(&launch, ran).map_err(|reason| {
+        format!(
+            "{OWNER_IDENTITY_MISSING}: {reason}; set it with baley config set --global {OWNER_NAME}=\"Your Name\" or git config --global user.name \"Your Name\""
+        )
+    })
+}
+
+/// The `owner.name` value of `policy`, `None` when it is absent.
+pub(crate) fn owner_name(policy: &EffectivePolicy) -> Option<&str> {
+    match policy
+        .settings
+        .get(OWNER_NAME)
+        .and_then(|effective| effective.value.as_ref())
+    {
+        Some(Value::PersonName(name)) => Some(name),
+        _ => None,
+    }
 }
 
 /// Interprets git's answer: the name, or why there is none.
@@ -59,26 +84,70 @@ fn judge(launch: &Launch, ran: Ran) -> Result<String, String> {
     Ok(line.to_owned())
 }
 
-/// The owner's refusal for a missing name, with how to fix it.
-fn refusal(reason: String) -> Render {
-    Render::refusal(format!(
-        "{OWNER_IDENTITY_MISSING}: {reason}; set it with git config --global user.name \"Your Name\" and run the interview again"
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::path::Path;
 
     use super::*;
     use crate::git_process::{Deadline, deadline};
+    use crate::policy_step::{self, Reads};
     use crate::process::{Output, Recorded};
+    use crate::settings;
     use std::time::Duration;
+
+    /// The fix every missing-identity refusal ends with (Task 2's wording).
+    const FIX: &str = "; set it with baley config set --global owner.name=\"Your Name\" or git config --global user.name \"Your Name\"";
+
+    /// The owner read from global settings text as Baley builds the policy,
+    /// with no project file: a build refusal is its text, and then the reader
+    /// never runs.
+    fn identify(global: &str, process: &mut dyn Process) -> Result<String, String> {
+        let reads = Reads {
+            global: Ok(Some(settings::file(
+                Path::new("/c/config.toml"),
+                global.as_bytes().to_vec(),
+            ))),
+            head: None,
+        };
+        let policy = policy_step::build(&reads, None).map_err(|refusal| refusal.to_string())?;
+        owner(owner_name(&policy), process)
+    }
+
+    #[test]
+    fn an_owner_taken_from_git_while_owner_name_is_set_or_an_invalid_owner_name_accepted_is_caught()
+    {
+        let mut fake = Recorded::new().out("Git Owner\n");
+        assert_eq!(
+            identify("[owner]\nname = \"Ada Owner\"\n", &mut fake),
+            Ok("Ada Owner".to_owned())
+        );
+        assert!(fake.launches().is_empty());
+
+        let mut fake = Recorded::new().out("Git Owner\n");
+        assert_eq!(identify("", &mut fake), Ok("Git Owner".to_owned()));
+        assert_eq!(fake.arguments(), [["config", "--get", "user.name"]]);
+
+        for text in [
+            "[owner]\nname = \"  \"\n",
+            "[owner]\nname = \"Ada\\nOwner\"\n",
+            "[owner]\nname = \"Ada\\u0007\"\n",
+        ] {
+            let mut fake = Recorded::new().out("Git Owner\n");
+            let refusal = identify(text, &mut fake).expect_err(text);
+            assert!(
+                refusal.starts_with("config-unavailable: "),
+                "{text:?}: {refusal}"
+            );
+            assert!(refusal.contains("owner.name"), "{text:?}: {refusal}");
+            assert!(fake.launches().is_empty(), "{text:?}");
+        }
+    }
 
     #[test]
     fn an_owner_name_read_with_other_git_arguments_or_kept_with_its_line_ending_is_caught() {
         let mut fake = Recorded::new().out("Ada Owner\n");
-        assert_eq!(read(&mut fake).unwrap(), "Ada Owner");
+        assert_eq!(owner(None, &mut fake).unwrap(), "Ada Owner");
         assert_eq!(fake.arguments(), [["config", "--get", "user.name"]]);
         let launch = fake.launch();
         assert_eq!(launch.git_caller(), Some(Caller::OwnerIdentity));
@@ -104,21 +173,15 @@ mod tests {
             Recorded::new().out("Ada\nOwner\n"),
         ];
         for (index, mut fake) in cases.into_iter().enumerate() {
-            let refusal = read(&mut fake).unwrap_err();
-            assert_eq!(refusal.lines.len(), 1, "case {index}");
+            let refusal = owner(None, &mut fake).unwrap_err();
+            assert!(!refusal.contains('\n'), "case {index}: {refusal}");
             assert!(
-                refusal.lines[0].starts_with("owner-identity-missing:"),
-                "case {index}: {}",
-                refusal.lines[0]
+                refusal.starts_with("owner-identity-missing:"),
+                "case {index}: {refusal}"
             );
-            assert_eq!(refusal.code, 2, "case {index}");
-            assert!(refusal.error, "case {index}");
+            assert!(refusal.ends_with(FIX), "case {index}: {refusal}");
             if index == 4 {
-                assert!(
-                    refusal.lines[0].contains("exited with code 128"),
-                    "{}",
-                    refusal.lines[0]
-                );
+                assert!(refusal.contains("exited with code 128"), "{refusal}");
             }
         }
     }

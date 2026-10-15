@@ -30,6 +30,14 @@ enum Command {
     Init(baley::init::InitArgs),
     /// List, add, remove and import the model names Baley accepts per host and provider, and print a provider's fetch command.
     Models(baley::models::ModelsArgs),
+    /// Approve a start submission by its digest as the owner, preview a draft, or show the accepted roadmap.
+    Scope(baley::scope::command::ScopeArgs),
+    /// Show one accepted phase with its detail text.
+    Phase(baley::scope::command::PhaseArgs),
+    /// Show the backlog's stories in priority order.
+    Backlog(baley::scope::command::BacklogArgs),
+    /// Show one accepted story.
+    Story(baley::scope::command::StoryArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),
     /// Install Claude Code's user-level wiring and seed the model catalog.
@@ -113,6 +121,10 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::Init(args) => return baley::init::run(args),
         Command::Config(args) => return baley::config_command::run(args),
         Command::Models(args) => return baley::models::run(args),
+        Command::Scope(args) => return baley::scope::command::run(args),
+        Command::Phase(args) => return baley::scope::command::run_phase(args),
+        Command::Backlog(args) => return baley::scope::command::run_backlog(args),
+        Command::Story(args) => return baley::scope::command::run_story(args),
         Command::Update(args) => return baley::update::command::run(args),
         Command::Install(args) => return baley::install::command::run(args),
         other => other,
@@ -123,6 +135,10 @@ fn run_command(command: Command) -> std::process::ExitCode {
         | Command::Init(_)
         | Command::Config(_)
         | Command::Models(_)
+        | Command::Scope(_)
+        | Command::Phase(_)
+        | Command::Backlog(_)
+        | Command::Story(_)
         | Command::Install(_)
         | Command::Update(_) => {
             unreachable!("dispatched above")

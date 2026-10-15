@@ -349,12 +349,20 @@ mod tests {
         let schema = input_schema(Tool::Query);
         let identity = alternative_of_type(&schema["properties"]["identity"], "object");
         let objects = leaves(&identity);
-        assert_eq!(objects.len(), 1, "{identity}");
+        assert_eq!(objects.len(), 4, "{identity}");
         let object = &objects[0];
         assert_eq!(object["properties"]["kind"]["const"], "capture");
         assert_eq!(object["properties"]["id"]["type"], "string");
         assert_eq!(object["required"], json!(["kind", "id"]));
         assert_eq!(object["additionalProperties"], false);
+        // The scope kinds are objects with their own typed fields too, so no
+        // identity leaves room for loose text.
+        for (object, kind) in objects[1..].iter().zip(["draft", "roadmap", "story"]) {
+            assert_eq!(object["type"], "object", "{object}");
+            assert_eq!(object["properties"]["kind"]["const"], kind, "{object}");
+            assert_eq!(object["additionalProperties"], false, "{object}");
+        }
+        assert_eq!(objects[3]["properties"]["id"]["type"], "integer");
         let parts = alternatives(&schema["properties"]["part"]);
         assert!(!parts.is_empty(), "no part in {schema}");
         for part in parts {
@@ -368,7 +376,8 @@ mod tests {
     fn a_served_operations_argument_left_out_of_the_tool_schema_is_caught() {
         // Design 0012: help takes name, schema takes tool and for, instruction
         // and document take identity, all four take part, and capture takes
-        // request_id, kind, text, phase and instruction.
+        // request_id, kind, text, phase and instruction, and scope-submit takes
+        // request_id and submission.
         let names = |tool| {
             let schema = input_schema(tool);
             let mut names: Vec<String> = schema["properties"]
@@ -392,6 +401,7 @@ mod tests {
                 "operation",
                 "phase",
                 "request_id",
+                "submission",
                 "text"
             ]
         );
@@ -434,9 +444,20 @@ mod tests {
             "{parts:?}"
         );
         let apply = input_schema(Tool::Apply);
+        let request_ids: Vec<String> = alternatives(&apply["properties"]["request_id"])
+            .iter()
+            .map(description)
+            .collect();
+        for taker in ["capture", "scope-submit"] {
+            let sentence = format!("Taken by {taker} (required).");
+            assert!(
+                request_ids.iter().any(|d| d.ends_with(&sentence)),
+                "{request_ids:?}"
+            );
+        }
         assert!(
-            description(&apply["properties"]["request_id"])
-                .ends_with("Taken by capture (required).")
+            description(&apply["properties"]["submission"])
+                .ends_with("Taken by scope-submit (required).")
         );
         assert!(description(&apply["properties"]["phase"]).ends_with("Taken by capture."));
     }

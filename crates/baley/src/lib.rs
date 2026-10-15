@@ -85,6 +85,8 @@ pub mod protected_paths;
 pub mod providers;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
+/// The scope records of design 0004: start submissions held as drafts over the storage port.
+pub mod scope;
 /// The two settings files as bytes: the global file's path, one reader and its capped form for the guard.
 pub mod settings;
 /// The update check: staged versions beside the stable path, the daily claim and its records.

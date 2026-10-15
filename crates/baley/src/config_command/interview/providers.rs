@@ -1,6 +1,7 @@
 //! The provider stage of the interview (design 0003 section 5, Provider
 //! selection and Provider confirmation). It is pure over the input and output
-//! it is given, and its one seam is the process that reads git's `user.name`.
+//! it is given, and its one seam is the process that reads git's `user.name`
+//! when `owner.name` is not set.
 
 use std::io::{self, BufRead, Write};
 
@@ -19,7 +20,8 @@ use crate::providers::warning::{WARNING_TEXT, WARNING_VERSION};
 pub(super) struct Acknowledge {
     /// The confirmed providers, each once, in catalog order.
     pub(super) providers: Vec<Provider>,
-    /// git's `user.name`.
+    /// The owner's identity: `owner.name`, or git's `user.name` when it is
+    /// not set.
     pub(super) owner: String,
 }
 
@@ -107,7 +109,9 @@ fn refusal(text: &str) -> String {
 }
 
 /// Asks the provider question, shows each chosen provider's warning and takes
-/// its typed `yes`, then reads the owner identity.
+/// its typed `yes`, then reads the owner identity: `owner_name`, the
+/// `owner.name` value of the policy the interview merged, else git's
+/// `user.name`.
 ///
 /// Only an explicit choice of a provider asks for its warning, and it does so
 /// even when the stored selection already holds that provider. Any answer but
@@ -115,6 +119,7 @@ fn refusal(text: &str) -> String {
 /// again.
 pub(super) fn stage(
     stored: &Selection,
+    owner_name: Option<&str>,
     process: &mut dyn Process,
     input: &mut impl BufRead,
     output: &mut impl Write,
@@ -167,7 +172,7 @@ pub(super) fn stage(
             return Ok(Staged::Declined);
         }
     }
-    Ok(match identity::read(process) {
+    Ok(match identity::owner(owner_name, process) {
         Ok(owner) => Staged::Ready(Ready {
             acknowledgement: Some(Acknowledge {
                 providers: chosen.clone(),
@@ -175,13 +180,63 @@ pub(super) fn stage(
             }),
             answer: Answer::Choose(chosen),
         }),
-        Err(render) => Staged::Refused(Refusal(render)),
+        Err(text) => Staged::Refused(Refusal(Render::refusal(format!(
+            "{text} and run the interview again"
+        )))),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::Recorded;
+
+    /// The stage over `openai` and its `yes`, with nothing stored.
+    fn openai_accepted(owner_name: Option<&str>, process: &mut Recorded) -> Staged {
+        stage(
+            &Selection::none(),
+            owner_name,
+            process,
+            &mut "openai\nyes\n".as_bytes(),
+            &mut Vec::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_acknowledgement_naming_git_while_owner_name_is_set_is_caught() {
+        let mut process = Recorded::new().out("Git Owner\n");
+        let staged = openai_accepted(Some("Ada Owner"), &mut process);
+        assert_eq!(
+            staged,
+            Staged::Ready(Ready {
+                answer: Answer::Choose(vec![Provider::OpenAi]),
+                acknowledgement: Some(Acknowledge {
+                    providers: vec![Provider::OpenAi],
+                    owner: "Ada Owner".into(),
+                }),
+            })
+        );
+        assert!(process.launches().is_empty());
+    }
+
+    #[test]
+    fn an_acknowledgement_with_no_owner_name_or_git_name_recorded_is_caught() {
+        let mut process = Recorded::new().fail(1, "");
+        let Staged::Refused(Refusal(render)) = openai_accepted(None, &mut process) else {
+            panic!("not refused");
+        };
+        assert_eq!(render.lines.len(), 1, "{render:?}");
+        assert!(
+            render.lines[0].starts_with("owner-identity-missing:"),
+            "{render:?}"
+        );
+        assert!(
+            render.lines[0].ends_with(" and run the interview again"),
+            "{render:?}"
+        );
+        assert_eq!(render.code, 2);
+    }
 
     #[test]
     fn a_provider_answer_read_loosely_or_a_repeat_counted_twice_is_caught() {
