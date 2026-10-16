@@ -91,6 +91,7 @@ pub fn gather(location: &Path) -> Observed {
     };
     let denied = |mode: libc::c_int| {
         // SAFETY: `text` is a valid NUL-terminated string that outlives the call.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let allowed = unsafe { libc::access(text.as_ptr(), mode) } == 0;
         (!allowed).then(|| io::Error::last_os_error().to_string())
     };

@@ -379,8 +379,10 @@ fn restore_after_error(layout: &Layout, temporary: &Path, failure: &mut Failure)
 fn exchange(from: &Path, to: &Path) -> io::Result<()> {
     let from = CString::new(from.as_os_str().as_bytes())?;
     let to = CString::new(to.as_os_str().as_bytes())?;
-    // Both C strings remain alive through the call and contain no NUL bytes.
     #[cfg(target_os = "linux")]
+    // SAFETY: `from` and `to` are CStrings that outlive the call, so both
+    // pointers are valid and NUL-terminated.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let result = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
@@ -391,6 +393,9 @@ fn exchange(from: &Path, to: &Path) -> io::Result<()> {
         )
     };
     #[cfg(target_os = "macos")]
+    // SAFETY: `from` and `to` are CStrings that outlive the call, so both
+    // pointers are valid and NUL-terminated.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_SWAP) };
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let result = {
