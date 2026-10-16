@@ -15,3 +15,9 @@ scratch/
 
 # Cargo build output
 target/
+
+# Security audit output: unfixed findings, the tests that prove them and the reviewers' map, never committed
+audit/
+audit-context/
+CLAUDE-SECURITY-*/
+security-unfixed/
