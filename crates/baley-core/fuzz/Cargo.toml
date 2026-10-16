@@ -1,0 +1,39 @@
+[package]
+name = "baley-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+baley-core = { path = ".." }
+baley-store = { path = "../../baley-store" }
+
+# Its own workspace, so the main workspace and its Cargo.lock never see the fuzzer.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "guard_scan"
+path = "fuzz_targets/guard_scan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settings_layer"
+path = "fuzz_targets/settings_layer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "anchor_tag"
+path = "fuzz_targets/anchor_tag.rs"
+test = false
+doc = false
+bench = false
