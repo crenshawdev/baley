@@ -433,7 +433,9 @@ impl System {
                         return Err(std::io::Error::last_os_error());
                     }
                     if libc::getppid() != owner {
-                        return Err(std::io::Error::other("the owner exited before the spawn"));
+                        // An OS error allocates nothing here, and std reports
+                        // any other error to the parent as EINVAL anyway.
+                        return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
                     }
                     Ok(())
                 })
