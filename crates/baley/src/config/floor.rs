@@ -189,10 +189,16 @@ impl FloorIo for Host {
                 } else {
                     0
                 };
+            // SAFETY: `name` is a CString that outlives the call, and `handle`
+            // is an open File, so its descriptor is valid.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             let fd = unsafe { libc::openat(handle.as_raw_fd(), name.as_ptr(), flags) };
             if fd < 0 {
                 return Err(io::Error::last_os_error());
             }
+            // SAFETY: openat just returned `fd`, it is non-negative and nothing
+            // else holds it, so the File becomes its only owner.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             handle = unsafe { File::from_raw_fd(fd) };
         }
         Ok(handle)

@@ -480,6 +480,9 @@ impl Storage for Filesystem {
         let ownership = lock_set(opened)?;
         for (directory, path) in ownership.values() {
             loop {
+                // SAFETY: flock takes plain integers and touches no memory, and
+                // `directory` keeps the descriptor open for the call.
+                // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
                 if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX) } == 0 {
                     break;
                 }

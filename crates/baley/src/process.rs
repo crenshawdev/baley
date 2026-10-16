@@ -425,8 +425,10 @@ impl System {
         }
         if launch.die_with_parent {
             let owner = std::process::id() as libc::pid_t;
-            // Safety: the closure runs between fork and exec in the child and
-            // calls only async-signal-safe functions.
+            // SAFETY: the closure runs between fork and exec in the child.
+            // prctl, getppid and errno reads are async-signal-safe, and it
+            // allocates nothing.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe {
                 command.pre_exec(move || {
                     if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
@@ -529,7 +531,10 @@ impl SystemChild {
 
     fn kill_group(&self) {
         if self.own_group {
-            // Safety: this group was created for this owned child.
+            // SAFETY: kill takes plain integers and touches no memory. The
+            // child leads its own group (process_group(0)), so -pid signals
+            // only that group.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
         }
     }

@@ -90,6 +90,7 @@ pub(crate) fn gather(home: &Path) -> Result<Observed, StoreError> {
         }
     }
     // SAFETY: geteuid has no preconditions and cannot fail.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let user = unsafe { libc::geteuid() };
     Ok(Observed {
         home: real,
