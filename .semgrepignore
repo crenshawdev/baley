@@ -1,0 +1,25 @@
+# This file replaces semgrep's built-in ignore list, so its defaults are kept here.
+node_modules/
+build/
+dist/
+vendor/
+.env/
+.venv/
+.tox/
+*.min.js
+.npm/
+.yarn/
+test/
+tests/
+testsuite/
+*_test.go
+.semgrep
+.semgrep_logs/
+
+# Outside the security audit's scope (THREAT-MODEL.md).
+crates/baley-bench/
+spikes/
+
+# Inherited engine that production does not reach. Build 9 (#30) deletes both files.
+crates/baley/src/pause/git.rs
+crates/baley/src/task/mod.rs
