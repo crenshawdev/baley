@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issue [#28](https://github.com/crenshawdev/baley/issues/28) |
+| Design issue | none; build issue [#28](https://github.com/jcrenshaw-dev/baley/issues/28) |
 | Requirement prefix | NXT |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0001](../adr/0001-event-ledger.md), [0005](../adr/0005-storage-port.md), [0030](../adr/0030-question-rounds.md), [0031](../adr/0031-one-term-per-concept.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

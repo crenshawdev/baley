@@ -59,8 +59,8 @@ Baley works out each round from the dependencies: the open questions whose depen
 
 ### Follow-up
 
-- Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)) builds question sets, rounds, answers and deferrals, the `questions` view, the refusals, the analyzer's two work orders and the plan's `questions` field, as PLN-R6, PLN-R11 and PLN-R23 to PLN-R27 of design 0005. The seams are the refinement and plan submit operations of 0005; the inherited `assumptions` field (`crates/baley/src/context/model.rs:44`) and the prose ambiguity rule in the compiled derivation text (`crates/baley/src/plan/instructions.rs:124`) are removed there.
-- Build 7 ([#28](https://github.com/crenshawdev/baley/issues/28)) adds the next-action and progress rules that name the current round and the waiting questions (design 0013, NXT-R3, NXT-R6).
+- Build 4 ([#25](https://github.com/jcrenshaw-dev/baley/issues/25)) builds question sets, rounds, answers and deferrals, the `questions` view, the refusals, the analyzer's two work orders and the plan's `questions` field, as PLN-R6, PLN-R11 and PLN-R23 to PLN-R27 of design 0005. The seams are the refinement and plan submit operations of 0005; the inherited `assumptions` field (`crates/baley/src/context/model.rs:44`) and the prose ambiguity rule in the compiled derivation text (`crates/baley/src/plan/instructions.rs:124`) are removed there.
+- Build 7 ([#28](https://github.com/jcrenshaw-dev/baley/issues/28)) adds the next-action and progress rules that name the current round and the waiting questions (design 0013, NXT-R3, NXT-R6).
 - How each host puts a round's questions to the owner and returns the answers is decided in [design 0012](../design/0012-host-interface.md), an open question of 0005.
 
 ## Options in detail

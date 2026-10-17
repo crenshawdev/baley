@@ -11,7 +11,7 @@
 
 ## Context and problem
 
-[PLN-R16](../design/0005-context-plans-and-acceptance.md#3-requirements) allows one re-check after a planner revision. Its earlier definition did not specify the material that re-check reads. Checking only prior blockers leaves changes outside those blockers without another check. [Issue #134](https://github.com/crenshawdev/baley/issues/134) proposes full and diff scopes.
+[PLN-R16](../design/0005-context-plans-and-acceptance.md#3-requirements) allows one re-check after a planner revision. Its earlier definition did not specify the material that re-check reads. Checking only prior blockers leaves changes outside those blockers without another check. [Issue #134](https://github.com/jcrenshaw-dev/baley/issues/134) proposes full and diff scopes.
 
 [REV-R10](../design/0008-review.md#3-requirements) grants one further round after a fix to a triggered review. This decision supplies the reading scope left unspecified by [ADR 0019](0019-reviews-adjudicated-and-ruled.md), while preserving its authorization and two-round limit.
 

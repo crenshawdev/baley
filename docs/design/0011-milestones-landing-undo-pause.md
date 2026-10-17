@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issue [#27](https://github.com/crenshawdev/baley/issues/27) |
+| Design issue | none; build issue [#27](https://github.com/jcrenshaw-dev/baley/issues/27) |
 | Requirement prefix | LND |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0004](../adr/0004-project-identity.md), [0031](../adr/0031-one-term-per-concept.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
@@ -21,7 +21,7 @@ This area decides how finished work leaves the checkout and how work in flight i
 - pause and resume: putting work down with its state preserved, and an owner's stop;
 - the forge adapter every forge step goes through, and the chain anchors it pushes.
 
-It does not decide when a phase is complete ([0007](0007-verification.md)); what the guard does with a push an agent attempts ([0010](0010-guard.md)); reviews a landing waits on ([0008](0008-review.md)); the forge mirror of stories and phases (`Backlog`, [0005](0005-context-plans-and-acceptance.md) PLN-R22); or how Baley itself is released ([#14](https://github.com/crenshawdev/baley/issues/14), its own design).
+It does not decide when a phase is complete ([0007](0007-verification.md)); what the guard does with a push an agent attempts ([0010](0010-guard.md)); reviews a landing waits on ([0008](0008-review.md)); the forge mirror of stories and phases (`Backlog`, [0005](0005-context-plans-and-acceptance.md) PLN-R22); or how Baley itself is released ([#14](https://github.com/jcrenshaw-dev/baley/issues/14), its own design).
 
 Hand-offs: 0007 completes phases; this area lands them. 0004 withdraws a started phase only after this area's `phase.undone`. 0004's project start offers the forge creation this area performs. 0008's filing and 0009's anchors go through this area's forge adapter.
 

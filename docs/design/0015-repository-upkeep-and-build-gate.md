@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | [#47](https://github.com/crenshawdev/baley/issues/47) |
+| Design issue | [#47](https://github.com/jcrenshaw-dev/baley/issues/47) |
 | Requirement prefix | UPK |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md), [0034](../adr/0034-one-server-per-session.md), [0038](../adr/0038-installer-and-opt-in-updates.md), [0039](../adr/0039-session-owned-provider-credentials.md) · C4 view: not applicable (no runtime component) |
@@ -14,7 +14,7 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 Baley uses one public name, describes its built state accurately, and requires a reproducible set of checks before changes reach `main`. This area defines those names, the treatment of project history, repository metadata and labels, the formatting gate, and the evidence used to assess the test suite's cost.
 
-The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/crenshawdev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
+The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/jcrenshaw-dev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/jcrenshaw-dev/baley/issues/14), and the architecture overview to [#44](https://github.com/jcrenshaw-dev/baley/issues/44).
 
 Cadence is Baley's predecessor project, a separately maintained tool that can still be registered in the same host.
 
@@ -83,7 +83,7 @@ The `fmt` job belongs in [test.yml](../../.github/workflows/test.yml). It uses t
 
 ### Inspect the applied gate
 
-**Input:** `gh api repos/crenshawdev/baley/rules/branches/main`.
+**Input:** `gh api repos/jcrenshaw-dev/baley/rules/branches/main`.
 
 **Output:** the applied contexts, strict-check setting and expected integration for each check. A workflow job's presence does not establish that it is required. The required context is exactly `fmt`, from the same expected producer as the existing checks. Other branch rules remain intact. GitHub documents the expected source in [ruleset checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) and pending results from skipped workflows in [required-check troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
@@ -124,7 +124,7 @@ The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its 
 
 ### Canonical names and consumers
 
-The names below cover the public and stored surfaces of [#53](https://github.com/crenshawdev/baley/issues/53). Retained engine definitions are distinguished from the session server that runs in production.
+The names below cover the public and stored surfaces of [#53](https://github.com/jcrenshaw-dev/baley/issues/53). Retained engine definitions are distinguished from the session server that runs in production.
 
 | Surface | Names and current source |
 |---|---|
@@ -142,7 +142,7 @@ The file-valued `BALEY_GLOBAL_CONFIG` is not an alias for the directory-valued `
 
 ### Suite-cost report
 
-The measurement belongs in the pull request for [#54](https://github.com/crenshawdev/baley/issues/54), not in a runtime ledger record.
+The measurement belongs in the pull request for [#54](https://github.com/jcrenshaw-dev/baley/issues/54), not in a runtime ledger record.
 
 | Field | Meaning |
 |---|---|
@@ -247,10 +247,10 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#hosts-and-platforms), [four required checks](../../README.md#how-it-is-designed-and-built), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary](../../README.md#outside-reviews-and-your-api-keys) and [what is still unbuilt](../../README.md#current-state). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
 | UPK-R8 | Built | Section 9's six labels remain; the seven no issue or pull request used are removed, and `enhancement` keeps its 53 closed issues without being used for new work |
 | UPK-R9 | Built | [bug.yml:12-21](../../.github/ISSUE_TEMPLATE/bug.yml#L12) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [5-11](../../.github/ISSUE_TEMPLATE/bug.yml#L5) and [22-35](../../.github/ISSUE_TEMPLATE/bug.yml#L22) |
-| UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
+| UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/jcrenshaw-dev/baley/issues/54) owns the measurement and assessment |
 | UPK-R11 | Built | [.cargo/config.toml:3](../../.cargo/config.toml#L3) sets six build jobs; [.config/nextest.toml:3](../../.config/nextest.toml#L3) keeps six test threads; nextest at [test.yml:60](../../.github/workflows/test.yml#L60) explicitly sets `--build-jobs 6 --test-threads 6`, and clippy at [test.yml:89](../../.github/workflows/test.yml#L89) sets `-j 6` |
 | UPK-Q1 | Built | Section 6 classifies every retained match; no active source uses an old name |
-| UPK-Q2 | Built | The check-only command at [test.yml:140](../../.github/workflows/test.yml#L140) failed on a disposable misformatted commit and passed on its correction ([#210](https://github.com/crenshawdev/baley/pull/210), closed unmerged), a documentation-only pull request produces it, and the applied rules require its exact context |
+| UPK-Q2 | Built | The check-only command at [test.yml:140](../../.github/workflows/test.yml#L140) failed on a disposable misformatted commit and passed on its correction ([#210](https://github.com/jcrenshaw-dev/baley/pull/210), closed unmerged), a documentation-only pull request produces it, and the applied rules require its exact context |
 
 The applied `main` rules, read on 2026-10-06, come from ruleset `23995653`. They require `cargo-test`, `clippy`, `cargo-deny` and `fmt`, each from integration `15368`, with `strict_required_status_checks_policy: true` and `do_not_enforce_on_create: false`. The endpoint also reports deletion and non-fast-forward protection, required signatures, and a pull-request rule with resolved review threads, dismissed stale approvals, zero required approving reviews, and merge or squash. Its bypass list is empty.
 

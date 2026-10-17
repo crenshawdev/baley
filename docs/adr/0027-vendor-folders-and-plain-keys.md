@@ -91,8 +91,8 @@ Chosen options: **2, 6 and 9**, and the libraries below.
 
 ### Follow-up
 
-- Build 2 ([#23](https://github.com/crenshawdev/baley/issues/23)) builds the folders, the `keys.env` reader with its ownership, mode and duplicate-name checks, `baley exec --key`, detection with `reqwest`, and the open checks of EVD-R22.
-- Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)) extends the host sandbox and the guard to the whole config folder: writes denied on both hosts, reads denied on Claude Code.
+- Build 2 ([#23](https://github.com/jcrenshaw-dev/baley/issues/23)) builds the folders, the `keys.env` reader with its ownership, mode and duplicate-name checks, `baley exec --key`, detection with `reqwest`, and the open checks of EVD-R22.
+- Build 3 ([#24](https://github.com/jcrenshaw-dev/baley/issues/24)) extends the host sandbox and the guard to the whole config folder: writes denied on both hosts, reads denied on Claude Code.
 
 ## Options in detail
 

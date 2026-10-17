@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issue [#24](https://github.com/crenshawdev/baley/issues/24) |
+| Design issue | none; build issue [#24](https://github.com/jcrenshaw-dev/baley/issues/24) |
 | Requirement prefix | GRD |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md), [0036](../adr/0036-per-user-guard-records.md), [0039](../adr/0039-session-owned-provider-credentials.md), [0040](../adr/0040-guard-commit-checkout.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

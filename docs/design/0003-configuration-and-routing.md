@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issue [#23](https://github.com/crenshawdev/baley/issues/23) |
+| Design issue | none; build issue [#23](https://github.com/jcrenshaw-dev/baley/issues/23) |
 | Requirement prefix | CFG |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0003](../adr/0003-per-user-database.md), [0004](../adr/0004-project-identity.md), [0009](../adr/0009-served-instructions.md), [0015](../adr/0015-settings-in-toml.md), [0016](../adr/0016-key-store.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0028](../adr/0028-one-http-stack.md), [0032](../adr/0032-gemini-is-not-a-provider.md), [0033](../adr/0033-host-security-bar.md), [0039](../adr/0039-session-owned-provider-credentials.md) · C4 view: configuration |

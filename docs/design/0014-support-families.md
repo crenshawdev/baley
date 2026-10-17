@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issues [#24](https://github.com/crenshawdev/baley/issues/24), [#29](https://github.com/crenshawdev/baley/issues/29) |
+| Design issue | none; build issues [#24](https://github.com/jcrenshaw-dev/baley/issues/24), [#29](https://github.com/jcrenshaw-dev/baley/issues/29) |
 | Requirement prefix | SUP |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), [0031](../adr/0031-one-term-per-concept.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

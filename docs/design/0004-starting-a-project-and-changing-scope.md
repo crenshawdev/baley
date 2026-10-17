@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | [#46](https://github.com/crenshawdev/baley/issues/46), [#45](https://github.com/crenshawdev/baley/issues/45); build issues [#23](https://github.com/crenshawdev/baley/issues/23), [#25](https://github.com/crenshawdev/baley/issues/25) |
+| Design issue | [#46](https://github.com/jcrenshaw-dev/baley/issues/46), [#45](https://github.com/jcrenshaw-dev/baley/issues/45); build issues [#23](https://github.com/jcrenshaw-dev/baley/issues/23), [#25](https://github.com/jcrenshaw-dev/baley/issues/25) |
 | Requirement prefix | PRJ |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0004](../adr/0004-project-identity.md), [0006](../adr/0006-no-markdown-records.md), [0007](../adr/0007-forge-anchors.md), [0009](../adr/0009-served-instructions.md), [0017](../adr/0017-stories-and-sprints.md), [0031](../adr/0031-one-term-per-concept.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

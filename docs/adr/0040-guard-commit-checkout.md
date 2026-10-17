@@ -11,7 +11,7 @@
 
 ## Context and problem
 
-The guard gets policy from the session project at `CLAUDE_PROJECT_DIR`. A shell command can commit in another checkout through git's `-C` option. Reading the branch at the hook's working directory can then pass a commit to a protected branch or deny one on an unprotected branch ([issue 212](https://github.com/crenshawdev/baley/issues/212)). Some commands change directory or git environment before the commit, so their target cannot be established by the guard's bounded scan.
+The guard gets policy from the session project at `CLAUDE_PROJECT_DIR`. A shell command can commit in another checkout through git's `-C` option. Reading the branch at the hook's working directory can then pass a commit to a protected branch or deny one on an unprotected branch ([issue 212](https://github.com/jcrenshaw-dev/baley/issues/212)). Some commands change directory or git environment before the commit, so their target cannot be established by the guard's bounded scan.
 
 [ADR 0036](0036-per-user-guard-records.md) keys remembered denials by the session project's canonical root, the canonical checkout root containing the hook's working directory, and the host. Once the branch comes from the commit's target, that checkout component must name the same target. Otherwise torn settings could apply a denial remembered for another checkout.
 

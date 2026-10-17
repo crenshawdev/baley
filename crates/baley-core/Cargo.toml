@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Baley's domain: views, projectors and the rules that decide what may be recorded, behind the storage port."
-repository = "https://github.com/crenshawdev/baley"
+repository = "https://github.com/jcrenshaw-dev/baley"
 rust-version = "1.98"
 publish = false
 

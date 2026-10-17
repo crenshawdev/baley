@@ -26,13 +26,13 @@ Baley collects nothing about you, sends no telemetry, and sends data only to ser
 
 ## Current state
 
-- Installs use unsigned development artifacts. `install.sh` and `baley update` check SHA-256 against an unsigned manifest, and signature verification comes before any release ([#14](https://github.com/crenshawdev/baley/issues/14)). The design signs each release's manifests with an OpenSSH Ed25519 key that stays on the maintainer's machine, and both will verify that signature against the public key they carry.
-- The parked review engine is still compiled in. No command or tool reaches it, but it reads environment keys and `providers.env` and can call providers. Build 9 ([#30](https://github.com/crenshawdev/baley/issues/30)) deletes it.
-- `baley models update` prints a fetch only for an acknowledged provider. The same check before a review, including for hand-edited settings, comes with Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)).
-- Outside reviews of plans and diffs are not built yet. Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)) adds them, along with phase planning and plan approval.
-- A plan's file lease is not yet enforced when a task closes. Build 5 ([#26](https://github.com/crenshawdev/baley/issues/26)) enforces it.
-- Anchors are pushed only when you run `baley anchor`. Build 6 ([#27](https://github.com/crenshawdev/baley/issues/27)) anchors automatically.
-- macOS support is written but has not been run or qualified, and CI runs on Linux only ([#24](https://github.com/crenshawdev/baley/issues/24)).
+- Installs use unsigned development artifacts. `install.sh` and `baley update` check SHA-256 against an unsigned manifest, and signature verification comes before any release ([#14](https://github.com/jcrenshaw-dev/baley/issues/14)). The design signs each release's manifests with an OpenSSH Ed25519 key that stays on the maintainer's machine, and both will verify that signature against the public key they carry.
+- The parked review engine is still compiled in. No command or tool reaches it, but it reads environment keys and `providers.env` and can call providers. Build 9 ([#30](https://github.com/jcrenshaw-dev/baley/issues/30)) deletes it.
+- `baley models update` prints a fetch only for an acknowledged provider. The same check before a review, including for hand-edited settings, comes with Build 4 ([#25](https://github.com/jcrenshaw-dev/baley/issues/25)).
+- Outside reviews of plans and diffs are not built yet. Build 4 ([#25](https://github.com/jcrenshaw-dev/baley/issues/25)) adds them, along with phase planning and plan approval.
+- A plan's file lease is not yet enforced when a task closes. Build 5 ([#26](https://github.com/jcrenshaw-dev/baley/issues/26)) enforces it.
+- Anchors are pushed only when you run `baley anchor`. Build 6 ([#27](https://github.com/jcrenshaw-dev/baley/issues/27)) anchors automatically.
+- macOS support is written but has not been run or qualified, and CI runs on Linux only ([#24](https://github.com/jcrenshaw-dev/baley/issues/24)).
 
 The [roadmap](docs/roadmap.md) carries everything else, build by build.
 
@@ -61,11 +61,11 @@ The details, including what install writes and when it refuses, are in [docs/ins
 
 Keys live in your environment, where every program Claude Code starts can see them, agents and subagents included. Nothing scrubs a key a command prints. Your code goes to the chosen provider under its terms.
 
-A fresh install enables no outside provider. `baley config interview` adds one only after you accept that warning, and Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)) adds the same check before every review, including for hand-edited settings. The details are in [docs/outside-reviews.md](docs/outside-reviews.md).
+A fresh install enables no outside provider. `baley config interview` adds one only after you accept that warning, and Build 4 ([#25](https://github.com/jcrenshaw-dev/baley/issues/25)) adds the same check before every review, including for hand-edited settings. The details are in [docs/outside-reviews.md](docs/outside-reviews.md).
 
 ## How it is designed and built
 
-- **What is being built:** the [milestones](https://github.com/crenshawdev/baley/milestones), each a theme of the design, and the build issues under them.
+- **What is being built:** the [milestones](https://github.com/jcrenshaw-dev/baley/milestones), each a theme of the design, and the build issues under them.
 - **In what order:** the [roadmap](docs/roadmap.md), from the build under way to the first release, updated by each build pull request.
 - **How it is designed:** every significant change starts as a design document with requirements and diagrams, and each architectural decision is kept as a decision record. See [Baley: product requirements](docs/design/prd/baley.md), [0002: System design](docs/design/0002-system-design.md), [the design process](docs/design/README.md), [design documents](docs/design/), [decision records](docs/adr/) and [the glossary](CONTEXT.md), which gives one term for each concept.
 - **How it is built:** every change reaches `main` through a pull request with passing required checks (`cargo-test`, `clippy`, `cargo-deny`, `fmt`).

@@ -60,11 +60,11 @@ Story replaces requirement for what the owner declares on the roadmap: the five 
 
 ### Follow-up
 
-- Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)) builds the story events, commands, codes and fields of design 0004, the capacity setting, the planning codes and the `phase_plan` view of design 0005, under the new names.
-- Build 5 ([#26](https://github.com/crenshawdev/baley/issues/26)) builds `phase close` and `phase.retrospective` with phase completion (designs 0005 and 0007).
-- Build 6 ([#27](https://github.com/crenshawdev/baley/issues/27)) builds the integration branch `baley/phase-<n>-<slug>` (design 0011, LND-R1).
-- Build 7 ([#28](https://github.com/crenshawdev/baley/issues/28)) builds next action and progress over `phase_plan`, with `--phase <n>` (design 0013).
-- Build 8 ([#29](https://github.com/crenshawdev/baley/issues/29)) builds capture promotion through `story declare`, recording the `story` field of `capture.promoted` (design 0014, SUP-R2).
+- Build 4 ([#25](https://github.com/jcrenshaw-dev/baley/issues/25)) builds the story events, commands, codes and fields of design 0004, the capacity setting, the planning codes and the `phase_plan` view of design 0005, under the new names.
+- Build 5 ([#26](https://github.com/jcrenshaw-dev/baley/issues/26)) builds `phase close` and `phase.retrospective` with phase completion (designs 0005 and 0007).
+- Build 6 ([#27](https://github.com/jcrenshaw-dev/baley/issues/27)) builds the integration branch `baley/phase-<n>-<slug>` (design 0011, LND-R1).
+- Build 7 ([#28](https://github.com/jcrenshaw-dev/baley/issues/28)) builds next action and progress over `phase_plan`, with `--phase <n>` (design 0013).
+- Build 8 ([#29](https://github.com/jcrenshaw-dev/baley/issues/29)) builds capture promotion through `story declare`, recording the `story` field of `capture.promoted` (design 0014, SUP-R2).
 
 ## Options in detail
 

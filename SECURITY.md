@@ -19,7 +19,7 @@ Baley is under active redesign and has no released version. Reports about the cu
 Two workflows run on every pull request.
 
 - `test.yml` holds the required checks: `cargo-test`, `clippy`, `cargo-deny` and `fmt`. A pull request cannot merge into `main` until all four pass.
-- `fast.yml` runs the fast checks from [sentinel](https://github.com/crenshawdev/sentinel), in two jobs. Neither is a required check, so neither blocks a merge, but a failed job shows on the pull request.
+- `fast.yml` runs the fast checks from [sentinel](https://github.com/jcrenshaw-dev/sentinel), in two jobs. Neither is a required check, so neither blocks a merge, but a failed job shows on the pull request.
   - `mechanical` runs sentinel's `check.sh`. `cargo audit`, `cargo deny`, `cargo clippy` and `semgrep` are gates, and the job fails when one of them fails. `cargo geiger`, a build of the fuzz targets in `crates/baley-core/fuzz` and `crates/baley/fuzz`, and Miri on the unit tests (the code has `unsafe` blocks) are reported only.
   - `security-review` has Claude review the pull request's diff against [THREAT-MODEL.md](THREAT-MODEL.md) with read-only tools. This repository is public, so the review is encrypted to the maintainer's key, and the pull request comment shows only the number of findings by severity. The job fails only when the review did not run or its output is malformed. Findings do not fail it. Pull requests opened by Dependabot skip it, because GitHub gives them no secrets.
 
