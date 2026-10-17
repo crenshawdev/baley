@@ -13,7 +13,7 @@ In scope: everything reachable from `crates/baley/src/main.rs` (the `serve` and 
 
 Out of scope:
 
-- The inherited engine that `crates/baley/src/inherited.rs` lists, and code only it reaches: the review engine and its provider clients, the test runner, landing, the rail, pause, undo, milestone, why, recall and the transcript reader. Production does not reach it and Build 9 ([#30](https://github.com/crenshawdev/baley/issues/30)) deletes it. One check stays in scope: that nothing reachable from `main.rs` calls into it. `crates/baley/src/review/provider/credentials.rs` in particular still reads `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` and a `providers.env` file, and must stay unreachable.
+- The inherited engine that `crates/baley/src/inherited.rs` lists, and code only it reaches: the review engine and its provider clients, the test runner, landing, the rail, pause, undo, milestone, why, recall and the transcript reader. Production does not reach it and Build 9 ([#30](https://github.com/jcrenshaw-dev/baley/issues/30)) deletes it. One check stays in scope: that nothing reachable from `main.rs` calls into it. `crates/baley/src/review/provider/credentials.rs` in particular still reads `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` and a `providers.env` file, and must stay unreachable.
 - `crates/baley-bench`, `spikes/`, and test code.
 
 ## Attackers
@@ -214,8 +214,8 @@ The user can already do everything Baley does. A real escalation is either:
    - an MCP operation that writes an owner act.
 2. **Code runs outside the sandbox on the agent's behalf.** The guard, the server and the owner's own commands all run git outside the sandbox, in the agent's working tree, honouring that repository's `.git/config`. An agent that can write `.git/config` or `.git/hooks` from inside the sandbox can name programs that git then runs with the user's full rights. One example is a `core.sshCommand`, which the owner's `baley anchor` would run. `[VERIFY]` whether Claude Code's sandbox write-protects `.git/config` and `.git/hooks`.
 3. **An agent commits to a protected branch, or pushes, without the owner deciding,** through a guard bypass within the shapes the guard claims to recognise, or by changing the policy at HEAD.
-4. **The ledger is rewritten without detection.** The chain is unkeyed SHA-256 (`crates/baley-store/src/chain.rs:4-45`), so anyone who can write `baley.db` can rewrite it consistently. Only an anchor on the forge shows the rewrite, and anchors are pushed only when the owner runs `baley anchor` (Build 6, [#27](https://github.com/crenshawdev/baley/issues/27), automates it).
-5. **A malicious binary is installed by an update.** Whoever controls `updates.source`, or TLS to it, controls the binary, since the manifest is unsigned ([#14](https://github.com/crenshawdev/baley/issues/14)). It then runs as the user in every new session.
+4. **The ledger is rewritten without detection.** The chain is unkeyed SHA-256 (`crates/baley-store/src/chain.rs:4-45`), so anyone who can write `baley.db` can rewrite it consistently. Only an anchor on the forge shows the rewrite, and anchors are pushed only when the owner runs `baley anchor` (Build 6, [#27](https://github.com/jcrenshaw-dev/baley/issues/27), automates it).
+5. **A malicious binary is installed by an update.** Whoever controls `updates.source`, or TLS to it, controls the binary, since the manifest is unsigned ([#14](https://github.com/jcrenshaw-dev/baley/issues/14)). It then runs as the user in every new session.
 6. **A secret leaks.** A secret pasted into capture text or a scope draft is stored raw in the ledger and returned over MCP into the model's context.
 
 What the owner would not notice:
@@ -294,7 +294,7 @@ Read by install, the doctor and the interview with no size cap, following links 
 - **Client.** `https_only(true)`, rustls with bundled webpki roots (not the system store), no proxy, no referer, and the Authorization header that URL userinfo would add is removed.
 - **Limits.** 20 s to connect. The manifest gets 64 KiB in 20 s, and the binary 256 MiB in 10 min.
 - **Manifest.** Exactly two lines (`crates/baley/src/update/manifest.rs:100-135`). Only a strictly newer version is taken.
-- **Check.** The binary's SHA-256 must match the manifest, which comes from the same source and is not signed ([#14](https://github.com/crenshawdev/baley/issues/14)).
+- **Check.** The binary's SHA-256 must match the manifest, which comes from the same source and is not signed ([#14](https://github.com/jcrenshaw-dev/baley/issues/14)).
 - **Redirects.** reqwest's default policy. `[VERIFY]` that `https_only` holds on every redirect hop.
 - **install.sh.** Uses `curl -q --proto =https --tlsv1.2 -fsSL` with the same SHA-256 check (`install.sh:67-71, 142-171`).
 
@@ -339,11 +339,11 @@ Design 0010 states these. They are not new findings:
 
 ### Known and tracked, not findings
 
-- **[#14](https://github.com/crenshawdev/baley/issues/14):** release manifests are unsigned.
-- **[#30](https://github.com/crenshawdev/baley/issues/30):** the parked review engine is still compiled in.
-- **[#26](https://github.com/crenshawdev/baley/issues/26):** a plan's file lease is not enforced when a task closes.
-- **[#27](https://github.com/crenshawdev/baley/issues/27):** anchors are pushed only by hand.
-- **[#24](https://github.com/crenshawdev/baley/issues/24):** macOS is written but not run or qualified, and CI runs on Linux only.
+- **[#14](https://github.com/jcrenshaw-dev/baley/issues/14):** release manifests are unsigned.
+- **[#30](https://github.com/jcrenshaw-dev/baley/issues/30):** the parked review engine is still compiled in.
+- **[#26](https://github.com/jcrenshaw-dev/baley/issues/26):** a plan's file lease is not enforced when a task closes.
+- **[#27](https://github.com/jcrenshaw-dev/baley/issues/27):** anchors are pushed only by hand.
+- **[#24](https://github.com/jcrenshaw-dev/baley/issues/24):** macOS is written but not run or qualified, and CI runs on Linux only.
 
 ## Secrets that may pass through
 

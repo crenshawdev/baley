@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | [#51](https://github.com/crenshawdev/baley/issues/51), [#55](https://github.com/crenshawdev/baley/issues/55); build issues [#25](https://github.com/crenshawdev/baley/issues/25), [#40](https://github.com/crenshawdev/baley/issues/40) |
+| Design issue | [#51](https://github.com/jcrenshaw-dev/baley/issues/51), [#55](https://github.com/jcrenshaw-dev/baley/issues/55); build issues [#25](https://github.com/jcrenshaw-dev/baley/issues/25), [#40](https://github.com/jcrenshaw-dev/baley/issues/40) |
 | Requirement prefix | EXE |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0018](../adr/0018-lease-enforced-at-close.md), [0033](../adr/0033-host-security-bar.md), [0042](../adr/0042-mocked-boundary-integration-checks.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

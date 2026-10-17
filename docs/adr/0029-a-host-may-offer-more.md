@@ -49,7 +49,7 @@ Chosen option: **2**. The host that offers less still sets the floor, and the wh
 
 ### Follow-up
 
-- Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)), which builds the host adapters, adds the declared additions to each adapter beside the mechanisms it already chooses (design 0012, HST-R4), with `baley doctor` reporting them. The seam is the host adapter.
+- Build 3 ([#24](https://github.com/jcrenshaw-dev/baley/issues/24)), which builds the host adapters, adds the declared additions to each adapter beside the mechanisms it already chooses (design 0012, HST-R4), with `baley doctor` reporting them. The seam is the host adapter.
 - Routing a stage to another family's model, program or API is designed in designs 0003, 0008 and 0012 in its own change.
 
 ## Options in detail

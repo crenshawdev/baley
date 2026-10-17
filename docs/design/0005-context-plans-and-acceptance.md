@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | [#134](https://github.com/crenshawdev/baley/issues/134); build issue [#25](https://github.com/crenshawdev/baley/issues/25) |
+| Design issue | [#134](https://github.com/jcrenshaw-dev/baley/issues/134); build issue [#25](https://github.com/jcrenshaw-dev/baley/issues/25) |
 | Requirement prefix | PLN |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), [0017](../adr/0017-stories-and-sprints.md), [0030](../adr/0030-question-rounds.md), [0031](../adr/0031-one-term-per-concept.md), [0037](../adr/0037-plan-recheck-scope.md), [0042](../adr/0042-mocked-boundary-integration-checks.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

@@ -11,7 +11,7 @@
 
 ## Context and problem
 
-Baley speaks HTTP in two directions. It calls each provider's model-list endpoint for detection (design 0003, CFG-R20), and the shared server accepts MCP over HTTP when it runs as a background service (ADR 0011, SYS-R2, HST-R1). Build 2 ([#23](https://github.com/crenshawdev/baley/issues/23)) makes the calls; Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)) builds the server.
+Baley speaks HTTP in two directions. It calls each provider's model-list endpoint for detection (design 0003, CFG-R20), and the shared server accepts MCP over HTTP when it runs as a background service (ADR 0011, SYS-R2, HST-R1). Build 2 ([#23](https://github.com/jcrenshaw-dev/baley/issues/23)) makes the calls; Build 3 ([#24](https://github.com/jcrenshaw-dev/baley/issues/24)) builds the server.
 
 `reqwest` 0.12 is already a direct dependency, built on hyper 1 and tokio, with rustls and the ring provider. tokio already runs the server. The MCP server is built with `rmcp` 3.2.0, whose streamable HTTP server transport serves MCP over HTTP and needs an HTTP server to host it. `rmcp` tests that transport on axum 0.8: axum 0.8 is a dev-dependency in rmcp 3.2.0's `Cargo.toml`. New MCP protocol revisions reach Baley through `rmcp`, so on the host `rmcp` tests they arrive already exercised.
 

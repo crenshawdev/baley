@@ -61,7 +61,7 @@ Chosen option: **1**. Remove `keys.env` and the `baley exec --key` credential wr
 
 ### Follow-up
 
-- Build 4 ([#25](https://github.com/crenshawdev/baley/issues/25)) removes the built `keys.env` reader (`crates/baley/src/keys.rs`), `baley exec --key` (`crates/baley/src/exec.rs`) and HTTPS lister and key lookup (`crates/baley/src/detection/`). It also switches `baley init` from HTTPS detection to catalog seeding.
+- Build 4 ([#25](https://github.com/jcrenshaw-dev/baley/issues/25)) removes the built `keys.env` reader (`crates/baley/src/keys.rs`), `baley exec --key` (`crates/baley/src/exec.rs`) and HTTPS lister and key lookup (`crates/baley/src/detection/`). It also switches `baley init` from HTTPS detection to catalog seeding.
 - Build 3 T16 owns provider selection, the warning and typed ledger acknowledgement in the interview, including the `review.reviewers` reader and writer that setup needs. Its final summary lists every file to be written; `yes` records acknowledgement, writes API-host allowances through the installation writer, writes the global reviewer list and then runs the settings `config set`. A failure stops at that step, reports completed writes and permits a safe rerun ([0003 section 5](../design/0003-configuration-and-routing.md#5-commands-and-operations)). Build 4 owns `baley models import`, fetch work orders and their session return, and acknowledgement checks before review or list-fetch work orders. The pure catalog code in `crates/baley-core/src/catalog/detection/` stays.
 - Build 4's review work orders and return parser follow REV-R4. Build 3's installer follows HST-R17. Build 4 owns removal of the built credential paths alongside the session fetch-and-return path.
 

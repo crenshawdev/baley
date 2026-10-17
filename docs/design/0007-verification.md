@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | none; build issues [#25](https://github.com/crenshawdev/baley/issues/25), [#93](https://github.com/crenshawdev/baley/issues/93) |
+| Design issue | none; build issues [#25](https://github.com/jcrenshaw-dev/baley/issues/25), [#93](https://github.com/jcrenshaw-dev/baley/issues/93) |
 | Requirement prefix | VER |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), [0042](../adr/0042-mocked-boundary-integration-checks.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |

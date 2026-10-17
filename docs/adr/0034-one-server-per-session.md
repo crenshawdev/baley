@@ -68,7 +68,7 @@ Baley speaks MCP over stdio only in this release, so axum is not added. Outgoing
 
 ### Follow-up
 
-- Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)) rewrites SYS-R1, SYS-R2, SYS-R5 and SYS-R6 in design 0002, and HST-R1 and the install record in design 0012, and withdraws SYS-R3, SYS-R4, HST-R2 and HST-R3. The Processes and concurrency section of design 0001 is rewritten to match, in the change that builds the server.
+- Build 3 ([#24](https://github.com/jcrenshaw-dev/baley/issues/24)) rewrites SYS-R1, SYS-R2, SYS-R5 and SYS-R6 in design 0002, and HST-R1 and the install record in design 0012, and withdraws SYS-R3, SYS-R4, HST-R2 and HST-R3. The Processes and concurrency section of design 0001 is rewritten to match, in the change that builds the server.
 - Build 3's acceptance includes two live Claude Code sessions writing one project at once, with the record checked afterwards.
 - A shared server, or HTTP, comes back only with a new ADR, if a worker outside the session or a host that cannot start a stdio server needs one.
 

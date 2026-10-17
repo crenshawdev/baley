@@ -81,7 +81,7 @@ Adding a host takes a new ADR that cites the matrix run, and an adapter for that
 
 ### Follow-up
 
-- The Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)) task that lands this decision removes the `codex` value of `Host`, its catalog row and the help text naming it, and rewrites designs 0001, 0002, 0003, 0006, 0010 and 0012, the PRD, the roadmap, the C4 model, the glossary, the README and the bug report template to match. The inherited engine's Codex transcript reader goes in the same change; Build 9 removes the rest of that engine.
+- The Build 3 ([#24](https://github.com/jcrenshaw-dev/baley/issues/24)) task that lands this decision removes the `codex` value of `Host`, its catalog row and the help text naming it, and rewrites designs 0001, 0002, 0003, 0006, 0010 and 0012, the PRD, the roadmap, the C4 model, the glossary, the README and the bug report template to match. The inherited engine's Codex transcript reader goes in the same change; Build 9 removes the rest of that engine.
 - Build 3 refuses an unknown host (HST-R4), configures Claude Code's sandbox and its `Read` and `Edit` deny rules to deny agents reads and writes of the home and the config folder, has the guard hook cover every tool that runs a shell command and the built-in tools that read files, and extends the Claude Code probe to the config folder and to the built-in file tools.
 
 ## Options in detail
