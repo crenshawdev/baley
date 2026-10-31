@@ -10,6 +10,9 @@
 //! truths approve <digest>` and `baley story refinement <id>` are
 //! `refine::command`'s: the first approves a story's truth draft as `scope
 //! approve` approves a scope draft, the second prints a story's refinement.
+//! Approving a commitment, the `phase edit` a session's `phase-plan` drafted
+//! for a changed selection, also issues the phase's planner order, routed for
+//! Claude Code, and prints its id (D-01).
 //!
 //! Gathering finds the project and opens the ledger; judging, the arguments,
 //! the commands an approval or a submission is recorded under and what is
@@ -23,7 +26,7 @@ use std::process::ExitCode;
 
 use baley_core::capture::NO_SUCH_PHASE;
 use baley_core::policy::recorded::recorded_policy;
-use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, SettingsFile};
+use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile};
 use baley_core::scope::{
     ChangeKind, ChangeSubmission, Destination, START_KIND, ScopeChange, UNKNOWN_DRAFT,
     judge_change, judge_submission,
@@ -46,12 +49,13 @@ use crate::mcp::scope::change_kind;
 use crate::providers::identity;
 use crate::refine::command::{sentence, truth_detail};
 use crate::refine::submit::{current_truths, mark_str};
-use crate::scope::approve::{self, APPROVE_COMMAND};
+use crate::scope::approve::{self, APPROVE_COMMAND, OrderRoute};
 use crate::scope::read::{
     self, BacklogStory, Detail, Draft, NO_SUCH_STORY, Phase, Preview, PreviewError, ReadError,
     Roadmap, Story,
 };
 use crate::scope::submit::{self, SUBMIT_COMMAND};
+use crate::work_order::route::host_names;
 use crate::{init, policy_step, settings};
 
 /// `baley scope`: the owner's approval of scope, and its reads.
@@ -323,6 +327,12 @@ pub(crate) fn open(checkout: &Checkout) -> Result<SqliteStore, Render> {
 /// so a refused approval records nothing at all. The owner is read over the
 /// policy the policy step recorded, and the second step records the
 /// approval under the version in force.
+///
+/// A commitment's approval issues its planner order (D-01), so its policy
+/// step records Claude Code's effective policy, as a session's write records
+/// its host's, and the order is routed for Claude Code with its accepted
+/// model names. Claude Code is the only host (`Host::ALL`); a second host
+/// needs a host choice for an order the terminal issues.
 fn approve(digest: &str) -> Result<Render, Render> {
     let digest = judge_digest(digest)?;
     let checkout = checkout()?;
@@ -330,7 +340,11 @@ fn approve(digest: &str) -> Result<Render, Render> {
     let project = &checkout.project;
     let judged =
         approve::judge(&store, project, digest).map_err(|answer| answer_render(&answer))?;
-    let (policy, version) = admitted(&store, &checkout)?;
+    let [host] = Host::ALL;
+    let (policy, version) = match judged.planner_order() {
+        Some(_) => host_admitted(&store, &checkout, host)?,
+        None => admitted(&store, &checkout)?,
+    };
 
     let owner = identity::owner(identity::owner_name(&policy), &mut crate::process::System)
         .map_err(Render::refusal)?;
@@ -342,8 +356,19 @@ fn approve(digest: &str) -> Result<Render, Render> {
         &SystemClock::now(),
     )
     .map_err(|e| Render::refusal(e.to_string()))?;
-    let recorded = approve::record(&store, &command, Some(&judged), &owner);
-    Ok(answer_render(&submit::answer(recorded, &store)))
+    if judged.planner_order().is_none() {
+        let recorded = approve::record(&store, &command, Some(&judged), &owner);
+        return Ok(answer_render(&submit::answer(recorded, &store)));
+    }
+    let names = host_names(&store, host).map_err(|e| display::store_error(&e, Some(&project.0)))?;
+    let route = OrderRoute {
+        policy: &policy,
+        host,
+        names: &names,
+    };
+    Ok(answer_render(&approve::record_commitment(
+        &store, &command, &judged, &owner, route,
+    )))
 }
 
 /// One of the owner's change commands: the words are judged before anything
@@ -380,14 +405,44 @@ pub(crate) fn admitted(
     store: &SqliteStore,
     checkout: &Checkout,
 ) -> Result<(EffectivePolicy, u64), Render> {
-    let project = &checkout.project;
+    stepped(store, checkout, effective(checkout, None)?)
+}
+
+/// [`admitted`] for an owner command that issues an order for `host`: the
+/// policy step records `host`'s effective policy, so the order's route names
+/// a recorded policy version.
+pub(crate) fn host_admitted(
+    store: &SqliteStore,
+    checkout: &Checkout,
+    host: Host,
+) -> Result<(EffectivePolicy, u64), Render> {
+    stepped(store, checkout, effective(checkout, Some(host))?)
+}
+
+/// The checkout's effective policy for `host`, or with none, read from both
+/// settings files and judged, recording nothing, so a command can judge
+/// against it before it records.
+pub(crate) fn effective(
+    checkout: &Checkout,
+    host: Option<Host>,
+) -> Result<EffectivePolicy, Render> {
     let reads = policy_step::gather(
         &checkout.folders.config,
         &checkout.root,
         checkout.working.as_ref(),
         &mut crate::process::System,
     );
-    let policy = policy_step::build(&reads, None).map_err(|e| Render::refusal(e.to_string()))?;
+    policy_step::build(&reads, host).map_err(|e| Render::refusal(e.to_string()))
+}
+
+/// Checkout admission, then the policy step recording `policy`. Gives the
+/// policy and the version the step returned.
+fn stepped(
+    store: &SqliteStore,
+    checkout: &Checkout,
+    policy: EffectivePolicy,
+) -> Result<(EffectivePolicy, u64), Render> {
+    let project = &checkout.project;
     let recorded =
         recorded_policy(&checkout.root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
     let site = Site {
@@ -506,8 +561,27 @@ pub(crate) fn owner_command(
 /// three lines, an empty list as `none`, exit 0; a refusal as `<code>:
 /// <reason>`, exit 2, a stale draft's naming the first part that differs, a
 /// malformed submission's naming its section and field; a failure the same
-/// way, exit 1.
+/// way, exit 1. A commitment's receipt, or a `draft-approved` refusal of one,
+/// names the planner order its approval issued, and a further line says so
+/// with the order's id (D-01).
 pub(crate) fn answer_render(answer: &Value) -> Render {
+    let mut render = approval_lines(answer);
+    let order = match answer["status"].as_str() {
+        Some("ok") => answer["work_order"].as_str(),
+        Some("refused") => answer["details"]["work_order"].as_str(),
+        _ => None,
+    };
+    if let Some(order) = order {
+        render.lines.push(format!(
+            "planner work order: {}, which a session's phase-plan with the same stories launches",
+            escaped(order)
+        ));
+    }
+    render
+}
+
+/// [`answer_render`]'s lines before any planner order's.
+fn approval_lines(answer: &Value) -> Render {
     let text = |name: &str| escaped(answer[name].as_str().unwrap_or_default());
     let joined = |name: &str| {
         let numbers: Vec<String> = answer[name]
@@ -1381,6 +1455,47 @@ mod tests {
             busy.lines
         );
         assert_eq!((busy.code, busy.error), (1, true));
+    }
+
+    #[test]
+    fn a_commitment_approval_printed_without_its_order_or_a_plain_one_naming_one_is_caught() {
+        const O: &str = "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f1";
+        let names_order = |lines: &[String]| {
+            lines
+                .iter()
+                .any(|line| line.contains(O) && line.contains("phase-plan"))
+        };
+        let plain = json!({"status": "ok", "kind": "phase-edit", "digest": D,
+            "owner": "Ada Owner", "at": T, "phases": [], "stories": []});
+        let mut committed = plain.clone();
+        committed["work_order"] = json!(O);
+        committed["prompt"] = json!(format!("Read Baley work order {O} and follow it."));
+
+        let done = answer_render(&committed);
+        assert!(names_order(&done.lines), "{:?}", done.lines);
+        assert_eq!((done.code, done.error), (0, false));
+
+        let done = answer_render(&plain);
+        assert_eq!(
+            done.lines,
+            [
+                format!("approved the phase-edit submission {D} as Ada Owner at {T}"),
+                "phases: none".into(),
+                "stories: none".into(),
+            ]
+        );
+
+        let rerun = answer_render(&json!({"status": "refused", "code": "draft-approved",
+            "reason": "this draft was already approved after its latest submission, so it was not approved again. The details name that approval",
+            "slot": "digest",
+            "details": {"owner": "Ada Owner", "at": T, "work_order": O}}));
+        assert!(
+            rerun.lines[0].starts_with("draft-approved:"),
+            "{:?}",
+            rerun.lines
+        );
+        assert!(names_order(&rerun.lines), "{:?}", rerun.lines);
+        assert_eq!((rerun.code, rerun.error), (2, true));
     }
 
     #[test]
