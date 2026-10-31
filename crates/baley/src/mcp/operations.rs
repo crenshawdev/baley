@@ -212,6 +212,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     with_project("questions-answer"),
     with_project("story-refine"),
     with_project("story-questions-submit"),
+    with_project("phase-plan"),
 ];
 
 /// A spelling served only from a project, which its call prepares.
@@ -387,6 +388,9 @@ enum RequestShape {
     // `story-questions-submit` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "story-questions-submit")]
     StoryQuestionsSubmit(#[allow(dead_code)] crate::mcp::refine::QuestionsShape),
+    // `phase-plan` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "phase-plan")]
+    PhasePlan(#[allow(dead_code)] crate::mcp::planning::PhasePlanShape),
     // `context-intake` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "context-intake")]
     ContextIntake(#[allow(dead_code)] crate::mcp::refine::IntakeShape),
@@ -674,6 +678,7 @@ pub(crate) mod expected {
         "questions-answer",
         "story-refine",
         "story-questions-submit",
+        "phase-plan",
     ];
 }
 
@@ -743,6 +748,7 @@ mod tests {
                     "questions-answer",
                     "story-refine",
                     "story-questions-submit",
+                    "phase-plan",
                     "context-submit",
                     "context-intake",
                     "route",
@@ -788,6 +794,7 @@ mod tests {
             "questions-answer",
             "story-refine",
             "story-questions-submit",
+            "phase-plan",
             "context-submit",
         ] {
             assert_eq!(
@@ -1312,12 +1319,15 @@ mod tests {
     fn the_work_order_operations_out_of_the_baseline_order_or_unserved_are_caught() {
         let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
         let served = ["project-start", "work-order-fail", "work-order-retry"];
-        // The three directly precede `questions-answer`, `story-refine` and
-        // `story-questions-submit`, appended after them.
-        assert_eq!(
-            names[names.len().saturating_sub(6)..names.len().saturating_sub(3)],
-            served
-        );
+        // The three follow `backlog-reorder` and directly precede
+        // `questions-answer`, appended after them.
+        let at = names
+            .iter()
+            .position(|name| *name == "project-start")
+            .expect("listed");
+        assert_eq!(names[at - 1], "backlog-reorder");
+        assert_eq!(names[at..at + 3], served);
+        assert_eq!(names[at + 3], "questions-answer");
         for name in served {
             assert_eq!(
                 lookup(Tool::Apply, Some(name)),
@@ -1348,10 +1358,12 @@ mod tests {
     #[test]
     fn a_questions_answer_spelling_left_unserved_or_out_of_the_baseline_order_is_caught() {
         let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
-        assert_eq!(
-            names[names.len() - 4..names.len() - 1],
-            ["work-order-retry", "questions-answer", "story-refine"]
-        );
+        let at = names
+            .iter()
+            .position(|name| *name == "questions-answer")
+            .expect("listed");
+        assert_eq!(names[at - 1], "work-order-retry");
+        assert_eq!(names[at + 1], "story-refine");
         assert_eq!(
             lookup(Tool::Apply, Some("questions-answer")),
             Lookup::Available {

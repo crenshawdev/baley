@@ -10,8 +10,8 @@
 //! `scope-submit`, the ten change operations from `project-describe` to
 //! `backlog-reorder`, `project-start`, `work-order-fail`, `work-order-retry`,
 //! `questions-answer`, `story-refine`, `story-questions-submit`,
-//! `context-submit`, `document`, `context-intake` and `route` set
-//! `needs_project`, and in their [`operate`] arms the writes prepare a write
+//! `phase-plan`, `context-submit`, `document`, `context-intake` and `route`
+//! set `needs_project`, and in their [`operate`] arms the writes prepare a write
 //! from it, `document` and `context-intake` a read and `route` a read that
 //! also reads the settings.
 //! rmcp has already validated the request's metadata by the time any
@@ -39,6 +39,7 @@ use super::context::{SessionContext, call_context};
 use super::document;
 use super::gate::{Admitted, After, Called, after_queue, encode};
 use super::operations::{help_answer, instruction_answer, schema_answer, unknown_operation};
+use super::planning;
 use super::questions;
 use super::refine;
 use super::scope;
@@ -208,6 +209,9 @@ pub(crate) fn operate(
             if spelling == "story-questions-submit" =>
         {
             refine::serve_questions(arguments_or_null, preparation)
+        }
+        (Called::Operation(_, spelling), Some(preparation)) if spelling == "phase-plan" => {
+            planning::serve(arguments_or_null, preparation)
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "context-submit" => {
             refine::serve_context(arguments_or_null, preparation)

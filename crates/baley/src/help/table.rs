@@ -209,7 +209,7 @@ pub fn render_description(name: &str, markdown: &str) -> Option<String> {
 const ABOUT: &str = "Baley keeps AI coding agents accountable to the person who answers for their work. It records what the agents did, and the proof that it works, in a hash-chained ledger the owner controls, and it refuses to let work move on an unproven claim. Claude Code is the host it serves.";
 
 /// The request a session follows so the ledger can say which instruction guided a write.
-const REQUEST: &str = "Send `bal-help` as `instruction` on the `baley_apply` operations `capture`, `project-start`, `story-refine`, `work-order-fail` and `work-order-retry` called while following help, on no other `baley_apply` operation, and on no `baley_query` call.";
+const REQUEST: &str = "Send `bal-help` as `instruction` on the `baley_apply` operations `capture`, `phase-plan`, `project-start`, `story-refine`, `work-order-fail` and `work-order-retry` called while following help, on no other `baley_apply` operation, and on no `baley_query` call.";
 
 /// The help instruction's identity, version and hash, as the registry serves them.
 fn help_instruction() -> Value {

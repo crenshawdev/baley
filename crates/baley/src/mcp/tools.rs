@@ -396,7 +396,8 @@ mod tests {
         // questions-answer takes request_id, set and items,
         // story-refine takes request_id, story and instruction,
         // story-questions-submit takes request_id, story, work_order and
-        // questions, context-submit takes request_id, work_order, story, set
+        // questions, phase-plan takes request_id, phase, stories and
+        // instruction, context-submit takes request_id, work_order, story, set
         // and truths,
         // context-intake takes story and part,
         // and route takes role or work_order.
@@ -438,6 +439,7 @@ mod tests {
                 "reason",
                 "request_id",
                 "set",
+                "stories",
                 "story",
                 "submission",
                 "text",
@@ -529,7 +531,13 @@ mod tests {
             );
         }
         assert_eq!(submissions.len(), 11, "{submissions:?}");
-        assert!(description(&apply["properties"]["phase"]).ends_with("Taken by capture."));
+        let phases: Vec<String> = alternatives(&apply["properties"]["phase"])
+            .iter()
+            .map(description)
+            .collect();
+        for sentence in ["Taken by capture.", "Taken by phase-plan (required)."] {
+            assert!(phases.iter().any(|d| d.ends_with(sentence)), "{phases:?}");
+        }
     }
 
     #[test]

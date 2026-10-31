@@ -3,8 +3,8 @@
 //! queue, the worker and the transports that carry the calls. The judging is
 //! pure and tested with supplied values. The stdio, the worker thread and the
 //! store are reached only by the gathering in `serve`, `transport`, `worker`,
-//! `prepare`, `capture`, `document`, `scope`, `work_order`, `questions` and
-//! `refine`.
+//! `prepare`, `capture`, `document`, `scope`, `work_order`, `questions`,
+//! `refine` and `planning`.
 
 /// The session's project, working directory and ids, gathered once and judged.
 pub mod context;
@@ -68,3 +68,6 @@ pub mod questions;
 
 /// `story-refine`: a session asks for the analyzer's next order for one story.
 pub mod refine;
+
+/// `phase-plan`: a session asks for one phase's planner with an ordered selection of stories.
+pub mod planning;
