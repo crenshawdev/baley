@@ -32,8 +32,8 @@ pub(crate) mod fixtures {
     use baley_core::questions::answered_payload;
     use baley_core::questions::{QUESTION_ANSWERED, QUESTION_ANSWERED_VERSION, Subject};
     use baley_core::scope::{
-        ChangeKind, PROJECT_STREAM, ROADMAP_STREAM, SCOPE_SUBMITTED, SCOPE_SUBMITTED_VERSION,
-        submitted_payload,
+        ChangeKind, PROJECT_STREAM, PhaseFields, ROADMAP_STREAM, SCOPE_SUBMITTED,
+        SCOPE_SUBMITTED_VERSION, submitted_payload,
     };
     use baley_core::truth::{STORY_REFINED, STORY_REFINED_VERSION};
     use baley_store::{
@@ -42,9 +42,11 @@ pub(crate) mod fixtures {
     use baley_store_sqlite::SqliteStore;
     use serde_json::{Value, json};
 
+    use crate::planning::phase_plan::PHASE_PLAN_COMMAND;
     use crate::refine::submit::tests::{t1, t2};
-    use crate::scope::approve::{self, APPROVE_COMMAND};
+    use crate::scope::approve::{self, APPROVE_COMMAND, OrderRoute};
     use crate::scope::fixtures::*;
+    use crate::scope::submit::{PlanningContinuation, submit_phase_edit};
 
     /// The request ids store C is built under, apart from every test's own.
     const DECLARE: &str = "4d5e6f70-8192-4a3b-9c4d-5e6f70819203";
@@ -55,14 +57,14 @@ pub(crate) mod fixtures {
     pub(crate) const APPROVAL_SET: &str = "3c4d5e6f-7081-4a2b-8c3d-4e5f60718293";
 
     /// `truth` at version 1, as a refinement carries it.
-    fn versioned(truth: Value) -> Value {
+    pub(crate) fn versioned(truth: Value) -> Value {
         let mut truth = truth;
         truth["version"] = json!(1);
         truth
     }
 
     /// A `story.refined` of `story` carrying `truths`, naming a made-up set.
-    fn refined(story: u32, set: &str, truths: Vec<Value>) -> NewEvent {
+    pub(crate) fn refined(story: u32, set: &str, truths: Vec<Value>) -> NewEvent {
         NewEvent {
             stream: StreamName(ROADMAP_STREAM.into()),
             type_name: STORY_REFINED.into(),
@@ -203,6 +205,66 @@ pub(crate) mod fixtures {
         plan["goal"] = json!("Record again");
         plan["tasks"][0]["id"] = json!("k2");
         plan
+    }
+
+    /// Records the `phase edit` of phase 1's stories to `stories` with its
+    /// continuation naming order `work_order`, through `submit_phase_edit`
+    /// under `request_id` at `at`, as `phase-plan` records a changed
+    /// selection. Gives the draft's digest.
+    pub(crate) fn edit(
+        store: &SqliteStore,
+        stories: &[u32],
+        work_order: &str,
+        request_id: &str,
+        at: &str,
+    ) -> Hash {
+        let fields = PhaseFields {
+            stories: Some(stories.to_vec()),
+            ..PhaseFields::default()
+        };
+        let continuation = PlanningContinuation {
+            stories,
+            work_order,
+            documents: &[],
+        };
+        submit_phase_edit(
+            store,
+            &command(PHASE_PLAN_COMMAND, request_id, 7, at),
+            1,
+            &fields,
+            Some(continuation),
+        )
+        .expect("the edit is recorded")
+    }
+
+    /// The commitment `digest` approved through the approval's two steps as
+    /// `Ada Owner` under `request_id` at `at`, its order routed under P0
+    /// for Claude Code with N0. Gives the second step's answer.
+    pub(crate) fn approve_commitment(
+        store: &SqliteStore,
+        digest: Hash,
+        request_id: &str,
+        at: &str,
+    ) -> Value {
+        let judged = approve::judge(store, &project(), digest).expect("the commitment is judged");
+        let (policy, names) = (p0(), n0());
+        approve::record_commitment(
+            store,
+            &command(APPROVE_COMMAND, request_id, 6, at),
+            &judged,
+            "Ada Owner",
+            OrderRoute {
+                policy: &policy,
+                host: Host::ClaudeCode,
+                names: &names,
+            },
+        )
+    }
+
+    /// The store in `dir` opened again, as a restart opens it.
+    pub(crate) fn reopen(dir: &tempfile::TempDir) -> SqliteStore {
+        crate::ledger::open::store(&dir.path().join("home"), T9, crate::ledger::open::options())
+            .expect("the store opens again")
     }
 
     /// Makes phase 2 active: its plan 1 approved by hand under `request_id`.

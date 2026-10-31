@@ -233,11 +233,15 @@ enum Planned {
 }
 
 /// The latest continuation as the `phase_plan` document holds it.
-struct Latest {
-    stories: Vec<u32>,
-    edit: Hash,
-    work_order: String,
-    followed: bool,
+pub(crate) struct Latest {
+    /// The selection it binds, in order.
+    pub stories: Vec<u32>,
+    /// The `phase edit` draft it was recorded with.
+    pub edit: Hash,
+    /// The planner order its approval issues.
+    pub work_order: String,
+    /// Whether that order was handed to a session.
+    pub followed: bool,
 }
 
 /// `phase-plan`'s check for phase `phase` of `project` with the selection
@@ -468,8 +472,9 @@ fn at_stories(mut answer: Value) -> Value {
     answer
 }
 
-/// The latest continuation a `phase_plan` document holds, or none.
-fn latest_continuation(body: Option<&Value>) -> Result<Option<Latest>, Value> {
+/// The latest continuation a `phase_plan` document holds, or none. One
+/// that cannot be read is a ledger fault.
+pub(crate) fn latest_continuation(body: Option<&Value>) -> Result<Option<Latest>, Value> {
     let latest = match body.and_then(|body| body.get("continuation")) {
         None | Some(Value::Null) => return Ok(None),
         Some(latest) => latest,
@@ -742,5 +747,39 @@ pub(crate) mod tests {
         assert_eq!(questions["answers"][0]["question"], "q1");
         assert_eq!(questions["answers"][0]["answer"], "Postgres");
         assert_eq!(questions["answers"][0]["accepted"], false);
+    }
+
+    #[test]
+    fn a_commitment_approval_rerun_issuing_a_second_order_or_losing_its_order_is_caught() {
+        use crate::planning::order::tests::O2;
+
+        let (dir, store) = store_c();
+        let e2 = edit(&store, &[4, 1], O, R1, T4);
+        let approved = approve_commitment(&store, e2, R2, T5);
+        assert_eq!(approved["status"], "ok", "{approved}");
+        drop(store);
+        let store = reopen(&dir);
+
+        let answer = planned(&store, &[4, 1], R3, T6, O2);
+        assert_eq!(answer["status"], "ok", "{answer}");
+        assert_eq!(answer["work_order"], O, "{answer}");
+        assert_eq!(
+            answer["prompt"],
+            format!("Read Baley work order {O} and follow it.")
+        );
+        assert_eq!(answer["launch"], approved["launch"], "{answer}");
+        let events = history(&store);
+        let followed = of_type(&events, "plan.continuation_followed");
+        assert_eq!(followed.len(), 1);
+        assert_eq!(
+            followed[0].payload,
+            json!({"phase": 1, "edit": e2.to_hex(), "work_order": O})
+        );
+        let orders = issued(&store);
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].payload["subject"], "phase/1");
+
+        let refusal = refused_with(&store, 1, &[4, 1], "planner-order-pending", "operation");
+        assert_eq!(refusal["details"], json!({"work_order": O}));
     }
 }
