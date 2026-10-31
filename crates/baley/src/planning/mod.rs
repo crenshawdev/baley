@@ -1,8 +1,14 @@
 //! A phase's planning over the storage port (design 0005 sections 4 and 5,
-//! D-12, D-15): what a planner order binds at issue, read from the views.
+//! D-11, D-12, D-15): what a planner order binds at issue, read from the
+//! views, and the planner order itself, issued on its phase's stream with
+//! one live per phase.
 
 /// What a planner order binds at issue, read outside any transaction.
 pub mod inputs;
+
+/// The planner's work order: its preparation, its issue on `phase/<n>`, and
+/// the pending lookup and refusal.
+pub mod order;
 
 #[cfg(test)]
 pub(crate) mod fixtures {
@@ -10,10 +16,11 @@ pub(crate) mod fixtures {
     //! written out from design 0005, the phase's decisions and phase 8's
     //! check items, never produced by the code under test.
 
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     use baley_core::plan::{PLAN_APPROVED, PLAN_APPROVED_VERSION, PlanApproval, phase_stream};
-    use baley_core::policy::{EffectivePolicy, Host, Schema, effective_policy};
+    use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, Schema, effective_policy};
     use baley_core::scope::{ChangeKind, ROADMAP_STREAM};
     use baley_core::truth::{STORY_REFINED, STORY_REFINED_VERSION};
     use baley_store::{
@@ -120,6 +127,14 @@ pub(crate) mod fixtures {
             Some(&file),
         )
         .expect("the capacity is read")
+    }
+
+    /// N0: no accepted name, at version 0.
+    pub(crate) fn n0() -> AcceptedNames {
+        AcceptedNames {
+            names: BTreeSet::new(),
+            version: 0,
+        }
     }
 
     /// K, PL1's one task.

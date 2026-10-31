@@ -13,7 +13,8 @@ mod view;
 pub use event::{
     IssuedOrder, OrderInput, START_SUBJECT, WORK_ORDER_FAILED, WORK_ORDER_FAILED_VERSION,
     WORK_ORDER_ISSUED, WORK_ORDER_ISSUED_VERSION, agent_name, failed_payload, issued_payload,
-    order_stream, register_work_order_events, story_subject, subject_story,
+    order_stream, phase_subject, register_work_order_events, story_subject, subject_phase,
+    subject_story,
 };
 pub use retry::{
     ANALYZER_ORDER_PENDING, MATERIAL_UNAVAILABLE, NO_SUCH_WORK_ORDER, Retry, RetryRefusal,

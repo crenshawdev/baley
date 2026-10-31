@@ -1,18 +1,23 @@
 //! The work-order events: their types, their registration, their streams
 //! and their payloads (design 0001 Streams and Payloads, design 0012).
 //!
-//! An order's failure goes on the stream its issue went on. No payload holds
-//! a caller or a time: the envelope carries both, hashed with the event.
+//! The start's and a story's orders go on `roadmap`, and a phase planner's
+//! on its phase's stream, `phase/<n>`. An order's failure goes on the
+//! stream its issue went on. No payload holds a caller or a time: the
+//! envelope carries both, hashed with the event.
+
+use std::borrow::Cow;
 
 use baley_store::{InstructionEvidence, PayloadRef};
 use serde_json::{Value, json};
 
+use crate::plan::phase_stream;
 use crate::policy::{Role, Rung};
 use crate::registry::{Registry, RegistryError};
 use crate::scope::ROADMAP_STREAM;
 
 /// One work order issued, on its subject's stream (`roadmap` for the start
-/// and a story's analyzer orders):
+/// and a story's analyzer orders, `phase/<n>` for a phase's planner orders):
 /// `{id, request, parent, role, subject, attempt, route, agent,
 /// instructions, inputs}`. `request` is the id of its chain's first order,
 /// `parent` the failed order it retries or null, `instructions` a list of
@@ -50,7 +55,29 @@ pub fn story_subject(story: u32) -> String {
 /// text. Only the spelling [`story_subject`] writes is read, decimal with
 /// no sign or leading zero, so one story never has two subjects.
 pub fn subject_story(subject: &str) -> Option<u32> {
-    let digits = subject.strip_prefix(STORY_SUBJECT_PREFIX)?;
+    canonical_number(subject.strip_prefix(STORY_SUBJECT_PREFIX)?)
+}
+
+/// What a planner order's subject starts with, before its phase's number.
+const PHASE_SUBJECT_PREFIX: &str = "phase/";
+
+/// The subject of phase `phase`'s planner orders, `phase/<n>`. The planning
+/// and revision orders both carry it, so one look at the `live` index finds
+/// either one pending (D-11).
+pub fn phase_subject(phase: u32) -> String {
+    format!("{PHASE_SUBJECT_PREFIX}{phase}")
+}
+
+/// The phase a planner order's subject names, or none for any other text.
+/// Only the spelling [`phase_subject`] writes is read, decimal with no sign
+/// or leading zero, so one phase never has two subjects.
+pub fn subject_phase(subject: &str) -> Option<u32> {
+    canonical_number(subject.strip_prefix(PHASE_SUBJECT_PREFIX)?)
+}
+
+/// `digits` as a number when it is spelled decimal with no sign or leading
+/// zero, or none.
+fn canonical_number(digits: &str) -> Option<u32> {
     let canonical = !digits.is_empty()
         && !digits.starts_with('0')
         && digits.bytes().all(|byte| byte.is_ascii_digit());
@@ -58,10 +85,14 @@ pub fn subject_story(subject: &str) -> Option<u32> {
 }
 
 /// The stream an order of `subject` is recorded on: `roadmap` for the
-/// start and for a story's analyzer orders. Other subjects get theirs with
-/// the builds that issue them.
-pub fn order_stream(subject: &str) -> Option<&'static str> {
-    (subject == START_SUBJECT || subject_story(subject).is_some()).then_some(ROADMAP_STREAM)
+/// start and for a story's analyzer orders, and the phase's own stream,
+/// `phase/<n>`, for a phase's planner orders (D-11). Other subjects get
+/// theirs with the builds that issue them.
+pub fn order_stream(subject: &str) -> Option<Cow<'static, str>> {
+    if subject == START_SUBJECT || subject_story(subject).is_some() {
+        return Some(Cow::Borrowed(ROADMAP_STREAM));
+    }
+    subject_phase(subject).map(|phase| Cow::Owned(phase_stream(phase)))
 }
 
 /// The agent stub a role runs at a rung, `bal-<role>-<rung>`. Install places
@@ -232,7 +263,7 @@ mod tests {
 
     #[test]
     fn a_start_order_off_the_roadmap_stream_or_an_agent_off_the_name_rule_is_caught() {
-        assert_eq!(order_stream("start"), Some("roadmap"));
+        assert_eq!(order_stream("start").as_deref(), Some("roadmap"));
         let names: BTreeSet<String> = Role::ALL
             .into_iter()
             .flat_map(|role| Rung::ALL.map(|rung| agent_name(role, rung)))
@@ -251,11 +282,25 @@ mod tests {
     #[test]
     fn an_analyzer_order_off_the_roadmap_stream_or_misread_subject_is_caught() {
         assert_eq!(story_subject(12), "story/12");
-        assert_eq!(order_stream("story/12"), Some("roadmap"));
+        assert_eq!(order_stream("story/12").as_deref(), Some("roadmap"));
         assert_eq!(subject_story("story/12"), Some(12));
-        for other in ["story/012", "story/0", "story/", "story/x", "phase/12"] {
+        for other in ["story/012", "story/0", "story/", "story/x"] {
             assert_eq!(subject_story(other), None, "{other}");
             assert_eq!(order_stream(other), None, "{other}");
         }
+        assert_eq!(subject_story("phase/12"), None);
+    }
+
+    #[test]
+    fn a_phase_subject_spelled_two_ways_or_recorded_off_its_stream_is_caught() {
+        assert_eq!(phase_subject(7), "phase/7");
+        assert_eq!(subject_phase("phase/7"), Some(7));
+        for other in ["phase/07", "phase/", "phase/x", "phase/+7"] {
+            assert_eq!(subject_phase(other), None, "{other}");
+            assert_eq!(order_stream(other), None, "{other}");
+        }
+        assert_eq!(order_stream("phase/7").as_deref(), Some("phase/7"));
+        assert_eq!(order_stream("story/1").as_deref(), Some("roadmap"));
+        assert_eq!(order_stream("start").as_deref(), Some("roadmap"));
     }
 }

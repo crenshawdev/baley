@@ -21,7 +21,7 @@ use baley_core::policy::{AcceptedNames, CONFIG_UNAVAILABLE, EffectivePolicy, Hos
 use baley_core::work_order::{
     ANSWERED, MATERIAL_UNAVAILABLE, NO_SUCH_WORK_ORDER, PENDING, Retry, RetryRefusal,
     START_ORDER_PENDING, START_SUBJECT, WORK_ORDER_NOT_FAILED, WORK_ORDER_NOT_PENDING,
-    WORK_ORDER_RETRIED, WORK_ORDER_VIEW, judge_retry, subject_story, work_order_key,
+    WORK_ORDER_RETRIED, WORK_ORDER_VIEW, judge_retry, subject_phase, subject_story, work_order_key,
 };
 use baley_store::{
     Absence, Command, CommandKind, Document, Hash, InstructionEvidence, Ledger, ObservedDocument,
@@ -43,6 +43,7 @@ use crate::mcp::prepare::{
     CHECKOUT_FACTS_UNAVAILABLE, LEDGER_UNAVAILABLE, Prepared, Stepped, WriteRequest,
     prepare_checked, prepare_settings_read,
 };
+use crate::planning::order::{pending_planner, planner_absences, planner_order_pending};
 use crate::process::Process;
 use crate::refine::order::{
     analyzer_absences, analyzer_order_pending, pending_analyzer, refinement_state,
@@ -694,7 +695,9 @@ pub struct CheckedRetry {
 /// live analyzer order (D-09), and then `question-open` while a question of
 /// the story's latest set is open, as `story-refine` is, so a retried order
 /// neither drafts before the owner decided nor returns questions that would
-/// abandon an open set.
+/// abandon an open set. A phase's planner order is refused
+/// `planner-order-pending` while another planner order of the phase is
+/// pending, so a phase keeps one live planner order (D-11).
 pub fn retry_check<S: Ledger + Views + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -750,6 +753,17 @@ pub fn retry_check<S: Ledger + Views + ?Sized>(
         // since the check makes it `ledger-busy`.
         documents.extend(refinement_state(store, project, story)?.documents);
     }
+    if let Some(phase) = planner_phase(&retry) {
+        let pending = pending_planner(store, project, phase)
+            .map_err(|error| store_failed(&error, NOT_RECORDED_BUSY))?;
+        if let Some(order) = pending {
+            return Err(planner_order_pending(
+                phase,
+                &order,
+                &format!("so no retry of {id} was issued"),
+            ));
+        }
+    }
     let instructions = match parent.body.get("instructions") {
         Some(Value::Array(listed)) => listed
             .iter()
@@ -780,6 +794,13 @@ fn is_start(retry: &Retry) -> bool {
 fn analyzer_story(retry: &Retry) -> Option<u32> {
     (retry.role == Role::Analyzer)
         .then(|| subject_story(&retry.subject))
+        .flatten()
+}
+
+/// The phase whose planner order `retry` re-issues, if it is one.
+fn planner_phase(retry: &Retry) -> Option<u32> {
+    (retry.role == Role::Planner)
+        .then(|| subject_phase(&retry.subject))
         .flatten()
 }
 
@@ -859,8 +880,9 @@ fn retry_refused(id: &str, refusal: RetryRefusal) -> Value {
 /// purge landing since makes the call `ledger-busy` with nothing recorded. A
 /// retried start order also declares a start order's two absences, no
 /// pending start order and no start approval, so a start approved since the
-/// check makes it `ledger-busy` too, and a retried analyzer order declares no
-/// pending analyzer order of its story, so one issued since does the same.
+/// check makes it `ledger-busy` too, a retried analyzer order declares no
+/// pending analyzer order of its story, and a retried planner order no
+/// pending planner order of its phase, so one issued since does the same.
 pub fn issue_retry(
     store: &SqliteStore,
     command: &Command,
@@ -895,6 +917,8 @@ pub fn issue_retry(
         start_absences()
     } else if let Some(story) = analyzer_story(retry) {
         analyzer_absences(story)
+    } else if let Some(phase) = planner_phase(retry) {
+        planner_absences(phase)
     } else {
         Vec::new()
     };
