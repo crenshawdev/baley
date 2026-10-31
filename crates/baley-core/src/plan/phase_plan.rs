@@ -13,7 +13,8 @@ use baley_store::{
 };
 use serde_json::{Map, Value, json};
 
-use super::event::{PLAN_APPROVED, PLAN_REPLACED};
+use super::event::{PLAN_APPROVED, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED, PLAN_REPLACED};
+use crate::questions::QUESTIONS_OPENED;
 use crate::scope::PHASE_WITHDRAWN;
 
 /// The view's name.
@@ -70,7 +71,8 @@ pub fn phase_plan_key(phase: u32) -> DocKey {
 }
 
 /// Keeps the `phase_plan` view current from `plan.approved`,
-/// `plan.replaced` and `phase.withdrawn`.
+/// `plan.replaced`, `phase.withdrawn`, a plan draft's `questions.opened`,
+/// `plan.continuation` and `plan.continuation_followed`.
 ///
 /// A document holds these members:
 /// - `phase`: the phase's number.
@@ -84,12 +86,19 @@ pub fn phase_plan_key(phase: u32) -> DocKey {
 /// - `withdrawn`: whether the phase was withdrawn.
 /// - `status`: `active` while a plan is in force and the phase is not
 ///   withdrawn, `inactive` otherwise, worked out on every change.
+/// - `draft`: the phase's one unapproved plan draft, `{digest, set}` from
+///   the latest plan draft's set, or null; its approval clears it (D-03).
+/// - `continuation`: the phase's latest planning continuation, `{stories,
+///   edit, work_order, followed}`, or null (D-09, D-11).
 ///
 /// An approval whose number is not above `highest` is refused, so no
 /// number is projected twice (PLN-R14, D-07). A replacement of a plan not
 /// in force, or at a digest other than the one approved, is refused; the
-/// replaced plan keeps its digest, stories and size. A withdrawal of a
-/// phase with no document creates one.
+/// replaced plan keeps its digest, stories and size. A withdrawal, a draft
+/// or a continuation of a phase with no document creates one. A story's
+/// question set changes nothing. A followed marker naming another edit or
+/// order than the latest continuation's, or one already followed, is
+/// refused.
 pub struct PhasePlanProjector {
     spec: ViewSpec,
 }
@@ -115,7 +124,14 @@ impl Projector for PhasePlanProjector {
     }
 
     fn handles(&self) -> &[&str] {
-        &[PLAN_APPROVED, PLAN_REPLACED, PHASE_WITHDRAWN]
+        &[
+            PLAN_APPROVED,
+            PLAN_REPLACED,
+            PHASE_WITHDRAWN,
+            QUESTIONS_OPENED,
+            PLAN_CONTINUATION,
+            PLAN_CONTINUATION_FOLLOWED,
+        ]
     }
 
     fn keys(&self, event: &Event) -> Vec<DocKey> {
@@ -133,6 +149,10 @@ impl Projector for PhasePlanProjector {
                 event.type_name, event.seq
             ))
         };
+        // A story's question set is no plan draft, so it changes nothing here.
+        if event.type_name == QUESTIONS_OPENED && !plan_set(&event.payload) {
+            return Ok(Vec::new());
+        }
         let phase = phase_of(event).ok_or_else(|| refuse("the phase is not a phase number"))?;
         let key = phase_plan_key(phase);
         let mut document = match documents.iter().find(|(at, _)| *at == key) {
@@ -148,6 +168,9 @@ impl Projector for PhasePlanProjector {
                 document.insert("withdrawn".into(), json!(true));
                 Ok(())
             }
+            QUESTIONS_OPENED => open_draft(&mut document, payload),
+            PLAN_CONTINUATION => continuation(&mut document, payload),
+            PLAN_CONTINUATION_FOLLOWED => follow(&mut document, payload),
             _ => Err("the view does not handle this event".into()),
         }
         .and_then(|()| settle(&mut document))
@@ -168,6 +191,8 @@ fn fresh(phase: u32) -> Map<String, Value> {
         "size": 0,
         "withdrawn": false,
         STATUS_FIELD: INACTIVE,
+        "draft": null,
+        "continuation": null,
     }) else {
         unreachable!("a JSON object literal is an object")
     };
@@ -201,6 +226,54 @@ fn approve(document: &mut Map<String, Value>, payload: &Value) -> Result<(), Str
         "replaced_by": null,
     }));
     document.insert("highest".into(), json!(plan));
+    // The approved draft no longer waits.
+    if document.get("draft").and_then(|draft| draft.get("digest")) == Some(&json!(digest)) {
+        document.insert("draft".into(), Value::Null);
+    }
+    Ok(())
+}
+
+/// Makes a plan draft's set the phase's current draft, replacing any
+/// earlier one, since a phase holds one unapproved draft (D-03).
+fn open_draft(document: &mut Map<String, Value>, payload: &Value) -> Result<(), String> {
+    let digest = text(payload, "plan_digest")?;
+    let set = text(payload, "set")?;
+    document.insert("draft".into(), json!({"digest": digest, "set": set}));
+    Ok(())
+}
+
+/// Makes a continuation the phase's latest, not yet followed.
+fn continuation(document: &mut Map<String, Value>, payload: &Value) -> Result<(), String> {
+    let stories = wholes(payload, "stories")?;
+    let edit = text(payload, "edit")?;
+    let work_order = text(payload, "work_order")?;
+    document.insert(
+        "continuation".into(),
+        json!({"stories": stories, "edit": edit, "work_order": work_order, "followed": false}),
+    );
+    Ok(())
+}
+
+/// Marks the latest continuation followed. One naming another edit or
+/// order, or one already followed, is refused, so an order is handed to a
+/// session once (D-09, D-11).
+fn follow(document: &mut Map<String, Value>, payload: &Value) -> Result<(), String> {
+    let edit = text(payload, "edit")?;
+    let work_order = text(payload, "work_order")?;
+    let Some(Value::Object(latest)) = document.get_mut("continuation") else {
+        return Err("the phase has no continuation".into());
+    };
+    if latest.get("edit") != Some(&json!(edit))
+        || latest.get("work_order") != Some(&json!(work_order))
+    {
+        return Err(format!(
+            "the latest continuation is not edit {edit} with order {work_order}"
+        ));
+    }
+    if latest.get("followed") != Some(&json!(false)) {
+        return Err(format!("order {work_order} was already followed"));
+    }
+    latest.insert("followed".into(), json!(true));
     Ok(())
 }
 
@@ -255,13 +328,18 @@ fn plans(document: &mut Map<String, Value>) -> Result<&mut Vec<Value>, String> {
     }
 }
 
+/// Whether a `questions.opened` payload is a plan draft's set.
+fn plan_set(payload: &Value) -> bool {
+    payload.get("subject").and_then(Value::as_str) == Some("plan")
+}
+
 /// The phase an event names: `number` on `phase.withdrawn`, `phase` on a
-/// plan event.
+/// plan event or a plan draft's set, none on a story's set.
 fn phase_of(event: &Event) -> Option<u32> {
-    let member = if event.type_name == PHASE_WITHDRAWN {
-        "number"
-    } else {
-        PHASE_FIELD
+    let member = match event.type_name.as_str() {
+        PHASE_WITHDRAWN => "number",
+        QUESTIONS_OPENED if !plan_set(&event.payload) => return None,
+        _ => PHASE_FIELD,
     };
     whole(&event.payload, member).ok()
 }
@@ -305,7 +383,9 @@ mod tests {
     use baley_store::{Actor, Hash, PayloadRef, ProjectId, RequestId, RetentionClass};
 
     use super::*;
-    use crate::plan::event::{PlanApproval, replaced_payload};
+    use crate::plan::event::{
+        PlanApproval, continuation_followed_payload, continuation_payload, replaced_payload,
+    };
     use crate::plan::fixtures::{c1, c2, o1};
     use crate::scope::phase_withdrawn_payload;
 
@@ -448,7 +528,7 @@ mod tests {
         assert_eq!(
             view[&one()],
             json!({"phase": 1, "highest": 3, "size": 4, "withdrawn": false,
-                "status": "active",
+                "status": "active", "draft": null, "continuation": null,
                 "plans": [held(1, x(), &[1, 2], 2, Some(z())), held(2, y(), &[1], 1, None),
                     held(3, z(), &[2], 3, None)]})
         );
@@ -475,7 +555,7 @@ mod tests {
         assert_eq!(
             view[&DocKey(vec![KeyValue::Integer(3)])],
             json!({"phase": 3, "plans": [], "highest": 0, "size": 0, "withdrawn": true,
-                "status": "inactive"})
+                "status": "inactive", "draft": null, "continuation": null})
         );
     }
 
@@ -494,5 +574,85 @@ mod tests {
             &replaced(3, 1, 1, x(), y()),
         );
         refused(&[a(1, 1, 1, x(), &[1], 1)], &replaced(2, 1, 1, y(), z()));
+    }
+
+    /// A plan draft's set `set` of phase 1 for the draft at `digest`.
+    fn plan_set(seq: u64, set: &str, digest: Hash) -> Event {
+        event(
+            seq,
+            "questions.opened",
+            json!({"set": set, "subject": "plan", "phase": 1, "plan_digest": digest.to_hex(),
+                "questions": [], "at": T}),
+        )
+    }
+
+    #[test]
+    fn a_plan_draft_kept_after_a_newer_draft_or_its_approval_is_caught() {
+        let draft = |set: &str, digest: Hash| json!({"digest": digest.to_hex(), "set": set});
+        let mut view = View::new();
+        step(&mut view, &plan_set(1, "A", x())).unwrap();
+        assert_eq!(view[&one()]["draft"], draft("A", x()));
+        step(&mut view, &plan_set(2, "B", y())).unwrap();
+        assert_eq!(view[&one()]["draft"], draft("B", y()));
+
+        let story = event(
+            3,
+            "questions.opened",
+            json!({"set": "C", "subject": "story", "story": 1, "work_order": "W1",
+                "questions": [], "at": T}),
+        );
+        step(&mut view, &story).unwrap();
+        assert_eq!(view.len(), 1);
+        assert_eq!(view[&one()]["draft"], draft("B", y()));
+
+        step(&mut view, &a(4, 1, 1, y(), &[1], 1)).unwrap();
+        assert_eq!(view[&one()]["draft"], Value::Null);
+    }
+
+    #[test]
+    fn a_continuation_replaced_by_an_older_one_or_followed_twice_is_caught() {
+        let mut view = View::new();
+        let first = event(
+            1,
+            "plan.continuation",
+            continuation_payload(1, &[1, 2], x(), "O1"),
+        );
+        step(&mut view, &first).unwrap();
+        assert_eq!(
+            view[&one()]["continuation"],
+            json!({"stories": [1, 2], "edit": x().to_hex(), "work_order": "O1",
+                "followed": false})
+        );
+        let second = event(
+            2,
+            "plan.continuation",
+            continuation_payload(1, &[2, 1], y(), "O2"),
+        );
+        step(&mut view, &second).unwrap();
+        assert_eq!(
+            view[&one()]["continuation"],
+            json!({"stories": [2, 1], "edit": y().to_hex(), "work_order": "O2",
+                "followed": false})
+        );
+
+        let followed = |seq, edit, order| {
+            event(
+                seq,
+                "plan.continuation_followed",
+                continuation_followed_payload(1, edit, order),
+            )
+        };
+        let before = view.clone();
+        assert!(step(&mut view, &followed(3, x(), "O1")).is_err());
+        assert_eq!(view, before);
+        step(&mut view, &followed(4, y(), "O2")).unwrap();
+        assert_eq!(
+            view[&one()]["continuation"],
+            json!({"stories": [2, 1], "edit": y().to_hex(), "work_order": "O2",
+                "followed": true})
+        );
+        let before = view.clone();
+        assert!(step(&mut view, &followed(5, y(), "O2")).is_err());
+        assert_eq!(view, before);
     }
 }
