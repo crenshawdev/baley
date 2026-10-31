@@ -75,6 +75,7 @@ pub(super) fn read(value: &Value) -> Result<Plan, PlanRefusal> {
         tasks,
         evidence_map,
         questions,
+        submitted: plan.clone(),
     })
 }
 

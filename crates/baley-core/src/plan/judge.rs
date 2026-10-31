@@ -19,7 +19,7 @@
 
 use std::num::NonZeroU32;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::evidence::{self, EvidenceItem};
 use super::task::{self, Task};
@@ -282,6 +282,9 @@ pub struct Plan {
     pub(super) tasks: Vec<Task>,
     pub(super) evidence_map: Vec<EvidenceItem>,
     pub(super) questions: QuestionSet,
+    // The plan object as submitted, kept so its draft body is exactly what
+    // was judged (D-05).
+    pub(super) submitted: Map<String, Value>,
 }
 
 impl Plan {
