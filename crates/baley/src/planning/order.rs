@@ -11,7 +11,9 @@
 //! An order the approval of a changed selection issued is handed to the
 //! session once (D-01, D-09): `plan.continuation_followed` is recorded and
 //! the answer is the order's receipt as its issue gave it, so the session
-//! launches it as it would a fresh order.
+//! launches it as it would a fresh order. An order no longer pending, or one
+//! whose continuation is followed or replaced, is refused before anything is
+//! recorded.
 
 use std::num::NonZeroU32;
 
@@ -21,7 +23,8 @@ use baley_core::plan::{
 };
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, Role};
 use baley_core::work_order::{
-    PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_VIEW, phase_subject, work_order_key,
+    PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_NOT_PENDING, WORK_ORDER_VIEW, phase_subject,
+    work_order_key,
 };
 use baley_store::{
     Absence, Command, Decision, Hash, IndexQuery, InstructionEvidence, KeyValue, Ledger, NewEvent,
@@ -251,11 +254,16 @@ pub struct HandOver {
 
 /// Reads the hand-over of order `work_order` of phase `phase` in `project`,
 /// which the approval of the `phase edit` draft `edit` issued (D-01): the
-/// `phase_plan` document's sequence first, then the order's `work_order`
-/// document, from which its receipt is built as its issue gave it: its id,
-/// request, attempt, agent, model, `prompt`, `launch` and the time it was
-/// recorded. Nothing is recorded. An order whose document is not held or
-/// cannot be read is a ledger fault.
+/// `phase_plan` document first, then the order's `work_order` document, from
+/// which its receipt is built as its issue gave it: its id, request, attempt,
+/// agent, model, `prompt`, `launch` and the time it was recorded. Nothing is
+/// recorded. An order that failed or was answered is refused
+/// `work-order-not-pending` naming its state. A pending order whose phase's
+/// latest continuation is followed, or names another edit or order, is
+/// refused `planner-order-pending` naming it, so it is handed over once
+/// (D-09). Both are judged on the documents whose sequences the hand-over
+/// observes. An order whose document is not held or cannot be read is a
+/// ledger fault.
 pub fn read_hand_over<S: Views + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -266,12 +274,25 @@ pub fn read_hand_over<S: Views + ?Sized>(
     let busy = |error: StoreError| store_failed(&error, NOT_RECORDED_BUSY);
     let phase_plan = store
         .get(project, PHASE_PLAN_VIEW, &phase_plan_key(phase))
-        .map_err(busy)?
-        .map(|document| document.produced_seq);
+        .map_err(busy)?;
     let order = store
         .get(project, WORK_ORDER_VIEW, &work_order_key(work_order))
         .map_err(busy)?
         .ok_or_else(order_unreadable)?;
+    match order.body.get("state").and_then(Value::as_str) {
+        Some(PENDING) => {}
+        Some(state) => return Err(order_not_pending(work_order, state)),
+        None => return Err(order_unreadable()),
+    }
+    let Some(phase_plan) = phase_plan
+        .filter(|document| continues(document.body.get("continuation"), edit, work_order))
+    else {
+        return Err(planner_order_pending(
+            phase,
+            work_order,
+            "so it was not handed over",
+        ));
+    };
     let receipt = receipt_of(&order.body).ok_or_else(order_unreadable)?;
     Ok(HandOver {
         phase,
@@ -282,7 +303,7 @@ pub fn read_hand_over<S: Views + ?Sized>(
             ObservedDocument {
                 view: PHASE_PLAN_VIEW.into(),
                 key: phase_plan_key(phase),
-                produced_seq: phase_plan,
+                produced_seq: Some(phase_plan.produced_seq),
             },
             ObservedDocument {
                 view: WORK_ORDER_VIEW.into(),
@@ -349,6 +370,30 @@ fn receipt_of(order: &Value) -> Option<Map<String, Value>> {
     receipt.insert("launch".into(), json!(launch(agent, model)));
     receipt.insert("recorded_at".into(), json!(text("recorded_at")?));
     Some(receipt)
+}
+
+/// Whether `latest`, a phase's latest continuation, names `edit` and
+/// `work_order` and is not yet followed. A null or missing one does not.
+fn continues(latest: Option<&Value>, edit: Hash, work_order: &str) -> bool {
+    latest.is_some_and(|latest| {
+        latest.get("edit").and_then(Value::as_str) == Some(edit.to_hex().as_str())
+            && latest.get("work_order").and_then(Value::as_str) == Some(work_order)
+            && latest.get("followed") == Some(&Value::Bool(false))
+    })
+}
+
+/// The refusal for order `work_order`, which is `state` rather than pending,
+/// in `work-order-fail`'s shape.
+fn order_not_pending(work_order: &str, state: &str) -> Value {
+    Refusal::new(
+        WORK_ORDER_NOT_PENDING,
+        format!(
+            "work order {work_order} is {state}, so it was not handed over. A failed order is retried with `work-order-retry`, and an answered one has already returned"
+        ),
+    )
+    .slot("work_order")
+    .details(json!({"state": state}))
+    .value()
 }
 
 fn order_unreadable() -> Value {
@@ -545,6 +590,45 @@ pub(crate) mod tests {
         assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
         assert!(of_type(&history(&store), "plan.continuation_followed").is_empty());
+    }
+
+    #[test]
+    fn an_order_failed_before_it_was_read_handed_over_is_caught() {
+        let (_dir, store) = store_c();
+        continued(&store);
+        fail_by_hand(&store, O, R3);
+        let before = head(&store);
+        let refusal = read_hand_over(&store, &project(), 1, x(), O)
+            .expect_err("a failed order is not handed over");
+
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "work-order-not-pending", "{refusal}");
+        assert_eq!(refusal["slot"], "work_order", "{refusal}");
+        assert_eq!(refusal["details"], json!({"state": "failed"}));
+        assert_eq!(head(&store), before);
+        assert!(of_type(&history(&store), "plan.continuation_followed").is_empty());
+    }
+
+    #[test]
+    fn a_followed_continuation_handed_over_again_is_caught() {
+        let (_dir, store) = store_c();
+        continued(&store);
+        let read = read_hand_over(&store, &project(), 1, x(), O).unwrap();
+        let first = hand_over(&store, &command("phase.plan", R3, 7, T6), &read);
+        assert_eq!(first["status"], "ok", "{first}");
+        let before = head(&store);
+        let refusal = read_hand_over(&store, &project(), 1, x(), O)
+            .expect_err("a followed continuation is not handed over again");
+
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "planner-order-pending", "{refusal}");
+        assert_eq!(refusal["slot"], "operation", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": O}));
+        assert_eq!(head(&store), before);
+        assert_eq!(
+            of_type(&history(&store), "plan.continuation_followed").len(),
+            1
+        );
     }
 
     #[test]
