@@ -8,6 +8,9 @@ use baley_core::capture::{CaptureProjector, register_capture_events};
 use baley_core::catalog::{ModelCatalogProjector, register_model_events};
 use baley_core::checkout::{CheckoutProjector, register_checkout_events};
 use baley_core::guard::{GuardPolicyProjector, GuardProjector, register_guard_events};
+use baley_core::plan::{
+    EvidenceMapProjector, PhasePlanProjector, PlanProjector, register_plan_events,
+};
 use baley_core::policy::recorded::{PolicyProjector, register_policy_events};
 use baley_core::questions::{QuestionsProjector, register_question_events};
 use baley_core::scope::{
@@ -33,16 +36,19 @@ use crate::update::events::register_update_events;
 /// `story.reprioritized`, `story.dropped`, `phase.declared`,
 /// `phase.reordered` and `phase.withdrawn`, `work_order.issued` and
 /// `work_order.failed`, the four question types `questions.opened`,
-/// `question.answered`, `question.deferred` and `questions.abandoned`, and
-/// `story.refined` understood by the CLI, and declares view set version 13
-/// over seventeen views, the sixteen of view set 12 and `truths`: `backlog
-/// capture checkout claim_scope draft guard guard_policy install
-/// model_catalog phase phase_detail policy questions request roadmap truths
-/// work_order`. View set 13 also covers the `work_order` view's version 2,
-/// the `roadmap` view's version 3 and the `backlog` view's version 3. The
-/// install view holds only install records. Update outcomes and provider
-/// acknowledgements are read from their streams and have no projector. A
-/// project brought to view set 13 is read-only for older binaries.
+/// `question.answered`, `question.deferred` and `questions.abandoned`,
+/// `story.refined`, and the four plan types `plan.approved`,
+/// `plan.replaced`, `plan.continuation` and `plan.continuation_followed`
+/// understood by the CLI, and declares view set version 14 over twenty
+/// views, the seventeen of view set 13 and `evidence_map`, `phase_plan` and
+/// `plan`: `backlog capture checkout claim_scope draft evidence_map guard
+/// guard_policy install model_catalog phase phase_detail phase_plan plan
+/// policy questions request roadmap truths work_order`. View set 13 covered
+/// the `work_order` view's version 2 and the `roadmap` view's version 3;
+/// view set 14 also covers the `backlog` view's version 4. The install view
+/// holds only install records. Update outcomes and provider acknowledgements
+/// are read from their streams and have no projector. A project brought to
+/// view set 14 is read-only for older binaries.
 /// The startup `quick_check` is off for command-line callers.
 pub(crate) fn options() -> Options {
     let mut registry = Registry::new();
@@ -60,6 +66,7 @@ pub(crate) fn options() -> Options {
     register_work_order_events(&mut registry).expect("unique work order types");
     register_question_events(&mut registry).expect("unique question types");
     register_truth_events(&mut registry).expect("unique truth types");
+    register_plan_events(&mut registry).expect("unique plan types");
     Options {
         schema: Box::new(registry),
         projectors: vec![
@@ -78,8 +85,11 @@ pub(crate) fn options() -> Options {
             Box::new(WorkOrderProjector::new()),
             Box::new(QuestionsProjector::new()),
             Box::new(TruthsProjector::new()),
+            Box::new(PhasePlanProjector::new()),
+            Box::new(PlanProjector::new()),
+            Box::new(EvidenceMapProjector::new()),
         ],
-        view_set_version: NonZeroU32::new(13).expect("nonzero"),
+        view_set_version: NonZeroU32::new(14).expect("nonzero"),
         ..Options::default()
     }
 }
@@ -322,6 +332,31 @@ pub(crate) mod tests {
         options
     }
 
+    /// The options as they stood at view set 13, before the plan events and
+    /// the `phase_plan`, `plan` and `evidence_map` views.
+    fn view_set_13() -> Options {
+        let mut options = view_set_12();
+        let mut registry = Registry::new();
+        register_anchor_events(&mut registry).unwrap();
+        register_project_events(&mut registry).unwrap();
+        register_model_events(&mut registry).unwrap();
+        register_policy_events(&mut registry).unwrap();
+        register_checkout_events(&mut registry).unwrap();
+        register_capture_events(&mut registry).unwrap();
+        register_guard_events(&mut registry).unwrap();
+        register_install_events(&mut registry).unwrap();
+        register_update_events(&mut registry).unwrap();
+        register_provider_events(&mut registry).unwrap();
+        register_scope_events(&mut registry).unwrap();
+        register_work_order_events(&mut registry).unwrap();
+        register_question_events(&mut registry).unwrap();
+        register_truth_events(&mut registry).unwrap();
+        options.schema = Box::new(registry);
+        options.projectors.push(Box::new(TruthsProjector::new()));
+        options.view_set_version = NonZeroU32::new(13).unwrap();
+        options
+    }
+
     /// The domain views of view set 13, sorted: the fourteen of view set 12
     /// and `truths`.
     const VIEW_SET_13: [&str; 15] = [
@@ -335,6 +370,29 @@ pub(crate) mod tests {
         "model_catalog",
         "phase",
         "phase_detail",
+        "policy",
+        "questions",
+        "roadmap",
+        "truths",
+        "work_order",
+    ];
+
+    /// The domain views of view set 14, sorted: the fifteen of view set 13
+    /// and `evidence_map`, `phase_plan` and `plan`.
+    const VIEW_SET_14: [&str; 18] = [
+        "backlog",
+        "capture",
+        "checkout",
+        "draft",
+        "evidence_map",
+        "guard",
+        "guard_policy",
+        "install",
+        "model_catalog",
+        "phase",
+        "phase_detail",
+        "phase_plan",
+        "plan",
         "policy",
         "questions",
         "roadmap",
@@ -631,10 +689,10 @@ pub(crate) mod tests {
                     "{name}"
                 );
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(13).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_13);
+            assert_eq!(names, VIEW_SET_14);
         }
     }
 
@@ -659,10 +717,10 @@ pub(crate) mod tests {
                     .schema
                     .reads(PROVIDERS_ACKNOWLEDGED, PROVIDERS_ACKNOWLEDGED_VERSION + 1)
             );
-            assert_eq!(opened.view_set_version, NonZeroU32::new(13).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_13);
+            assert_eq!(names, VIEW_SET_14);
         }
     }
 
@@ -693,10 +751,10 @@ pub(crate) mod tests {
             assert!(opened.schema.reads("scope.submitted", 1));
             assert!(opened.schema.reads("scope.submitted", 2));
             assert!(!opened.schema.reads("scope.submitted", 3));
-            assert_eq!(opened.view_set_version, NonZeroU32::new(13).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_13);
+            assert_eq!(names, VIEW_SET_14);
         }
     }
 
@@ -713,10 +771,10 @@ pub(crate) mod tests {
                 assert!(opened.schema.reads(name, 1), "{name}");
                 assert!(!opened.schema.reads(name, 2), "{name}");
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(13).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_13);
+            assert_eq!(names, VIEW_SET_14);
         }
     }
 
@@ -738,10 +796,10 @@ pub(crate) mod tests {
                 assert!(opened.schema.reads(name, 1), "{name}");
                 assert!(!opened.schema.reads(name, 2), "{name}");
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(13).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_13);
+            assert_eq!(names, VIEW_SET_14);
         }
     }
 
@@ -1105,10 +1163,10 @@ pub(crate) mod tests {
         ] {
             assert!(opened.schema.reads("story.refined", 1));
             assert!(!opened.schema.reads("story.refined", 2));
-            assert_eq!(opened.view_set_version, NonZeroU32::new(13).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_13);
+            assert_eq!(names, VIEW_SET_14);
         }
     }
 
@@ -1243,5 +1301,100 @@ pub(crate) mod tests {
             .expect("the roadmap");
         assert_eq!(roadmap.body["stories"][0]["id"], 1);
         assert_eq!(roadmap.body["stories"][0]["truths"], 2);
+    }
+
+    // Catches a plan event the store would refuse at append, a planning view
+    // left out so a plan write projects nothing, or the views added without
+    // raising the set, which an older binary would misread.
+    #[test]
+    fn a_planning_view_or_event_left_unregistered_or_the_set_left_at_13_is_caught() {
+        use baley_core::plan::{
+            PlanApproval, evidence_map_key, phase_plan_key, phase_stream, plan_key,
+        };
+        use baley_store::{
+            Actor, Admin, Command, CommandKind, Decision, Hash, NewEvent, Observed, OutcomeKind,
+            ProjectId, RequestId, RetentionClass, StreamName, Views,
+        };
+
+        let opened = options();
+        assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+        let mut names = view_names(&opened);
+        names.sort();
+        assert_eq!(names, VIEW_SET_14);
+        for name in [
+            "plan.approved",
+            "plan.replaced",
+            "plan.continuation",
+            "plan.continuation_followed",
+        ] {
+            assert!(opened.schema.reads(name, 1), "{name}");
+            assert!(!opened.schema.reads(name, 2), "{name}");
+        }
+
+        let older_options = view_set_13();
+        let mut older_names = view_names(&older_options);
+        older_names.sort();
+        assert_eq!(older_names, VIEW_SET_13);
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        let older = store(&home, T0, older_options).unwrap();
+        older.create_project(&project, "sample", T0).unwrap();
+        drop(older);
+
+        let reopened = store(&home, T1, options()).unwrap();
+        let command = Command {
+            project: project.clone(),
+            kind: CommandKind("test.approve".into()),
+            request_id: RequestId("4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f73".into()),
+            digest: Hash([0x33; 32]),
+            scope: Vec::new(),
+            policy_version: 0,
+            recorded_at: T1.into(),
+            actor: Actor::Owner,
+            caller: None,
+        };
+        reopened
+            .transact(&command, &mut |tx| {
+                let body = tx.put_payload(b"the plan's body", RetentionClass::Record)?;
+                // Serving no story, so the backlog has none to refuse.
+                let approval = PlanApproval {
+                    phase: 1,
+                    plan: 1,
+                    digest: Hash([0x5c; 32]),
+                    stories: &[],
+                    size: 1,
+                    suite: None,
+                    question_set: "5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+                    evidence_map: &[],
+                    body: &body,
+                    owner: "Ada Owner",
+                    at: T1,
+                };
+                tx.append(NewEvent {
+                    stream: StreamName(phase_stream(1)),
+                    type_name: "plan.approved".into(),
+                    type_version: 1,
+                    git: None,
+                    payload: approval.payload(),
+                    attachments: vec![body],
+                })?;
+                Ok(Decision {
+                    kind: OutcomeKind::Done,
+                    answer: serde_json::json!({}),
+                    sensitive: false,
+                    observed: Observed::default(),
+                    git: None,
+                })
+            })
+            .unwrap();
+        for (view, key) in [
+            ("phase_plan", phase_plan_key(1)),
+            ("plan", plan_key(1, 1)),
+            ("evidence_map", evidence_map_key(1, 1)),
+        ] {
+            let held = reopened.get(&project, view, &key).unwrap();
+            assert!(held.is_some(), "{view} holds no document for plan 1");
+        }
     }
 }
