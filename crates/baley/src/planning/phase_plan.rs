@@ -42,7 +42,7 @@ use crate::questions::read::{SetRead, read as read_set};
 use crate::scope::read;
 use crate::scope::submit::{
     NOT_RECORDED_BUSY, PlanningContinuation, check_change, scope_unread, submission_refused,
-    submit_phase_edit,
+    submit_planning_edit,
 };
 use crate::work_order::issue;
 
@@ -349,11 +349,13 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
 /// Runs the path `checked` judged under `command`, the command its caller
 /// prepared. A changed selection records the `phase edit` of the stories
 /// with its continuation naming `id` as the order its approval issues, and
-/// answers with the draft's digest, its kind, the phase, the selection and
-/// the commands `baley scope preview <digest>` and `baley scope approve
-/// <digest>`, issuing no order (D-09). A planning order, or the due
-/// revision, is issued as `id` for the selection under `policy`, the host's
-/// effective policy, for `host` with the catalog `names` (D-15); its
+/// answers with the recorded receipt: the draft's digest, its kind, the time
+/// it was recorded, the phase, the selection and the commands `baley scope
+/// preview <digest>` and `baley scope approve <digest>`, issuing no order
+/// (D-09), so a replay answered from the record gets the same answer. A
+/// planning order, or the due revision, is issued as `id` for the selection
+/// under `policy`, the host's effective policy, for `host` with the catalog
+/// `names` (D-15); its
 /// decision declares no pending planner order of the phase and observes the
 /// check's documents and the inputs'. An approved continuation's order is
 /// handed over (D-01), observing the check's documents and declaring its
@@ -378,10 +380,8 @@ pub fn run<S: Ledger + Views + Payloads>(
                 documents: &checked.documents,
                 absences: &checked.absences,
             };
-            return match submit_phase_edit(store, command, phase, fields, Some(continuation)) {
-                Ok(digest) => drafted(digest, phase, &checked.stories),
-                Err(answer) => answer,
-            };
+            return submit_planning_edit(store, command, phase, fields, continuation)
+                .unwrap_or_else(|answer| answer);
         }
         Planned::Revision { draft, set } => Some(Revision {
             draft: *draft,
@@ -428,20 +428,6 @@ pub fn run<S: Ledger + Views + Payloads>(
         })
     });
     issue::answer(result, store)
-}
-
-/// The answer for a changed selection drafted as `digest`.
-fn drafted(digest: Hash, phase: u32, stories: &[u32]) -> Value {
-    let digest = digest.to_hex();
-    json!({
-        "status": "ok",
-        "digest": digest,
-        "kind": ChangeKind::PhaseEdit.as_str(),
-        "phase": phase,
-        "stories": stories,
-        "preview": format!("baley scope preview {digest}"),
-        "approve": format!("baley scope approve {digest}"),
-    })
 }
 
 /// The refusal a `phase-plan` call gets for `refusal`: a pending planner
@@ -687,8 +673,8 @@ pub(crate) mod tests {
         let answer = planned(&store, &[1, 4], R1, T4, O);
         assert_eq!(
             answer,
-            json!({"status": "ok", "digest": E1_DIGEST, "kind": "phase-edit", "phase": 1,
-                "stories": [1, 4],
+            json!({"status": "ok", "digest": E1_DIGEST, "kind": "phase-edit",
+                "recorded_at": T4, "phase": 1, "stories": [1, 4],
                 "preview": format!("baley scope preview {E1_DIGEST}"),
                 "approve": format!("baley scope approve {E1_DIGEST}")})
         );
@@ -721,6 +707,28 @@ pub(crate) mod tests {
         assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
         assert!(issued(&store).is_empty());
+    }
+
+    #[test]
+    fn a_replayed_draft_answered_without_its_phase_plan_members_is_caught() {
+        let (_dir, store) = store_c();
+        let first = planned(&store, &[1, 4], R1, T4, O);
+        assert_eq!(first["status"], "ok", "{first}");
+        // A retry of the same request is answered from its record, as
+        // `mcp::planning::serve` answers a replay, so it must be the first
+        // answer whole.
+        let replayed = issue::answer(
+            issue::record(&store, &command(PHASE_PLAN_COMMAND, R1, 7, T5), None),
+            &store,
+        );
+        assert_eq!(replayed, first);
+        assert_eq!(
+            replayed,
+            json!({"status": "ok", "digest": E1_DIGEST, "kind": "phase-edit",
+                "recorded_at": T4, "phase": 1, "stories": [1, 4],
+                "preview": format!("baley scope preview {E1_DIGEST}"),
+                "approve": format!("baley scope approve {E1_DIGEST}")})
+        );
     }
 
     #[test]

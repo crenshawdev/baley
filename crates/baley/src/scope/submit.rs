@@ -367,8 +367,11 @@ pub struct PlanningContinuation<'a> {
 /// same transaction, after the draft, one `plan.continuation` on `phase/<n>`
 /// naming the phase, the selection in order, the draft's digest and the
 /// order, and the decision observes the continuation's documents and
-/// declares its absences. Without one it records and observes exactly what
-/// `record_change` does.
+/// declares its absences. The receipt then also names the phase, the
+/// selection and the commands `baley scope preview <digest>` and `baley
+/// scope approve <digest>`, the answer `phase-plan` gives, so a replay of
+/// the call is answered the same from its record. Without one it records,
+/// observes and answers exactly what `record_change` does.
 fn record_with<L: Ledger + ?Sized>(
     store: &L,
     command: &Command,
@@ -377,12 +380,19 @@ fn record_with<L: Ledger + ?Sized>(
     continuation: Option<(u32, PlanningContinuation<'_>)>,
 ) -> Result<Recorded, StoreError> {
     let kind = change.kind().as_str();
-    let receipt = json!({
+    let digest = change.digest().to_hex();
+    let mut receipt = json!({
         "status": "ok",
-        "digest": change.digest().to_hex(),
+        "digest": digest,
         "kind": kind,
         "recorded_at": command.recorded_at,
     });
+    if let Some((phase, continuation)) = continuation {
+        receipt["phase"] = json!(phase);
+        receipt["stories"] = json!(continuation.stories);
+        receipt["preview"] = json!(format!("baley scope preview {digest}"));
+        receipt["approve"] = json!(format!("baley scope approve {digest}"));
+    }
     store.transact(command, &mut |tx| {
         let Some(read) = read else {
             return Err(StoreError::Unavailable(
@@ -454,6 +464,31 @@ pub fn submit_phase_edit<S: Ledger + Views + Payloads>(
     fields: &PhaseFields,
     continuation: Option<PlanningContinuation<'_>>,
 ) -> Result<Hash, Value> {
+    submit_edit(store, command, phase, fields, continuation).map(|(digest, _)| digest)
+}
+
+/// [`submit_phase_edit`] with `continuation`, answered with the recorded
+/// receipt instead of its digest: the receipt `phase-plan` gives for a
+/// changed selection, which a replay of the same request is answered with
+/// from its record.
+pub fn submit_planning_edit<S: Ledger + Views + Payloads>(
+    store: &S,
+    command: &Command,
+    phase: u32,
+    fields: &PhaseFields,
+    continuation: PlanningContinuation<'_>,
+) -> Result<Value, Value> {
+    submit_edit(store, command, phase, fields, Some(continuation)).map(|(_, receipt)| receipt)
+}
+
+/// [`submit_phase_edit`]'s work, giving the digest and the recorded receipt.
+fn submit_edit<S: Ledger + Views + Payloads>(
+    store: &S,
+    command: &Command,
+    phase: u32,
+    fields: &PhaseFields,
+    continuation: Option<PlanningContinuation<'_>>,
+) -> Result<(Hash, Value), Value> {
     let mut members = Map::new();
     members.insert("phase".into(), json!(phase));
     let texts = [
@@ -494,9 +529,9 @@ pub fn submit_phase_edit<S: Ledger + Views + Payloads>(
 }
 
 /// The digest `answer`, a scope call's recorded answer, names when it is
-/// `change`'s. An `ok` receipt for another change is a reused request id;
-/// any other answer is returned as it is.
-fn recorded_digest(answer: Value, change: &ChangeSubmission) -> Result<Hash, Value> {
+/// `change`'s, with that answer. An `ok` receipt for another change is a
+/// reused request id; any other answer is returned as it is.
+fn recorded_digest(answer: Value, change: &ChangeSubmission) -> Result<(Hash, Value), Value> {
     if answer["status"] != "ok" {
         return Err(answer);
     }
@@ -505,7 +540,7 @@ fn recorded_digest(answer: Value, change: &ChangeSubmission) -> Result<Hash, Val
         .and_then(Value::as_str)
         .and_then(Hash::from_hex)
     {
-        Some(digest) if digest == change.digest() => Ok(digest),
+        Some(digest) if digest == change.digest() => Ok((digest, answer)),
         _ => Err(request_id_reused()),
     }
 }
