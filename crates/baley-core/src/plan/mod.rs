@@ -10,7 +10,8 @@
 //! view, a phase's planning state, the `plan` view, each approved plan's
 //! record, and the `evidence_map` view, each approved plan's map with its
 //! reading into the items the judge takes, all projected from those events
-//! alone.
+//! alone; and the commitment judge, what a `phase-plan` call does with a
+//! selection and whether a plan may be submitted for its phase.
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
@@ -18,6 +19,7 @@
 mod approval;
 mod binding;
 mod capacity;
+mod commitment;
 mod content;
 mod coverage;
 mod event;
@@ -37,6 +39,11 @@ mod task;
 
 pub use approval::{
     ANSWER_NOT_APPLIED, DraftRead, PlanApprovalFacts, PlanApprovalRefusal, judge_plan_approval,
+};
+pub use commitment::{
+    CommitmentFacts, CommitmentRefusal, Continuation, PHASE_ACTIVE, PHASE_NOT_ACTIVE,
+    PLANNER_ORDER_PENDING, PhaseNotActive, PhasePlanPath, Readiness, STORY_IN_PHASE,
+    STORY_UNREFINED, SelectedStory, judge_commitment, judge_readiness, judge_submit_phase,
 };
 pub use event::{
     PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED,
