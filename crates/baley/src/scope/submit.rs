@@ -13,6 +13,9 @@
 
 use std::collections::BTreeMap;
 
+use baley_core::plan::{
+    PLAN_CONTINUATION, PLAN_CONTINUATION_VERSION, continuation_payload, phase_stream,
+};
 use baley_core::policy::Role;
 use baley_core::scope::{
     ChangeKind, ChangeSubmission, PROJECT_ALREADY_STARTED, PROJECT_STREAM, PhaseFields,
@@ -23,9 +26,9 @@ use baley_core::scope::{
 use baley_core::work_order::{NO_SUCH_WORK_ORDER, START_SUBJECT, WRONG_WORK_ORDER};
 use baley_store::{
     Absence, Command, Decision, EVENT_PAGE_BOUND, EventMatch, Hash, HistoryFilter,
-    InstructionEvidence, Ledger, NewEvent, Observed, OutcomeKind, PageRequest, Payloads, ProjectId,
-    REQUEST_VIEW, Recorded, Refusal as StoreRefusal, RetentionClass, StoreError, StreamName, Views,
-    request_key, request_state,
+    InstructionEvidence, Ledger, NewEvent, Observed, ObservedDocument, OutcomeKind, PageRequest,
+    Payloads, ProjectId, REQUEST_VIEW, Recorded, Refusal as StoreRefusal, RetentionClass,
+    StoreError, StreamName, Views, request_key, request_state,
 };
 use serde_json::{Map, Value, json};
 
@@ -326,12 +329,46 @@ fn listed(noun: &str, numbers: &[u32]) -> String {
 /// `read`, the check's, named is unchanged, so a change whose scope moved
 /// since its check records nothing and `answer` gives `failed`
 /// `ledger-busy`. A decision asked to run without the check's read records
-/// nothing. The answer is the receipt, which never holds the change.
+/// nothing. The answer is the receipt, which never holds the change. It
+/// records no planning continuation and observes nothing more; T9's `phase
+/// plan` records one through [`submit_phase_edit`].
 pub fn record_change<L: Ledger + ?Sized>(
     store: &L,
     command: &Command,
     change: &ChangeSubmission,
     read: Option<&ScopeRead>,
+) -> Result<Recorded, StoreError> {
+    record_with(store, command, change, read, None)
+}
+
+/// A planning continuation recorded with a `phase edit` of phase `phase`'s
+/// stories (D-09): the selection the edit commits and the planner order its
+/// approval issues, with the documents the caller read when it chose to
+/// draft.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanningContinuation<'a> {
+    /// The selection, in order.
+    pub stories: &'a [u32],
+    /// The id of the planner order the edit's approval issues, fixed now so
+    /// a rerun finds the same order.
+    pub work_order: &'a str,
+    /// The documents the caller read when it chose to draft, at the sequence
+    /// that produced each, so a phase made active, an order issued or a story
+    /// moved since makes the call `ledger-busy` with nothing recorded.
+    pub documents: &'a [ObservedDocument],
+}
+
+/// [`record_change`] with a planning continuation of phase `phase`: in the
+/// same transaction, after the draft, one `plan.continuation` on `phase/<n>`
+/// naming the phase, the selection in order, the draft's digest and the
+/// order, and the decision observes the continuation's documents. Without
+/// one it records and observes exactly what `record_change` does.
+fn record_with<L: Ledger + ?Sized>(
+    store: &L,
+    command: &Command,
+    change: &ChangeSubmission,
+    read: Option<&ScopeRead>,
+    continuation: Option<(u32, PlanningContinuation<'_>)>,
 ) -> Result<Recorded, StoreError> {
     let kind = change.kind().as_str();
     let receipt = json!({
@@ -356,11 +393,28 @@ pub fn record_change<L: Ledger + ?Sized>(
             payload: submitted_payload(change.digest(), kind, change.target(), &body),
             attachments: vec![body],
         })?;
+        let mut observed = Observed::default();
+        if let Some((phase, continuation)) = continuation {
+            tx.append(NewEvent {
+                stream: StreamName(phase_stream(phase)),
+                type_name: PLAN_CONTINUATION.into(),
+                type_version: PLAN_CONTINUATION_VERSION,
+                git: None,
+                payload: continuation_payload(
+                    phase,
+                    continuation.stories,
+                    change.digest(),
+                    continuation.work_order,
+                ),
+                attachments: Vec::new(),
+            })?;
+            observed.documents = continuation.documents.to_vec();
+        }
         Ok(Decision {
             kind: OutcomeKind::Done,
             answer: receipt.clone(),
             sensitive: false,
-            observed: Observed::default(),
+            observed,
             git: None,
         })
     })
@@ -380,11 +434,17 @@ pub fn record_change<L: Ledger + ?Sized>(
 /// change recorded under the same command is a reused request id, since this
 /// edit was never recorded. The draft is approved through `approve::judge`
 /// and `approve::record`.
+///
+/// T9's `phase plan` passes `continuation` for a changed selection, and the
+/// edit is then recorded with its `plan.continuation` in one transaction or
+/// not at all, observing the documents the caller read (D-09). With none,
+/// the edit records exactly what `record_change` records.
 pub fn submit_phase_edit<S: Ledger + Views + Payloads>(
     store: &S,
     command: &Command,
     phase: u32,
     fields: &PhaseFields,
+    continuation: Option<PlanningContinuation<'_>>,
 ) -> Result<Hash, Value> {
     let mut members = Map::new();
     members.insert("phase".into(), json!(phase));
@@ -409,16 +469,17 @@ pub fn submit_phase_edit<S: Ledger + Views + Payloads>(
     }
     let change = judge_change(ChangeKind::PhaseEdit, &Value::Object(members))
         .map_err(|refusal| submission_refused(&refusal))?;
+    let continuation = continuation.map(|continuation| (phase, continuation));
     let result = if held(store, command)? {
-        record_change(store, command, &change, None)
+        record_with(store, command, &change, None, continuation)
     } else {
         match check_change(store, &command.project, &change) {
-            Ok(read) => record_change(store, command, &change, Some(&read)),
+            Ok(read) => record_with(store, command, &change, Some(&read), continuation),
             // The original can commit between the lookup and the check, and
             // the check may refuse because of it, so the request is looked
             // up again before a refusal is answered.
             Err(refusal) if !held(store, command)? => return Err(refusal),
-            Err(_) => record_change(store, command, &change, None),
+            Err(_) => record_with(store, command, &change, None, continuation),
         }
     };
     recorded_digest(answer(result, store), &change)
@@ -820,7 +881,7 @@ mod tests {
             ..PhaseFields::default()
         };
         let digest =
-            submit_phase_edit(&store, &command(SUBMIT_COMMAND, R4, 4, T4), 2, &goal).unwrap();
+            submit_phase_edit(&store, &command(SUBMIT_COMMAND, R4, 4, T4), 2, &goal, None).unwrap();
         assert_eq!(digest.to_hex(), E_B_DIGEST);
         let events = history(&store);
         let drafts: Vec<&Value> = of_type(&events, "scope.submitted")
@@ -833,7 +894,8 @@ mod tests {
         let before = head(&store);
         let empty = PhaseFields::default();
         let refusal =
-            submit_phase_edit(&store, &command(SUBMIT_COMMAND, R6, 6, T5), 2, &empty).unwrap_err();
+            submit_phase_edit(&store, &command(SUBMIT_COMMAND, R6, 6, T5), 2, &empty, None)
+                .unwrap_err();
         assert_eq!(refusal["status"], "refused", "{refusal}");
         assert_eq!(refusal["code"], "malformed-submission", "{refusal}");
         assert_eq!(refusal["slot"], "submission", "{refusal}");
@@ -854,7 +916,7 @@ mod tests {
             ..PhaseFields::default()
         };
         let edit = command(SUBMIT_COMMAND, R4, 4, T4);
-        submit_phase_edit(&store, &edit, 2, &goal).unwrap();
+        submit_phase_edit(&store, &edit, 2, &goal, None).unwrap();
         append(
             &store,
             R6,
@@ -867,7 +929,7 @@ mod tests {
         );
         let before = head(&store);
 
-        let again = submit_phase_edit(&store, &edit, 2, &goal);
+        let again = submit_phase_edit(&store, &edit, 2, &goal, None);
         assert_eq!(again, Ok(Hash::from_hex(E_B_DIGEST).unwrap()));
         assert_eq!(head(&store), before);
         let drafts = of_type(&history(&store), "scope.submitted")
@@ -1029,7 +1091,7 @@ mod tests {
         let racing = CommitsAtLookup {
             store: &store,
             land: RefCell::new(Some(Box::new(|| {
-                submit_phase_edit(&store, &edit, 2, &goal).unwrap();
+                submit_phase_edit(&store, &edit, 2, &goal, None).unwrap();
                 append(
                     &store,
                     R6,
@@ -1043,7 +1105,7 @@ mod tests {
             }))),
         };
 
-        let retry = submit_phase_edit(&racing, &edit, 2, &goal);
+        let retry = submit_phase_edit(&racing, &edit, 2, &goal, None);
         assert!(racing.land.borrow().is_none(), "the lookup was not made");
         assert_eq!(retry, Ok(Hash::from_hex(E_B_DIGEST).unwrap()));
         let drafts = of_type(&history(&store), "scope.submitted")
@@ -1063,20 +1125,20 @@ mod tests {
             ..PhaseFields::default()
         };
         let edit = command(SUBMIT_COMMAND, R4, 4, T4);
-        submit_phase_edit(&store, &edit, 2, &goal).unwrap();
+        submit_phase_edit(&store, &edit, 2, &goal, None).unwrap();
         let before = head(&store);
 
         let name = PhaseFields {
             name: Some("Approvals".into()),
             ..PhaseFields::default()
         };
-        let other = submit_phase_edit(&store, &edit, 2, &name).unwrap_err();
+        let other = submit_phase_edit(&store, &edit, 2, &name, None).unwrap_err();
         assert_eq!(other["status"], "refused", "{other}");
         assert_eq!(other["code"], "request-id-reuse", "{other}");
         assert_eq!(other["slot"], "request_id", "{other}");
         assert_eq!(head(&store), before);
 
-        let again = submit_phase_edit(&store, &edit, 2, &goal);
+        let again = submit_phase_edit(&store, &edit, 2, &goal, None);
         assert_eq!(again, Ok(Hash::from_hex(E_B_DIGEST).unwrap()));
         assert_eq!(head(&store), before);
     }
@@ -1163,5 +1225,127 @@ mod tests {
             assert_eq!(refusal["slot"], "work_order", "{id}: {refusal}");
         }
         assert_eq!(head(&store), before);
+    }
+
+    /// The JSON body a `scope.submitted` attaches.
+    fn submitted_body(store: &baley_store_sqlite::SqliteStore, event: &Event) -> Value {
+        let body = PayloadRef::from_value(&event.payload["body"]).unwrap();
+        let PayloadBody::Present(mut reader) = store.open(&body.hash).unwrap() else {
+            panic!("the body is present");
+        };
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn on_stream<'a>(events: &'a [Event], stream: &str) -> Vec<&'a Event> {
+        events
+            .iter()
+            .filter(|event| event.stream == stream)
+            .collect()
+    }
+
+    #[test]
+    fn a_continuation_recorded_apart_from_its_edit_is_caught() {
+        use baley_core::scope::{ChangeKind, PHASE_VIEW, PhaseFields, phase_key};
+
+        use crate::planning::fixtures::store_c;
+        use crate::scope::approve::{self, APPROVE_COMMAND};
+
+        const O: &str = "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f1";
+        let (_dir, store) = store_c();
+        let stories = PhaseFields {
+            stories: Some(vec![1, 4]),
+            ..PhaseFields::default()
+        };
+        let continuation = PlanningContinuation {
+            stories: &[1, 4],
+            work_order: O,
+            documents: &[],
+        };
+        let edit = command(SUBMIT_COMMAND, R1, 1, T4);
+        let digest = submit_phase_edit(&store, &edit, 1, &stories, Some(continuation)).unwrap();
+
+        let events = history(&store);
+        let drafts: Vec<&Event> = of_type(&events, "scope.submitted")
+            .into_iter()
+            .filter(|event| event.payload["kind"] == "phase-edit")
+            .collect();
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].payload["digest"], digest.to_hex());
+        assert_eq!(
+            submitted_body(&store, drafts[0]),
+            json!({"kind": "phase-edit", "phase": 1, "stories": [1, 4]})
+        );
+        let continuations = of_type(&events, "plan.continuation");
+        assert_eq!(continuations.len(), 1);
+        assert_eq!(continuations[0].stream, "phase/1");
+        assert_eq!(
+            continuations[0].payload,
+            json!({"phase": 1, "stories": [1, 4], "edit": digest.to_hex(), "work_order": O})
+        );
+        assert_eq!(continuations[0].request_id, drafts[0].request_id);
+        assert_eq!(continuations[0].request_id.0, R1);
+
+        // Phase 2's document as the caller read it, before an approved edit
+        // of phase 2 moves it.
+        let read = store
+            .get(&project(), PHASE_VIEW, &phase_key(2))
+            .unwrap()
+            .expect("phase 2 is held");
+        let observed = [ObservedDocument {
+            view: PHASE_VIEW.into(),
+            key: phase_key(2),
+            produced_seq: Some(read.produced_seq),
+        }];
+        let e_b = submit_change(&store, ChangeKind::PhaseEdit, &e_b(), R2, T5).unwrap();
+        let judged = approve::judge(&store, &project(), digest_of(&e_b)).unwrap();
+        approve::record(
+            &store,
+            &command(APPROVE_COMMAND, R3, 3, T5),
+            Some(&judged),
+            "Ada Owner",
+        )
+        .unwrap();
+        let before = head(&store);
+        let continuation = PlanningContinuation {
+            documents: &observed,
+            ..continuation
+        };
+        let busy = submit_phase_edit(
+            &store,
+            &command(SUBMIT_COMMAND, R4, 1, T6),
+            1,
+            &stories,
+            Some(continuation),
+        )
+        .unwrap_err();
+        assert_failed(&busy, "ledger-busy", "ledger", true);
+        assert_eq!(head(&store), before);
+        assert_eq!(of_type(&history(&store), "plan.continuation").len(), 1);
+    }
+
+    #[test]
+    fn a_phase_edit_recorded_differently_once_continuations_exist_is_caught() {
+        use baley_core::scope::PhaseFields;
+
+        use crate::planning::fixtures::store_c;
+
+        let (_dir, store) = store_c();
+        let goal = PhaseFields {
+            goal: Some("The owner approves every change".into()),
+            ..PhaseFields::default()
+        };
+        let digest =
+            submit_phase_edit(&store, &command(SUBMIT_COMMAND, R1, 1, T4), 2, &goal, None).unwrap();
+        assert_eq!(digest.to_hex(), E_B_DIGEST);
+        let events = history(&store);
+        let drafts = of_type(&events, "scope.submitted")
+            .into_iter()
+            .filter(|event| event.payload["digest"] == E_B_DIGEST)
+            .count();
+        assert_eq!(drafts, 1);
+        assert!(on_stream(&events, "phase/2").is_empty());
+        assert!(of_type(&events, "plan.continuation").is_empty());
     }
 }
