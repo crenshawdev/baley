@@ -3,25 +3,44 @@
 //! planner's plan answering a planner order of its phase. The check runs
 //! before admission and records nothing: the order, the phase's activity,
 //! then the plan judged whole by `judge_plan` over the phase's facts read
-//! from the views.
+//! from the views. The recording then stores the draft, abandons the
+//! phase's earlier draft's set and opens the new draft's set in one
+//! transaction, so a phase holds one draft waiting for approval.
+//!
+//! Two seams sit between the check and the recording, before the preview
+//! is given (design 0005 Figure 5), both against the digest the recording
+//! takes: Build 4 T11 raises risk at plan submit there, and Build 4 T10's
+//! plan checker issues its work order there when the plan gate is on.
 
 use std::num::NonZeroU32;
 
 use baley_core::plan::{
-    PhaseNotActive, Plan, PlanFacts, PlanRefusal, judge_plan, judge_submit_phase,
+    PHASE_PLAN_VIEW, PLAN_KIND, PhaseNotActive, Plan, PlanDraft, PlanFacts, PlanRefusal,
+    judge_plan, judge_submit_phase, phase_plan_key,
 };
 use baley_core::policy::Role;
+use baley_core::questions::{Cause, Subject, round_of};
+use baley_core::scope::{
+    PROJECT_STREAM, SCOPE_SUBMITTED, SCOPE_SUBMITTED_VERSION, submitted_payload,
+};
 use baley_core::work_order::{
     FAILED, NO_SUCH_WORK_ORDER, WORK_ORDER_VIEW, WRONG_WORK_ORDER, phase_subject, work_order_key,
 };
-use baley_store::{Absence, InstructionEvidence, ObservedDocument, ProjectId, StoreError, Views};
-use serde_json::Value;
+use baley_store::{
+    Absence, Command, Decision, InstructionEvidence, Ledger, NewEvent, Observed, ObservedDocument,
+    OutcomeKind, ProjectId, Recorded, RetentionClass, StoreError, StreamName, Transaction, Views,
+};
+use serde_json::{Map, Value, json};
 
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
+use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::facts;
+use crate::questions::answer::with_now;
+use crate::questions::record::{AbandonError, abandon, open};
 use crate::refine::order::order_evidence;
+use crate::refine::questions::opened_facts;
 use crate::scope::submit::NOT_RECORDED_BUSY;
 use crate::work_order::read::order_document;
 
@@ -137,6 +156,138 @@ pub fn check<S: Views + ?Sized>(
         documents,
         absences: read.absences().to_vec(),
     })
+}
+
+/// Records the plan `checked` accepted under `command`, the command its
+/// caller prepared, carrying the planner order it answers and that order's
+/// instructions, in one transaction (D-03, D-05, D-13): its draft body as a
+/// `record` payload and one `scope.submitted` of kind `plan` with target
+/// `phase/<n>` attaching it on the `project` stream, so the `work_order`
+/// view marks the order answered and lists the digest; the phase's current
+/// draft's set, read from `phase_plan` here, abandoned with cause
+/// `draft-replaced` when it is held and not yet abandoned; and the draft's
+/// set opened on `phase/<n>` with the plan's questions, an empty set closing
+/// at once. Every call records, so the same plan submitted again is the
+/// newest draft again with a new set; only a retry of the same request
+/// replays, before any decision runs.
+///
+/// The decision observes the order's and the facts' documents, so a phase
+/// made active, a plan approved or a truth revised since the check makes the
+/// call `ledger-busy` with nothing recorded; with no phase active at the
+/// check it declares that the active index still holds none. A decision run
+/// without the check's read records nothing.
+///
+/// The receipt: `status`, `digest`, `kind`, `phase`, `stories`, `size` (the
+/// plan's tasks), `phase_size`, `reaching` (the phase's size with the plan
+/// approved), `capacity` or null, `set`, `recorded_at`, `now` (round 1 in
+/// the questions round's shape) and `preview`: the draft's submission when
+/// the receipt stays within the part bound, otherwise
+/// `{"read": {"kind": "draft", "digest": ..}}`, which `document` serves
+/// whole in parts, since a receipt is never cut into parts.
+pub fn record<L: Ledger + ?Sized>(
+    store: &L,
+    command: &Command,
+    checked: Option<&Checked>,
+) -> Result<Recorded, StoreError> {
+    let at = command.recorded_at.as_str();
+    store.transact(command, &mut |tx| {
+        let Some(checked) = checked else {
+            return Err(StoreError::Unavailable(
+                "a plan submission reached its transaction without its check's read".into(),
+            ));
+        };
+        let plan = &checked.plan;
+        let phase = plan.phase();
+        // Read before anything is appended, so the set found is the earlier
+        // draft's, never the one opened below.
+        let earlier = current_set(tx, phase)?;
+        let draft = PlanDraft::new(plan);
+        let body = tx.put_payload(draft.body(), RetentionClass::Record)?;
+        tx.append(NewEvent {
+            stream: StreamName(PROJECT_STREAM.into()),
+            type_name: SCOPE_SUBMITTED.into(),
+            type_version: SCOPE_SUBMITTED_VERSION,
+            git: None,
+            payload: submitted_payload(draft.digest(), PLAN_KIND, draft.target(), &body),
+            attachments: vec![body],
+        })?;
+        if let Some(set) = earlier {
+            match abandon(tx, &set, Cause::DraftReplaced, at) {
+                // A set already abandoned, or one the view no longer holds,
+                // has nothing left to abandon.
+                Ok(()) | Err(AbandonError::NotHeld | AbandonError::Abandoned) => {}
+                Err(AbandonError::Store(error)) => return Err(error),
+            }
+        }
+        let subject = Subject::Plan {
+            phase,
+            plan_digest: draft.digest(),
+        };
+        let id = open(tx, plan.questions(), &subject, at)?;
+        let mut receipt = Map::new();
+        receipt.insert("status".into(), json!("ok"));
+        receipt.insert("digest".into(), json!(draft.digest().to_hex()));
+        receipt.insert("kind".into(), json!(PLAN_KIND));
+        receipt.insert("phase".into(), json!(phase));
+        receipt.insert("stories".into(), json!(plan.stories()));
+        receipt.insert("size".into(), json!(plan.size()));
+        receipt.insert("phase_size".into(), json!(checked.size));
+        receipt.insert("reaching".into(), json!(checked.reaching()));
+        receipt.insert(
+            "capacity".into(),
+            json!(checked.capacity.map(NonZeroU32::get)),
+        );
+        receipt.insert("set".into(), json!(id));
+        receipt.insert("recorded_at".into(), json!(at));
+        let answer = with_now(receipt, &id, &round_of(&opened_facts(plan.questions())));
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: with_preview(answer, &draft),
+            sensitive: false,
+            observed: Observed {
+                documents: checked.documents.clone(),
+                absences: checked.absences.clone(),
+                ..Observed::default()
+            },
+            git: None,
+        })
+    })
+}
+
+/// The set of phase `phase`'s current draft, as `phase_plan` holds it inside
+/// `tx`, or none. A draft that cannot be read is a ledger fault.
+fn current_set(tx: &mut dyn Transaction, phase: u32) -> Result<Option<String>, StoreError> {
+    let Some(document) = tx.get(PHASE_PLAN_VIEW, &phase_plan_key(phase))? else {
+        return Ok(None);
+    };
+    match document.body.get("draft") {
+        None | Some(Value::Null) => Ok(None),
+        Some(draft) => match draft.get("set").and_then(Value::as_str) {
+            Some(set) => Ok(Some(set.to_owned())),
+            None => Err(StoreError::Unavailable(format!(
+                "phase {phase}'s current plan draft cannot be read"
+            ))),
+        },
+    }
+}
+
+/// `answer` with `preview`, the draft's submission when the whole answer
+/// stays within the part bound, otherwise the `document` read of the draft.
+fn with_preview(answer: Value, draft: &PlanDraft) -> Value {
+    let Value::Object(mut receipt) = answer else {
+        return answer;
+    };
+    // An accepted plan's draft body is canonical JSON.
+    let submission: Value = serde_json::from_slice(draft.body()).expect("a draft body is JSON");
+    receipt.insert("preview".into(), submission);
+    let text = serde_json::to_string(&receipt).expect("a receipt serializes");
+    if text.len() > PART_BOUND {
+        receipt.insert(
+            "preview".into(),
+            json!({"read": {"kind": "draft", "digest": draft.digest().to_hex()}}),
+        );
+    }
+    Value::Object(receipt)
 }
 
 /// The plan's `phase` when it is a whole number from 1 to `u32::MAX`, as
@@ -304,6 +455,239 @@ pub(crate) mod tests {
             &[e1(), e2()],
             Vec::new(),
         );
+    }
+
+    /// `plan` as its draft body holds it: with `kind` `plan`.
+    pub(crate) fn as_drafted(plan: Value) -> Value {
+        let mut plan = plan;
+        plan["kind"] = json!("plan");
+        plan
+    }
+
+    /// Submits `plan` answering `order` under `capacity` through the check
+    /// and the recording, under a command whose caller carries the order and
+    /// its instructions, as `plan-submit` runs them below the session.
+    pub(crate) fn plan_submitted(
+        store: &SqliteStore,
+        plan: &Value,
+        order: &str,
+        capacity: Option<u32>,
+        request_id: &str,
+        at: &str,
+    ) -> Value {
+        let capacity = capacity.map(|capacity| NonZeroU32::new(capacity).unwrap());
+        let checked = match check(store, &project(), plan, order, capacity) {
+            Ok(checked) => checked,
+            Err(refusal) => return refusal,
+        };
+        let mut command = command("plan.submit", request_id, 8, at);
+        let on = caller()
+            .with_work_order(order)
+            .unwrap()
+            .with_instructions(checked.evidence.clone())
+            .unwrap();
+        command.caller = Some(baley_store::Caller::Server(on));
+        crate::scope::submit::answer(record(store, &command, Some(&checked)), store)
+    }
+
+    /// The digest the `draft` view's newest index names for phase 1's plan
+    /// drafts.
+    pub(crate) fn newest_plan_draft(store: &SqliteStore) -> Value {
+        let newest = store
+            .find(
+                &project(),
+                baley_core::scope::DRAFT_VIEW,
+                &crate::scope::approve::newest_query("plan", "phase/1"),
+            )
+            .unwrap();
+        newest.items[0].body["digest"].clone()
+    }
+
+    #[test]
+    fn a_plan_draft_lost_on_reopen_sized_by_estimate_or_left_newest_once_replaced_is_caught() {
+        let (dir, store) = store_c();
+        order_o(&store, R1);
+        let first = plan_submitted(&store, &pl2(), O, Some(2), R2, T5);
+        assert_eq!(first["status"], "ok", "{first}");
+        assert_eq!(first["kind"], "plan");
+        assert_eq!(first["preview"], as_drafted(pl2()));
+        assert_eq!(first["size"], 1);
+        assert_eq!(first["phase_size"], 0);
+        assert_eq!(first["reaching"], 1);
+        assert_eq!(first["capacity"], 2);
+        assert_eq!(first["now"]["round"], 1);
+        assert_eq!(
+            first["now"]["current"],
+            json!([{"id": "q1", "question": "Which store holds the ledger?",
+                "recommended": "SQLite"}])
+        );
+        let x2 = first["digest"].as_str().unwrap().to_owned();
+        let s2 = first["set"].as_str().unwrap().to_owned();
+        let order = crate::work_order::read::order(&store, &project(), O)
+            .unwrap()
+            .unwrap();
+        assert_eq!(order["state"], "answered", "{order}");
+        assert_eq!(order["drafts"], json!([x2]), "{order}");
+
+        drop(store);
+        let store = reopen(&dir);
+        let digest = baley_store::Hash::from_hex(&x2).unwrap();
+        let crate::scope::read::Draft::Held(held) =
+            crate::scope::read::draft(&store, &project(), digest).unwrap()
+        else {
+            panic!("X2's body is held");
+        };
+        assert_eq!(held.kind, "plan");
+        assert_eq!(held.submission, as_drafted(pl2()));
+
+        approve_by_hand(
+            &store,
+            R3,
+            1,
+            1,
+            baley_store::Hash([0x7d; 32]),
+            &[1],
+            2,
+            &[e1(), e2()],
+            Vec::new(),
+        );
+        let before = head(&store);
+        let over = plan_submitted(&store, &pl3(), O, Some(2), R4, T6);
+        assert_eq!(over["status"], "refused", "{over}");
+        assert_eq!(over["code"], "over-capacity", "{over}");
+        assert_eq!(over["details"], json!({"stories": [1], "size": 3}));
+        assert_eq!(head(&store), before);
+
+        let second = plan_submitted(&store, &pl3(), O, None, R5, T7);
+        assert_eq!(second["status"], "ok", "{second}");
+        let x3 = second["digest"].clone();
+        let events = history(&store);
+        let abandoned = of_type(&events, "questions.abandoned");
+        assert_eq!(abandoned.len(), 1);
+        assert_eq!(abandoned[0].payload["set"], s2.as_str());
+        assert_eq!(abandoned[0].payload["cause"], "draft-replaced");
+        assert_eq!(abandoned[0].request_id.0, R5);
+        assert_eq!(newest_plan_draft(&store), x3);
+        assert_ne!(x3, json!(x2));
+    }
+
+    /// The bytes of the payload `event`'s `body` references.
+    fn body_bytes(store: &SqliteStore, event: &baley_store::Event) -> Vec<u8> {
+        use std::io::Read;
+        let hash = baley_store::Hash::from_hex(event.payload["body"]["payload"].as_str().unwrap())
+            .unwrap();
+        let baley_store::PayloadBody::Present(mut reader) =
+            baley_store::Payloads::open(store, &hash).unwrap()
+        else {
+            panic!("the body is present");
+        };
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_plan_draft_recorded_off_its_order_or_without_record_retention_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = plan_submitted(&store, &pl1(), O, None, R2, T5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        let digest = receipt["digest"].as_str().unwrap();
+
+        let events = history(&store);
+        let drafts = of_type(&events, "scope.submitted");
+        let drafts: Vec<_> = drafts
+            .into_iter()
+            .filter(|event| event.payload["kind"] == "plan")
+            .collect();
+        assert_eq!(drafts.len(), 1);
+        let draft = drafts[0];
+        assert_eq!(draft.stream, "project");
+        assert_eq!(draft.payload["target"], "phase/1");
+        assert_eq!(draft.payload["digest"], digest);
+        assert_eq!(draft.payload["body"]["class"], "record");
+        assert_eq!(
+            body_bytes(&store, draft),
+            baley_store::canonical_json(&as_drafted(pl1())).unwrap()
+        );
+        let Some(baley_store::Caller::Server(on)) = &draft.caller else {
+            panic!("a server caller: {:?}", draft.caller);
+        };
+        assert_eq!(on.work_order(), Some(O));
+        let identities: Vec<&str> = on.instructions().iter().map(|e| e.identity()).collect();
+        assert_eq!(identities, ["bal-phase-planner"]);
+
+        let opened = of_type(&events, "questions.opened");
+        let opened: Vec<_> = opened
+            .into_iter()
+            .filter(|event| event.payload["subject"] == "plan")
+            .collect();
+        assert_eq!(opened.len(), 1);
+        assert_eq!(opened[0].stream, "phase/1");
+        assert_eq!(opened[0].payload["phase"], 1);
+        assert_eq!(opened[0].payload["plan_digest"], digest);
+        assert_eq!(opened[0].payload["questions"], json!([]));
+        assert_eq!(receipt["now"]["state"], "closed", "{receipt}");
+        assert_eq!(receipt["set"], opened[0].payload["set"]);
+    }
+
+    #[test]
+    fn a_plan_set_opened_on_the_roadmap_or_two_drafts_left_open_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let first = plan_submitted(&store, &pl2(), O, None, R2, T5);
+        let second = plan_submitted(&store, &pl2(), O, None, R3, T6);
+        assert_eq!(first["status"], "ok", "{first}");
+        assert_eq!(second["status"], "ok", "{second}");
+        assert_eq!(second["digest"], first["digest"]);
+        assert_ne!(second["set"], first["set"]);
+
+        let events = history(&store);
+        let abandoned = of_type(&events, "questions.abandoned");
+        assert_eq!(abandoned.len(), 1);
+        assert_eq!(abandoned[0].payload["set"], first["set"]);
+        assert_eq!(abandoned[0].payload["cause"], "draft-replaced");
+        assert_eq!(abandoned[0].stream, "phase/1");
+        assert_eq!(abandoned[0].request_id.0, R3);
+        let opened: Vec<_> = of_type(&events, "questions.opened")
+            .into_iter()
+            .filter(|event| event.request_id.0 == R3)
+            .collect();
+        assert_eq!(opened.len(), 1);
+        assert_eq!(opened[0].stream, "phase/1");
+        assert_eq!(opened[0].payload["plan_digest"], first["digest"]);
+        assert_eq!(opened[0].payload["set"], second["set"]);
+
+        let phase_plan = store
+            .get(
+                &project(),
+                baley_core::plan::PHASE_PLAN_VIEW,
+                &phase_plan_key(1),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            phase_plan.body["draft"],
+            json!({"digest": first["digest"], "set": second["set"]})
+        );
+    }
+
+    #[test]
+    fn a_submit_landing_beside_a_newly_active_phase_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        order_q(&store, R2);
+        let checked = check(&store, &project(), &pl1(), O, None).expect("PL1 is accepted");
+        activate_phase_2(&store, R3);
+        let before = head(&store);
+        let mut command = command("plan.submit", R4, 8, T5);
+        command.caller = Some(baley_store::Caller::Server(
+            caller().with_work_order(O).unwrap(),
+        ));
+        let answer = crate::scope::submit::answer(record(&store, &command, Some(&checked)), &store);
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
     }
 
     /// The check of `plan` under `order` with no capacity, which must refuse
