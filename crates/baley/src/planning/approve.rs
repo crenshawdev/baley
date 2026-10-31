@@ -86,9 +86,11 @@ struct Approval {
 /// plan draft is a ledger fault, never approved), its `scope.submitted` at
 /// its sequence with the body's reference, the newest plan draft of its
 /// phase, the phase's `phase_plan` document with its current draft's set and
-/// that set's facts, and last every `plan.approved` naming the digest, so
-/// one landing after that read moves the `phase_plan` document the second
-/// step observes. It judges them in D-16's order, then refuses
+/// that set's facts (a different current draft there, submitted after the
+/// newest read, standing as the newest, so the draft is `stale-draft`
+/// rather than a ledger fault), and last every `plan.approved` naming the
+/// digest, so one landing after that read moves the `phase_plan` document
+/// the second step observes. It judges them in D-16's order, then refuses
 /// `phase-not-active` naming another active phase (D-02), then gathers the
 /// phase's facts now with the policy's capacity and judges the plan again
 /// with `judge_plan` (D-16), every refusal at slot `digest`. The suite is
@@ -141,7 +143,26 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
         key,
         produced_seq: phase_plan.as_ref().map(|document| document.produced_seq),
     }];
-    let set = current_set(phase_plan.as_ref().map(|document| &document.body), digest)?;
+    let current = current_draft(phase_plan.as_ref().map(|document| &document.body), digest)?;
+    // The `phase_plan` document is read after the newest index, so a draft
+    // it holds in this one's place was submitted since: judged the newest,
+    // this draft is refused `stale-draft`, as a later run refuses it.
+    let newest = match current {
+        Current::Other(other)
+            if newest
+                .as_ref()
+                .is_none_or(|(newest, _, _)| *newest != other) =>
+        {
+            let read = preview(store, project, other).map_err(preview_failed)?;
+            let (plan, other_seq) = accept(&read)?;
+            Some((read.digest, other_seq, plan))
+        }
+        _ => newest,
+    };
+    let set = match current {
+        Current::This(set) => Some(set),
+        Current::None | Current::Other(_) => None,
+    };
     let facts = match &set {
         Some(set) => match read_set(store, project, set).map_err(busy)? {
             SetRead::Held(held) => {
@@ -185,7 +206,8 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
     })
     .map_err(|refusal| refused(&refusal))?;
     // An approved judgement had its event, a newest draft and, as the
-    // phase's current draft, a set.
+    // phase's current draft, a set: a draft replaced since was refused
+    // stale above, so a missing one here is the ledger's fault.
     let (Some(body), Some((newest_digest, newest_seq, _)), Some(set)) = (body, newest, set) else {
         return Err(unreadable(
             "the draft's record or its question set cannot be read",
@@ -451,11 +473,22 @@ fn submitted_body<L: Ledger + ?Sized>(
         .and_then(|event| PayloadRef::from_value(&event.payload["body"])))
 }
 
-/// The set of the phase's current draft when that draft is `digest`, or
-/// none. A draft that cannot be read is a ledger fault.
-fn current_set(phase_plan: Option<&Value>, digest: Hash) -> Result<Option<String>, Value> {
+/// The phase's current plan draft as its `phase_plan` document holds it,
+/// beside the draft being approved.
+enum Current {
+    /// The phase holds no unapproved draft.
+    None,
+    /// The draft being approved is current, with its set's id.
+    This(String),
+    /// Another draft, by its digest, replaced it (D-03).
+    Other(Hash),
+}
+
+/// The phase's current draft beside `digest`. A draft that cannot be read
+/// is a ledger fault.
+fn current_draft(phase_plan: Option<&Value>, digest: Hash) -> Result<Current, Value> {
     let draft = match phase_plan.and_then(|body| body.get("draft")) {
-        None | Some(Value::Null) => return Ok(None),
+        None | Some(Value::Null) => return Ok(Current::None),
         Some(draft) => draft,
     };
     let held = draft
@@ -463,7 +496,8 @@ fn current_set(phase_plan: Option<&Value>, digest: Hash) -> Result<Option<String
         .and_then(Value::as_str)
         .and_then(Hash::from_hex);
     match (held, draft.get("set").and_then(Value::as_str)) {
-        (Some(held), Some(set)) => Ok((held == digest).then(|| set.to_owned())),
+        (Some(held), Some(set)) if held == digest => Ok(Current::This(set.to_owned())),
+        (Some(held), Some(_)) => Ok(Current::Other(held)),
         _ => Err(unreadable("the phase's current plan draft cannot be read")),
     }
 }
@@ -569,12 +603,17 @@ pub(crate) mod tests {
     //! plan's data store C, P0, P3, PL1, PL2 and PL3, never from running this
     //! code.
 
+    use std::cell::RefCell;
+    use std::ops::RangeInclusive;
     use std::path::Path;
 
     use baley_core::policy::{Host, Schema, effective_policy};
     use baley_core::scope::{PROJECT_STREAM, SCOPE_SUBMITTED_VERSION, submitted_payload};
     use baley_store::{
-        Decision, NewEvent, Observed, OutcomeKind, RetentionClass, StreamName, canonical_json,
+        Anchor, Claim, ClaimId, ClaimOwner, Claimed, Decide, DecideClaim, DecideReconcile,
+        Decision, DocKey, Event, Head, IndexQuery, NewEvent, Observed, OutcomeKind, Page,
+        PayloadBody, PayloadStatus, ReconcileAuthority, RetentionClass, StreamName, VerifyReport,
+        canonical_json,
     };
     use baley_store_sqlite::SqliteStore;
 
@@ -684,6 +723,173 @@ pub(crate) mod tests {
         digest_of(&plan_submitted(&store, &pl3(), O, None, R3, T6));
         let refusal = refused_with(&store, x2, &p0(), "stale-draft");
         assert_eq!(refusal["details"], json!({"path": "goal"}));
+    }
+
+    #[test]
+    fn a_draft_replaced_between_the_approvals_reads_answered_as_an_unreadable_ledger_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x2 = digest_of(&plan_submitted(&store, &pl2(), O, None, R2, T5));
+        let reading = SubmitsDuring::new(&store, || {
+            digest_of(&plan_submitted(&store, &pl3(), O, None, R3, T6));
+        });
+        let refusal =
+            judge(&reading, &project(), x2, &p0()).expect_err("the replaced draft is refused");
+        assert!(reading.landed(), "PL3 was submitted between the reads");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "stale-draft", "{refusal}");
+        assert_eq!(refusal["slot"], "digest", "{refusal}");
+        assert_eq!(refusal["details"], json!({"path": "goal"}));
+    }
+
+    /// The real store, with `land` run once just after the first read of
+    /// the `draft` view's index returns: the window in which another plan
+    /// draft of the phase can be submitted between the first step's reads.
+    struct SubmitsDuring<'a> {
+        store: &'a SqliteStore,
+        land: RefCell<Option<Box<dyn FnOnce() + 'a>>>,
+    }
+
+    impl<'a> SubmitsDuring<'a> {
+        fn new(store: &'a SqliteStore, land: impl FnOnce() + 'a) -> Self {
+            Self {
+                store,
+                land: RefCell::new(Some(Box::new(land))),
+            }
+        }
+
+        fn landed(&self) -> bool {
+            self.land.borrow().is_none()
+        }
+    }
+
+    impl Ledger for SubmitsDuring<'_> {
+        fn transact(
+            &self,
+            command: &Command,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::transact(self.store, command, decide)
+        }
+
+        fn claim(
+            &self,
+            command: &Command,
+            decide: &mut DecideClaim<'_>,
+        ) -> Result<Claimed, StoreError> {
+            Ledger::claim(self.store, command, decide)
+        }
+
+        fn renew_lease(
+            &self,
+            project: &ProjectId,
+            claim: &ClaimId,
+            owner: &ClaimOwner,
+            at: &str,
+        ) -> Result<(), StoreError> {
+            Ledger::renew_lease(self.store, project, claim, owner, at)
+        }
+
+        fn complete(
+            &self,
+            command: &Command,
+            owner: &ClaimOwner,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::complete(self.store, command, owner, decide)
+        }
+
+        fn reconcile(
+            &self,
+            command: &Command,
+            claim: &ClaimId,
+            authority: ReconcileAuthority,
+            decide: &mut DecideReconcile<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::reconcile(self.store, command, claim, authority, decide)
+        }
+
+        fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError> {
+            Ledger::open_claims(self.store, project)
+        }
+
+        fn stream(
+            &self,
+            project: &ProjectId,
+            stream: &StreamName,
+            from_version: u64,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::stream(self.store, project, stream, from_version, page)
+        }
+
+        fn history(
+            &self,
+            project: &ProjectId,
+            range: RangeInclusive<u64>,
+            filter: &HistoryFilter,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::history(self.store, project, range, filter, page)
+        }
+
+        fn head(&self, project: &ProjectId) -> Result<Option<Head>, StoreError> {
+            Ledger::head(self.store, project)
+        }
+
+        fn verify(
+            &self,
+            project: &ProjectId,
+            anchor: Option<&Anchor>,
+        ) -> Result<VerifyReport, StoreError> {
+            Ledger::verify(self.store, project, anchor)
+        }
+    }
+
+    impl Views for SubmitsDuring<'_> {
+        fn get(
+            &self,
+            project: &ProjectId,
+            view: &str,
+            key: &DocKey,
+        ) -> Result<Option<Document>, StoreError> {
+            Views::get(self.store, project, view, key)
+        }
+
+        fn get_many(
+            &self,
+            project: &ProjectId,
+            view: &str,
+            keys: &[DocKey],
+        ) -> Result<Vec<Option<Document>>, StoreError> {
+            Views::get_many(self.store, project, view, keys)
+        }
+
+        fn find(
+            &self,
+            project: &ProjectId,
+            view: &str,
+            query: &IndexQuery,
+        ) -> Result<Page<Document>, StoreError> {
+            let read = Views::find(self.store, project, view, query);
+            if view == DRAFT_VIEW {
+                let land = self.land.borrow_mut().take();
+                if let Some(land) = land {
+                    land();
+                }
+            }
+            read
+        }
+    }
+
+    impl Payloads for SubmitsDuring<'_> {
+        fn open(&self, hash: &Hash) -> Result<PayloadBody<'_>, StoreError> {
+            Payloads::open(self.store, hash)
+        }
+
+        fn status(&self, hash: &Hash) -> Result<PayloadStatus, StoreError> {
+            Payloads::status(self.store, hash)
+        }
     }
 
     #[test]
