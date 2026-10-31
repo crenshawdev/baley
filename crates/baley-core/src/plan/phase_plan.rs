@@ -92,7 +92,8 @@ pub fn phase_plan_key(phase: u32) -> DocKey {
 ///   edit, work_order, followed}`, or null (D-09, D-11).
 ///
 /// An approval whose number is not above `highest` is refused, so no
-/// number is projected twice (PLN-R14, D-07). A replacement of a plan not
+/// number is projected twice (PLN-R14, D-07), and so is one whose size would
+/// take the phase's size past a `u64`. A replacement of a plan not
 /// in force, or at a digest other than the one approved, is refused; the
 /// replaced plan keeps its digest, stories and size. A withdrawal, a draft
 /// or a continuation of a phase with no document creates one. A story's
@@ -302,9 +303,13 @@ fn settle(document: &mut Map<String, Value>) -> Result<(), String> {
     for held in plans(document)?.iter() {
         if held["state"] == IN_FORCE {
             in_force = true;
-            size += held["size"]
+            let plan_size = held["size"]
                 .as_u64()
                 .ok_or("a held plan's size is not a whole number")?;
+            // A total past u64 would panic or wrap, so it is refused.
+            size = size
+                .checked_add(plan_size)
+                .ok_or("the phase's size would exceed a u64")?;
         }
     }
     let withdrawn = document
@@ -577,6 +582,37 @@ mod tests {
             &replaced(3, 1, 1, x(), y()),
         );
         refused(&[a(1, 1, 1, x(), &[1], 1)], &replaced(2, 1, 1, y(), z()));
+        // A replaced plan's number stays assigned though nothing is in force.
+        refused(
+            &[a(1, 1, 1, x(), &[1], 1), replaced(2, 1, 1, x(), y())],
+            &a(3, 1, 1, y(), &[1], 1),
+        );
+    }
+
+    #[test]
+    fn a_phase_size_overflowing_its_total_is_caught() {
+        let mut huge = a(1, 1, 1, x(), &[1], 1);
+        huge.payload["size"] = json!(u64::MAX);
+        let mut view = fold(&[huge]);
+        assert_eq!(view[&one()]["size"], json!(u64::MAX));
+        let before = view.clone();
+        assert!(step(&mut view, &a(2, 2, 1, y(), &[1], 1)).is_err());
+        assert_eq!(view, before);
+    }
+
+    #[test]
+    fn a_phase_event_missing_from_the_handled_types_is_caught() {
+        assert_eq!(
+            PhasePlanProjector::new().handles(),
+            [
+                "plan.approved",
+                "plan.replaced",
+                "phase.withdrawn",
+                "questions.opened",
+                "plan.continuation",
+                "plan.continuation_followed",
+            ]
+        );
     }
 
     /// A plan draft's set `set` of phase 1 for the draft at `digest`.
@@ -645,9 +681,12 @@ mod tests {
                 continuation_followed_payload(1, edit, order),
             )
         };
-        let before = view.clone();
-        assert!(step(&mut view, &followed(3, x(), "O1")).is_err());
-        assert_eq!(view, before);
+        // Stale in both, in only the edit, and in only the order.
+        for (seq, edit, order) in [(3, x(), "O1"), (3, x(), "O2"), (3, y(), "O1")] {
+            let before = view.clone();
+            assert!(step(&mut view, &followed(seq, edit, order)).is_err());
+            assert_eq!(view, before);
+        }
         step(&mut view, &followed(4, y(), "O2")).unwrap();
         assert_eq!(
             view[&one()]["continuation"],
