@@ -15,7 +15,7 @@
 use std::num::NonZeroU32;
 
 use baley_core::plan::{
-    PHASE_PLAN_VIEW, PLAN_KIND, PhaseNotActive, Plan, PlanDraft, PlanFacts, PlanRefusal,
+    PHASE_PLAN_VIEW, PLAN_KIND, PhaseNotActive, Plan, PlanDraft, PlanFacts, PlanRefusal, Replaces,
     judge_plan, judge_submit_phase, phase_plan_key,
 };
 use baley_core::policy::Role;
@@ -36,7 +36,7 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::planning::facts;
+use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
 use crate::refine::order::order_evidence;
@@ -60,6 +60,8 @@ pub struct Checked {
     pub size: u32,
     /// The capacity the plan was judged under, or none.
     pub capacity: Option<NonZeroU32>,
+    /// The approved plan a replacement replaces, or none for a new plan.
+    pub replaces: Option<Replaces>,
     /// The order's document, then the documents the phase's facts came
     /// from, each at the sequence that produced it.
     documents: Vec<ObservedDocument>,
@@ -90,6 +92,21 @@ pub fn check<S: Views + ?Sized>(
     project: &ProjectId,
     submitted: &Value,
     work_order: &str,
+    capacity: Option<NonZeroU32>,
+) -> Result<Checked, Value> {
+    checked(store, project, submitted, work_order, None, capacity)
+}
+
+/// The check `check` describes, shared with a replacement's: with
+/// `replaces`, after `phase-not-active` the replacement is judged over the
+/// phase's plans in force (D-04), and the plan is judged under the facts
+/// that judgement gives, the replaced plan's tasks and items taken off.
+pub(crate) fn checked<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    submitted: &Value,
+    work_order: &str,
+    replaces: Option<Replaces>,
     capacity: Option<NonZeroU32>,
 ) -> Result<Checked, Value> {
     let busy = |error: StoreError| store_failed(&error, NOT_RECORDED_BUSY);
@@ -133,7 +150,13 @@ pub fn check<S: Views + ?Sized>(
     let read = facts::read(store, project, phase, capacity)?;
     judge_submit_phase(phase, &read.active)
         .map_err(|refusal| phase_not_active(&refusal, "plan", NOT_RECORDED))?;
-    let plan = judge_plan(submitted, &read.facts)
+    let facts = match replaces {
+        None => read.facts.clone(),
+        Some(replaces) => {
+            replace::facts_without(store, project, phase, replaces, &read, NOT_RECORDED)?
+        }
+    };
+    let plan = judge_plan(submitted, &facts)
         .map_err(|refusal| plan_refused(&refusal, "plan", NOT_RECORDED))?;
     let evidence = order_evidence(&order.body).ok_or_else(|| {
         failed(
@@ -151,8 +174,9 @@ pub fn check<S: Views + ?Sized>(
     Ok(Checked {
         plan,
         evidence,
-        size: read.facts.size,
+        size: facts.size,
         capacity,
+        replaces,
         documents,
         absences: read.absences().to_vec(),
     })
@@ -201,7 +225,10 @@ pub fn record<L: Ledger + ?Sized>(
         // Read before anything is appended, so the set found is the earlier
         // draft's, never the one opened below.
         let earlier = current_set(tx, phase)?;
-        let draft = PlanDraft::new(plan);
+        let draft = match checked.replaces {
+            None => PlanDraft::new(plan),
+            Some(replaces) => PlanDraft::replacing(plan, replaces),
+        };
         let body = tx.put_payload(draft.body(), RetentionClass::Record)?;
         tx.append(NewEvent {
             stream: StreamName(PROJECT_STREAM.into()),

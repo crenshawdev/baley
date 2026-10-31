@@ -24,6 +24,9 @@ pub mod order;
 /// `phase plan`: the check run before admission and the run after it.
 pub mod phase_plan;
 
+/// `plan replace`: the check of a replacement, recorded as a submit is.
+pub mod replace;
+
 /// `plan submit`: the check run before admission and the recording after
 /// it.
 pub mod submit;

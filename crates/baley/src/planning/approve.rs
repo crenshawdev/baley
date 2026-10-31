@@ -6,16 +6,19 @@
 //! records nothing: the draft in D-16's order, then `phase-not-active` when
 //! a different phase is active, then the plan judged again against the
 //! phase as it stands now. Build 4 T14 adds `review-unsettled` after these
-//! refusals, judged against the same digest. The second step records one
-//! `plan.approved` as the owner with the next plan number, confirming
+//! refusals, judged against the same digest. A replacement draft is judged
+//! by the replacement judge again before its plan is. The second step
+//! records one `plan.approved` as the owner with the next plan number, and
+//! for a replacement `plan.replaced` with it, confirming
 //! inside its transaction that nothing the first step read has moved.
 
 use std::collections::BTreeMap;
 
 use baley_core::plan::{
-    DraftRead, PHASE_PLAN_VIEW, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_KIND, Plan,
-    PlanApproval, PlanApprovalFacts, PlanApprovalRefusal, PlanDraft, RecordedPlan, judge_plan,
-    judge_plan_approval, judge_submit_phase, phase_plan_key, phase_stream, read_plan_draft,
+    DraftRead, PHASE_PLAN_VIEW, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_KIND, PLAN_REPLACED,
+    PLAN_REPLACED_VERSION, Plan, PlanApproval, PlanApprovalFacts, PlanApprovalRefusal, PlanDraft,
+    RecordedPlan, Replaces, judge_plan, judge_plan_approval, judge_submit_phase, phase_plan_key,
+    phase_stream, read_plan_draft, replaced_payload,
 };
 use baley_core::policy::{EffectivePolicy, Value as Setting};
 use baley_core::questions::{QUESTIONS_VIEW, SetFacts, questions_key};
@@ -30,8 +33,8 @@ use serde_json::{Value, json};
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::planning::facts;
 use crate::planning::submit::{phase_not_active, plan_refused};
+use crate::planning::{facts, replace};
 use crate::questions::read::{SetRead, read as read_set};
 use crate::scope::approve::newest_query;
 use crate::scope::read::{Preview, PreviewError, preview, preview_of};
@@ -58,6 +61,8 @@ pub struct Judged {
     approved_before: bool,
     /// The plan, judged again against the phase as it stands.
     plan: Plan,
+    /// The approved plan the draft replaces, or none for a new plan.
+    replaces: Option<Replaces>,
     /// The evidence items exactly as submitted.
     evidence_map: Vec<Value>,
     /// The id of the draft's question set.
@@ -95,8 +100,11 @@ struct Approval {
 /// phase's facts now with the policy's capacity and judges the plan again
 /// with `judge_plan` (D-16), every refusal at slot `digest`. The suite is
 /// the policy's `workflow.test_command`, none when it is not set (D-14).
-/// Nothing is recorded. A replacement draft's judgement is Plan 7's, in
-/// this same step.
+/// A draft whose body names the plan it replaces is judged, after
+/// `phase-not-active`, by the replacement judge again over the phase now,
+/// `no-such-plan` or `admitted-plan` at slot `replaces`, and its plan judged
+/// with the replaced plan's tasks and items off the phase (D-04). Nothing is
+/// recorded.
 pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -217,9 +225,19 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
     let read = facts::read(store, project, phase, facts::capacity(policy))?;
     judge_submit_phase(phase, &read.active)
         .map_err(|refusal| phase_not_active(&refusal, "digest", NOT_APPROVED))?;
-    let plan = judge_plan(&target.plan, &read.facts)
+    let facts = match target.replaces {
+        None => read.facts.clone(),
+        Some(replaces) => {
+            replace::facts_without(store, project, phase, replaces, &read, NOT_APPROVED)?
+        }
+    };
+    let plan = judge_plan(&target.plan, &facts)
         .map_err(|refusal| plan_refused(&refusal, "digest", NOT_APPROVED))?;
-    if PlanDraft::new(&plan).digest() != digest {
+    let draft = match target.replaces {
+        None => PlanDraft::new(&plan),
+        Some(replaces) => PlanDraft::replacing(&plan, replaces),
+    };
+    if draft.digest() != digest {
         return Err(unreadable(
             "the draft's body no longer reads as the plan it was submitted as",
         ));
@@ -235,6 +253,7 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
         newest: (newest_digest, newest_seq),
         approved_before: approvals.iter().any(|approval| approval.seq < seq),
         plan,
+        replaces: target.replaces,
         evidence_map,
         set,
         suite: suite(policy),
@@ -255,7 +274,9 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
 /// and appends `plan.approved` on `phase/<n>` with the phase, the number,
 /// the digest, the stories, the size, the suite or null, the set, the
 /// evidence map inline exactly as submitted and the body's reference
-/// attached as it is held. The decision observes every document the first
+/// attached as it is held; for a replacement, then `plan.replaced` naming
+/// the phase, the old number, the old digest and the new one, the owner and
+/// the time, in the same transaction (D-04, D-07). The decision observes every document the first
 /// step read and declares its absences, so anything moved since, a phase
 /// made active among them, makes the call `ledger-busy` with nothing
 /// recorded. A retry of a request the store holds is answered from its
@@ -264,7 +285,8 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
 ///
 /// The receipt: `status`, `kind`, `digest`, `phase`, `plan`, `stories`,
 /// `size`, `suite` (null when none, with `notice` naming
-/// `workflow.test_command` and why it matters), `set`, `owner` and `at`.
+/// `workflow.test_command` and why it matters), `set`, `owner`, `at` and,
+/// for a replacement, `replaces` naming the plan replaced and its digest.
 pub fn record<L: Ledger + ?Sized>(
     store: &L,
     command: &Command,
@@ -316,6 +338,25 @@ pub fn record<L: Ledger + ?Sized>(
             payload: approval.payload(),
             attachments: vec![judged.body.clone()],
         })?;
+        // The new number is assigned first, so the replaced plan's number
+        // stays counted in `highest` and is never assigned again (D-07).
+        if let Some(replaces) = judged.replaces {
+            tx.append(NewEvent {
+                stream: StreamName(phase_stream(phase)),
+                type_name: PLAN_REPLACED.into(),
+                type_version: PLAN_REPLACED_VERSION,
+                git: None,
+                payload: replaced_payload(
+                    phase,
+                    replaces.plan,
+                    replaces.digest,
+                    judged.digest,
+                    owner,
+                    &at,
+                ),
+                attachments: Vec::new(),
+            })?;
+        }
         let mut receipt = json!({
             "status": "ok",
             "kind": PLAN_KIND,
@@ -329,6 +370,10 @@ pub fn record<L: Ledger + ?Sized>(
             "owner": owner,
             "at": at,
         });
+        if let Some(replaces) = judged.replaces {
+            receipt["replaces"] =
+                json!({"plan": replaces.plan, "digest": replaces.digest.to_hex()});
+        }
         if judged.suite.is_none() {
             receipt["notice"] = json!(format!(
                 "{SUITE_SETTING} is not set, so the plan was approved with no suite and cannot be admitted to execution until it is set"
