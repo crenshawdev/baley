@@ -3,7 +3,12 @@
 //! the views; the planner order itself, issued on its phase's stream with
 //! one live per phase and handed to a session once an approval issued it;
 //! and `phase plan`, which chooses between drafting a changed commitment,
-//! issuing an order and handing one over.
+//! issuing an order and handing one over; then `plan submit`, which checks a
+//! planner's plan against its order and the phase, over facts read from the
+//! views.
+
+/// The facts a plan is judged on, read from the views.
+pub mod facts;
 
 /// What a planner order binds at issue, read outside any transaction.
 pub mod inputs;
@@ -14,6 +19,9 @@ pub mod order;
 
 /// `phase plan`: the check run before admission and the run after it.
 pub mod phase_plan;
+
+/// `plan submit`: the check run before admission.
+pub mod submit;
 
 #[cfg(test)]
 pub(crate) mod fixtures {
