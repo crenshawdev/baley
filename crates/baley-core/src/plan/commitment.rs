@@ -338,6 +338,22 @@ mod tests {
         assert_eq!(refusal.details(), json!({"story": 2, "phase": 2}));
         stories[3].phase = None;
         assert_eq!(judged(&stories, &active, held), Ok(PhasePlanPath::Draft));
+        // The missing story comes later, so judging story by story would
+        // answer story-unrefined first.
+        let mixed = [
+            SelectedStory {
+                refined: false,
+                ..ready(3)
+            },
+            SelectedStory {
+                held: false,
+                ..ready(4)
+            },
+        ];
+        assert_eq!(
+            judged(&mixed, &active, held),
+            Err(CommitmentRefusal::NoSuchStory { story: 4 })
+        );
     }
 
     #[test]
