@@ -1,10 +1,12 @@
-//! Plans' pure half (design 0005 sections 3 and 6, PLN-R5, PLN-R9's judge,
-//! PLN-R11 to PLN-R13): the judgement of one submitted plan whole against
-//! the phase's facts, the refusal codes it answers with, and the accepted
-//! plan only that judgement builds; a plan draft's body, digest and target,
-//! built from an accepted plan alone; and the four plan events on a
-//! phase's stream, `plan.approved`, `plan.replaced`, `plan.continuation`
-//! and `plan.continuation_followed`, with their payloads.
+//! Plans' pure half (design 0005 sections 3, 5 and 6, PLN-R5, PLN-R9's
+//! judge, PLN-R11 to PLN-R15, PLN-R26 and PLN-R27): the judgement of one
+//! submitted plan whole against the phase's facts, the refusal codes it
+//! answers with, and the accepted plan only that judgement builds; a plan
+//! draft's body, digest and target, built from an accepted plan alone; the
+//! judgement of a plan approval and of a replacement, with the phase facts a
+//! replacement is judged under; and the four plan events on a phase's
+//! stream, `plan.approved`, `plan.replaced`, `plan.continuation` and
+//! `plan.continuation_followed`, with their payloads.
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
@@ -21,6 +23,7 @@ mod fixtures;
 mod judge;
 mod lease;
 mod link;
+mod replace;
 mod stories;
 mod submission;
 mod task;
@@ -45,5 +48,9 @@ pub use judge::{
     TRUTH_WITHOUT_OBSERVATION, TYPED_CONTENT, UNCOVERED_TRUTH, judge_plan,
 };
 pub use lease::{inside_lease, plain_relative_path};
+pub use replace::{
+    ADMITTED_PLAN, NO_SUCH_PLAN, PlanInForce, ReplacementFacts, ReplacementRefusal,
+    judge_replacement,
+};
 pub use submission::{PLAN_KIND, PlanDraft, RecordedPlan, Replaces, read_plan_draft};
 pub use task::Task;
