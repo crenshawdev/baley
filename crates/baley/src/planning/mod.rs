@@ -1,7 +1,9 @@
 //! A phase's planning over the storage port (design 0005 sections 4 and 5,
-//! D-01, D-11, D-12, D-15): what a planner order binds at issue, read from the
-//! views, and the planner order itself, issued on its phase's stream with
-//! one live per phase and handed to a session once an approval issued it.
+//! D-01, D-08 to D-12, D-15): what a planner order binds at issue, read from
+//! the views; the planner order itself, issued on its phase's stream with
+//! one live per phase and handed to a session once an approval issued it;
+//! and `phase plan`, which chooses between drafting a changed commitment,
+//! issuing an order and handing one over.
 
 /// What a planner order binds at issue, read outside any transaction.
 pub mod inputs;
@@ -9,6 +11,9 @@ pub mod inputs;
 /// The planner's work order: its preparation, its issue on `phase/<n>`, the
 /// pending lookup and refusal, and the hand-over of an approved order.
 pub mod order;
+
+/// `phase plan`: the check run before admission and the run after it.
+pub mod phase_plan;
 
 #[cfg(test)]
 pub(crate) mod fixtures {
@@ -19,9 +24,17 @@ pub(crate) mod fixtures {
     use std::collections::BTreeSet;
     use std::path::Path;
 
-    use baley_core::plan::{PLAN_APPROVED, PLAN_APPROVED_VERSION, PlanApproval, phase_stream};
+    use baley_core::plan::{
+        CommittedStory, CurrentTruth, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_KIND,
+        PlanApproval, PlanDraft, PlanFacts, judge_plan, phase_stream,
+    };
     use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, Schema, effective_policy};
-    use baley_core::scope::{ChangeKind, ROADMAP_STREAM};
+    use baley_core::questions::answered_payload;
+    use baley_core::questions::{QUESTION_ANSWERED, QUESTION_ANSWERED_VERSION, Subject};
+    use baley_core::scope::{
+        ChangeKind, PROJECT_STREAM, ROADMAP_STREAM, SCOPE_SUBMITTED, SCOPE_SUBMITTED_VERSION,
+        submitted_payload,
+    };
     use baley_core::truth::{STORY_REFINED, STORY_REFINED_VERSION};
     use baley_store::{
         Decision, Hash, NewEvent, Observed, OutcomeKind, RetentionClass, StreamName, canonical_json,
@@ -190,6 +203,105 @@ pub(crate) mod fixtures {
         plan["goal"] = json!("Record again");
         plan["tasks"][0]["id"] = json!("k2");
         plan
+    }
+
+    /// Makes phase 2 active: its plan 1 approved by hand under `request_id`.
+    pub(crate) fn activate_phase_2(store: &SqliteStore, request_id: &str) {
+        approve_by_hand(
+            store,
+            request_id,
+            2,
+            1,
+            Hash([0x7e; 32]),
+            &[2],
+            1,
+            &[],
+            Vec::new(),
+        );
+    }
+
+    /// Records PL2 as phase 1's draft with its set opened, under `request_id`
+    /// at T4, then `q1` answered `Postgres`, not the recommendation, under
+    /// `answer_request_id` at T5, as phase 8's set close leaves a rejected
+    /// recommendation. Gives the draft's body as recorded and the set's id.
+    pub(crate) fn pl2_rejected(
+        store: &SqliteStore,
+        request_id: &str,
+        answer_request_id: &str,
+    ) -> (Value, String) {
+        let truth = |id: &str, trigger: &str, observer: &str, outcome: &str| CurrentTruth {
+            id: id.into(),
+            version: 1,
+            trigger: trigger.into(),
+            observer: observer.into(),
+            outcome: outcome.into(),
+            human_verify: None,
+        };
+        let facts = PlanFacts {
+            stories: vec![CommittedStory {
+                id: 1,
+                truths: vec![
+                    truth(
+                        "t1",
+                        "the owner approves a draft by a stale digest",
+                        "the owner",
+                        "stale-draft naming the first differing part",
+                    ),
+                    truth(
+                        "t2",
+                        "order the answers of a set are recorded in",
+                        "a ledger reader",
+                        "the same round",
+                    ),
+                ],
+            }],
+            approved: Vec::new(),
+            size: 0,
+            capacity: None,
+        };
+        let plan = judge_plan(&pl2(), &facts).expect("PL2 is accepted");
+        let draft = PlanDraft::new(&plan);
+        let mut set = String::new();
+        store
+            .transact(&command("test.plan", request_id, 8, T4), &mut |tx| {
+                let body = tx.put_payload(draft.body(), RetentionClass::Record)?;
+                tx.append(NewEvent {
+                    stream: StreamName(PROJECT_STREAM.into()),
+                    type_name: SCOPE_SUBMITTED.into(),
+                    type_version: SCOPE_SUBMITTED_VERSION,
+                    git: None,
+                    payload: submitted_payload(draft.digest(), PLAN_KIND, draft.target(), &body),
+                    attachments: vec![body],
+                })?;
+                let subject = Subject::Plan {
+                    phase: 1,
+                    plan_digest: draft.digest(),
+                };
+                set = crate::questions::record::open(tx, plan.questions(), &subject, T4)?;
+                Ok(Decision {
+                    kind: OutcomeKind::Done,
+                    answer: json!({"status": "ok"}),
+                    sensitive: false,
+                    observed: Observed::default(),
+                    git: None,
+                })
+            })
+            .expect("PL2 is drafted");
+        append(
+            store,
+            answer_request_id,
+            T5,
+            vec![NewEvent {
+                stream: StreamName(phase_stream(1)),
+                type_name: QUESTION_ANSWERED.into(),
+                type_version: QUESTION_ANSWERED_VERSION,
+                git: None,
+                payload: answered_payload(&set, "q1", 1, "Postgres", false, "Ada Owner", T5),
+                attachments: Vec::new(),
+            }],
+        );
+        let body = serde_json::from_slice(draft.body()).expect("a draft body is JSON");
+        (body, set)
     }
 
     /// Appends, under `request_id` in its own transaction, a `plan.approved`
