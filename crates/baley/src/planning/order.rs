@@ -22,14 +22,15 @@ use baley_core::plan::{
     PLANNER_ORDER_PENDING, continuation_followed_payload, phase_plan_key, phase_stream,
 };
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, Role};
+use baley_core::questions::SetFacts;
 use baley_core::work_order::{
     PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_NOT_PENDING, WORK_ORDER_VIEW, phase_subject,
     work_order_key,
 };
 use baley_store::{
-    Absence, Command, Decision, Hash, IndexQuery, InstructionEvidence, KeyValue, Ledger, NewEvent,
-    Observed, ObservedDocument, OutcomeKind, PageRequest, Payloads, ProjectId, StoreError,
-    StreamName, Transaction, Views,
+    Absence, Command, Decision, Document, Hash, IndexQuery, InstructionEvidence, KeyValue, Ledger,
+    NewEvent, Observed, ObservedDocument, OutcomeKind, PageRequest, Payloads, ProjectId,
+    StoreError, StreamName, Transaction, Views,
 };
 use serde_json::{Map, Value, json};
 
@@ -38,6 +39,7 @@ use crate::instruction::planner::IDENTITY;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::inputs::{self, Revision};
+use crate::planning::phase_plan::read_readiness;
 use crate::scope::submit::NOT_RECORDED_BUSY;
 use crate::work_order::issue::{self, Input, Issue, launch, prompt};
 use crate::work_order::route::{IssuedRoute, compose};
@@ -143,15 +145,7 @@ pub fn prepare<S: Views + Payloads + ?Sized>(
     id: &str,
 ) -> Result<PreparedOrder, Value> {
     let instructions = vec![crate::instruction::evidence(IDENTITY)?];
-    let route = compose(
-        policy,
-        command.policy_version,
-        host,
-        Role::Planner,
-        NonZeroU32::MIN,
-        names,
-    )
-    .map_err(|refusal| Refusal::new(refusal.code(), refusal.to_string()).value())?;
+    let route = route(command, policy, host, names)?;
     let read = inputs::read(store, &command.project, phase, stories, policy, revision)?;
     Ok(PreparedOrder {
         id: id.into(),
@@ -161,6 +155,67 @@ pub fn prepare<S: Views + Payloads + ?Sized>(
         inputs: read.inputs,
         documents: read.documents,
     })
+}
+
+/// Prepares the revision order a close of plan draft `revision.draft`'s set
+/// issues over MCP, as `id` for `command`'s project (D-15, PLN-R27): as
+/// [`prepare`] prepares a revision for phase `phase`'s committed stories in
+/// their order, its `questions` input built from `closed`, the set's facts
+/// with the closing call's own answers and deferrals. The caller issues it
+/// inside its own transaction with [`PreparedOrder::issue_within`]. Nothing
+/// is recorded. A fault is the answer to give.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_revision<S: Views + Payloads + ?Sized>(
+    store: &S,
+    command: &Command,
+    phase: u32,
+    revision: Revision<'_>,
+    closed: &SetFacts,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Result<PreparedOrder, Value> {
+    let readiness = read_readiness(store, &command.project, phase, &[])?;
+    let stories = readiness.committed();
+    let instructions = vec![crate::instruction::evidence(IDENTITY)?];
+    let route = route(command, policy, host, names)?;
+    let read = inputs::read_closing(
+        store,
+        &command.project,
+        phase,
+        stories,
+        policy,
+        revision,
+        closed,
+    )?;
+    Ok(PreparedOrder {
+        id: id.into(),
+        phase,
+        route,
+        instructions,
+        inputs: read.inputs,
+        documents: read.documents,
+    })
+}
+
+/// The planner's route at attempt 1 under `policy` at `command`'s policy
+/// version, for `host` with the catalog `names`.
+fn route(
+    command: &Command,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+) -> Result<IssuedRoute, Value> {
+    compose(
+        policy,
+        command.policy_version,
+        host,
+        Role::Planner,
+        NonZeroU32::MIN,
+        names,
+    )
+    .map_err(|refusal| Refusal::new(refusal.code(), refusal.to_string()).value())
 }
 
 /// Issues `prepared` under `command`, the command its caller prepared, in
@@ -198,6 +253,25 @@ pub fn pending_planner<S: Views + ?Sized>(
     project: &ProjectId,
     phase: u32,
 ) -> Result<Option<String>, StoreError> {
+    Ok(
+        pending_planner_order(store, project, phase)?.map(|document| {
+            document
+                .body
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        }),
+    )
+}
+
+/// The `work_order` document of phase `phase`'s pending planner order, the
+/// one [`pending_planner`] names, or none.
+pub fn pending_planner_order<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    phase: u32,
+) -> Result<Option<Document>, StoreError> {
     let query = IndexQuery {
         index: WORK_ORDER_LIVE_INDEX.into(),
         equals: live(phase),
@@ -210,15 +284,7 @@ pub fn pending_planner<S: Views + ?Sized>(
         .find(project, WORK_ORDER_VIEW, &query)?
         .items
         .into_iter()
-        .next()
-        .map(|document| {
-            document
-                .body
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
-        }))
+        .next())
 }
 
 /// The refusal for phase `phase`'s pending planner order `pending`, with

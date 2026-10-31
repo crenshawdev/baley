@@ -17,7 +17,7 @@ use baley_core::plan::{
     phase_plan_key,
 };
 use baley_core::policy::{EffectivePolicy, Value as Setting};
-use baley_core::questions::{QUESTIONS_VIEW, questions_key};
+use baley_core::questions::{QUESTIONS_VIEW, SetFacts, questions_key};
 use baley_core::scope::{
     DRAFT_VIEW, PHASE_DETAIL_VIEW, PHASE_VIEW, ROADMAP_VIEW, draft_key, phase_key, roadmap_key,
 };
@@ -96,6 +96,44 @@ pub fn read<S: Views + Payloads + ?Sized>(
     stories: &[u32],
     policy: &EffectivePolicy,
     revision: Option<Revision<'_>>,
+) -> Result<PlannerInputs, Value> {
+    read_with(store, project, phase, stories, policy, revision, None)
+}
+
+/// Reads what the revision order a set's close issues binds, as [`read`]
+/// reads a revision, but with its `questions` input built from `closed`,
+/// the set's facts with the closing call's own answers and deferrals, which
+/// are not yet recorded (D-15). The closing call's recording observes the
+/// set's document, so it is not among the documents read here.
+pub fn read_closing<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    phase: u32,
+    stories: &[u32],
+    policy: &EffectivePolicy,
+    revision: Revision<'_>,
+    closed: &SetFacts,
+) -> Result<PlannerInputs, Value> {
+    read_with(
+        store,
+        project,
+        phase,
+        stories,
+        policy,
+        Some(revision),
+        Some(closed),
+    )
+}
+
+/// [`read`], with a revision's set facts taken from `closed` when given.
+fn read_with<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    phase: u32,
+    stories: &[u32],
+    policy: &EffectivePolicy,
+    revision: Option<Revision<'_>>,
+    closed: Option<&SetFacts>,
 ) -> Result<PlannerInputs, Value> {
     // Every sequence is read before the content it covers, so a document
     // that moves before its content is read shows as moved at the issue.
@@ -183,7 +221,7 @@ pub fn read<S: Views + Payloads + ?Sized>(
     inputs.push((APPROVED_ITEMS_INPUT, encoded(&items)?));
 
     if let Some(revision) = revision {
-        let (draft, draft_seq, set, set_seq) = revised(store, project, revision)?;
+        let (draft, draft_seq, set, set_seq) = revised(store, project, revision, closed)?;
         inputs.push((DRAFT_INPUT, encoded(&draft)?));
         inputs.push((QUESTIONS_INPUT, encoded(&set)?));
         documents.push(observed(
@@ -191,11 +229,13 @@ pub fn read<S: Views + Payloads + ?Sized>(
             draft_key(revision.draft),
             Some(draft_seq),
         ));
-        documents.push(observed(
-            QUESTIONS_VIEW,
-            questions_key(revision.set),
-            Some(set_seq),
-        ));
+        if let Some(set_seq) = set_seq {
+            documents.push(observed(
+                QUESTIONS_VIEW,
+                questions_key(revision.set),
+                Some(set_seq),
+            ));
+        }
     }
     Ok(PlannerInputs { inputs, documents })
 }
@@ -284,12 +324,14 @@ fn in_force_items<S: Views + ?Sized>(
 
 /// A revision's draft plan and its set's body, with the sequences that
 /// produced the `draft` and `questions` documents, each read before its
-/// content.
+/// content. With `closed` given, the set's body is built from it and the
+/// set is not read, so no `questions` sequence comes back.
 fn revised<S: Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
     revision: Revision<'_>,
-) -> Result<(Value, u64, Value, u64), Value> {
+    closed: Option<&SetFacts>,
+) -> Result<(Value, u64, Value, Option<u64>), Value> {
     let draft_seq = produced(store, project, DRAFT_VIEW, draft_key(revision.draft))?
         .ok_or_else(|| unreadable(DRAFT_VIEW))?;
     let draft = match read::preview(store, project, revision.draft) {
@@ -299,12 +341,15 @@ fn revised<S: Views + Payloads + ?Sized>(
         }
         Err(PreviewError::Store(error)) => return Err(busy(error)),
     };
+    if let Some(closed) = closed {
+        return Ok((draft, draft_seq, questions_body(revision.set, closed), None));
+    }
     let held = match read_set(store, project, revision.set).map_err(busy)? {
         SetRead::Held(held) => held,
         SetRead::NotHeld | SetRead::Unreadable(_) => return Err(unreadable(QUESTIONS_VIEW)),
     };
     let set = questions_body(revision.set, &held.facts);
-    Ok((draft, draft_seq, set, held.produced_seq))
+    Ok((draft, draft_seq, set, Some(held.produced_seq)))
 }
 
 /// The sequence that produced the document `key` of `view`, or none.

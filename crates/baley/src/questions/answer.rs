@@ -25,7 +25,10 @@ use crate::envelope::{LEDGER_BUSY, Refusal};
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::questions::read::{RELAY, SetRead, no_such_question_set, read as read_set, round_value};
+use crate::planning::order::{self as planner, planner_absences};
+use crate::questions::read::{
+    PlanSubject, RELAY, SetRead, no_such_question_set, read as read_set, round_value,
+};
 use crate::refine::order::{PreparedOrder, analyzer_absences};
 
 /// The command kind an answer call is recorded under, on either surface.
@@ -48,6 +51,8 @@ pub struct Checked {
     pub settled: Settled,
     /// The story whose set this is, or none for a plan draft's set.
     pub story: Option<u32>,
+    /// The plan draft whose set this is, or none for a story's set.
+    pub plan: Option<PlanSubject>,
     /// The set's questions as submitted.
     pub questions: Vec<Question>,
 }
@@ -135,23 +140,30 @@ pub fn check<V: Views + ?Sized>(
         produced_seq: held.produced_seq,
         settled,
         story: held.story,
+        plan: held.plan,
         questions: held.facts.questions,
     })
 }
 
-/// What an answer call's recording does about its story's drafting order.
+/// What an answer call's recording does about the order its set's close
+/// issues.
 #[derive(Debug, Clone, Copy)]
 pub enum Drafting<'a> {
-    /// Nothing: the call leaves a question open, answers a plan draft's set,
-    /// or is given at the terminal, where an owner command issues no work
-    /// order (ADR 0044).
+    /// Nothing: the call leaves a question open, closes a plan draft's set
+    /// with no answer rejecting a recommendation, or is given at the
+    /// terminal, where an owner command issues no work order (ADR 0044).
     None,
     /// The call closes a story's set over MCP, so this prepared drafting
     /// order is issued with the answers (D-08).
     Issue(&'a PreparedOrder),
+    /// The call closes a plan draft's set over MCP with an answer rejecting
+    /// a recommendation, so this prepared planner revision order is issued
+    /// with the answers (D-15, PLN-R27).
+    Revise(&'a planner::PreparedOrder),
     /// The call closes a story's set over MCP beside the story's pending
-    /// analyzer order, read from this `work_order` document, so no order is
-    /// issued (D-09).
+    /// analyzer order, or a plan draft's set that a revision would follow
+    /// beside the phase's pending planner order, read from this `work_order`
+    /// document, so no order is issued (D-09, D-11).
     HeldBy(&'a ObservedDocument),
 }
 
@@ -161,10 +173,12 @@ pub enum Drafting<'a> {
 /// caller are recorded as the caller built them. A drafting order to issue
 /// is issued in the same transaction (D-08), its decision declaring that no
 /// analyzer order of the story is pending (D-09) and observing the documents
-/// its inputs were read from beside the set's. A drafting order held back by
-/// a pending analyzer order observes that order's document instead, so an
-/// order settled since makes the call `ledger-busy` with nothing recorded
-/// rather than closing the set with no drafting order. A request the store
+/// its inputs were read from beside the set's; a planner revision order to
+/// issue is issued the same way, declaring that no planner order of the
+/// phase is pending (D-11, D-15). An order held back by a pending analyzer
+/// or planner order observes that order's document instead, so an order
+/// settled since makes the call `ledger-busy` with nothing recorded rather
+/// than closing the set with no order. A request the store
 /// already holds is replayed from its record before any decision runs; a
 /// decision asked to run without the check's read records nothing.
 pub fn record<L: Ledger + ?Sized>(
@@ -199,12 +213,18 @@ pub fn record<L: Ledger + ?Sized>(
             }],
             ..Observed::default()
         };
-        let drafted = match drafting {
+        let issued = match drafting {
             Drafting::Issue(order) => {
                 let members = order.issue_within(tx, &checked.set, &command.recorded_at)?;
                 observed.documents.extend(order.documents().iter().cloned());
                 observed.absences = analyzer_absences(order.story());
-                Some(members)
+                Some(("drafting", members))
+            }
+            Drafting::Revise(order) => {
+                let members = order.issue_within(tx, &command.recorded_at)?;
+                observed.documents.extend(order.documents().iter().cloned());
+                observed.absences = planner_absences(order.phase());
+                Some(("revision", members))
             }
             Drafting::HeldBy(pending) => {
                 observed.documents.push(pending.clone());
@@ -213,9 +233,17 @@ pub fn record<L: Ledger + ?Sized>(
             Drafting::None => None,
         };
         let after = checked.settled.round_after(owner, &command.recorded_at);
+        let ready = checked.plan.is_some() && after.answered.iter().all(|answer| answer.accepted);
         Ok(Decision {
             kind: OutcomeKind::Done,
-            answer: receipt_value(&checked.set, round, &command.recorded_at, &after, drafted),
+            answer: receipt_value(
+                &checked.set,
+                round,
+                &command.recorded_at,
+                &after,
+                ready,
+                issued,
+            ),
             sensitive: false,
             observed,
             git: None,
@@ -226,15 +254,20 @@ pub fn record<L: Ledger + ?Sized>(
 /// The receipt of a call recorded in `round` at `at`: the set, the round
 /// recorded, the time, and in `now` the set's round as it stands after the
 /// call. A call that closed a story's set over MCP adds `drafting`, the
-/// analyzer's drafting order it issued (D-08). A receipt cannot be cut into
-/// parts, so when that round would pass the part bound `now` names the
-/// `document` read instead.
+/// analyzer's drafting order it issued (D-08). A call that closed a plan
+/// draft's set with no answer rejecting a recommendation adds `ready` true
+/// on either surface, since the draft may then be approved; one that closed
+/// it over MCP with such an answer adds `revision`, the planner's revision
+/// order it issued (D-15, PLN-R27). A receipt cannot be cut into parts, so
+/// when that round would pass the part bound `now` names the `document` read
+/// instead.
 fn receipt_value(
     set: &str,
     round: u32,
     at: &str,
     after: &Round,
-    drafting: Option<Map<String, Value>>,
+    ready: bool,
+    issued: Option<(&str, Map<String, Value>)>,
 ) -> Value {
     let mut receipt = Map::new();
     receipt.insert("status".into(), json!("ok"));
@@ -242,11 +275,14 @@ fn receipt_value(
     receipt.insert("round".into(), json!(round));
     receipt.insert("recorded_at".into(), json!(at));
     if after.state == SetState::Closed {
-        // Every question is answered or deferred. A plan draft's close
-        // outputs, `ready` or the planner's revision order, are T9's and plug
-        // in here; until then a plan draft's receipt only says `closed`.
-        if let Some(drafting) = drafting {
-            receipt.insert("drafting".into(), Value::Object(drafting));
+        // Every question is answered or deferred, so the close's outputs
+        // are given: a story's drafting order, or a plan draft's `ready` or
+        // revision order. A close at the terminal issues no order.
+        if ready {
+            receipt.insert("ready".into(), json!(true));
+        }
+        if let Some((name, order)) = issued {
+            receipt.insert(name.into(), Value::Object(order));
         }
     }
     with_now(receipt, set, after)
@@ -963,5 +999,59 @@ pub(crate) mod tests {
         assert_eq!(close["now"]["state"], "closed", "{close}");
         assert!(close.get("drafting").is_none(), "{close}");
         assert!(of_type(&history(&store), "work_order.issued").is_empty());
+    }
+
+    #[test]
+    fn a_terminal_close_issuing_a_revision_or_a_story_set_saying_ready_is_caught() {
+        use crate::planning::fixtures::{pl2, store_c};
+        use crate::planning::order::tests::O;
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let submitted = plan_submitted(&store, &pl2(), O, None, R2, T5);
+        assert_eq!(submitted["status"], "ok", "{submitted}");
+        let s2 = submitted["set"].as_str().unwrap().to_owned();
+        let orders = |store: &SqliteStore| {
+            of_type(&history(store), "work_order.issued")
+                .iter()
+                .map(|event| event.payload["id"].clone())
+                .collect::<Vec<_>>()
+        };
+        let before = orders(&store);
+        assert_eq!(before, [json!(O)]);
+
+        // As `baley questions answer` runs it: the owner's command, no
+        // session caller.
+        let terminal = |request_id: &str| {
+            let mut command = command(ANSWER_COMMAND, request_id, 4, T6);
+            command.actor = baley_store::Actor::Owner;
+            command.caller = None;
+            command
+        };
+        let plan = run(
+            &store,
+            &s2,
+            &json!([own("q1", "Postgres")]),
+            &terminal(R3),
+            OWNER,
+        );
+        assert_eq!(plan["status"], "ok", "{plan}");
+        assert_eq!(plan["now"]["state"], "closed", "{plan}");
+        assert!(plan.get("ready").is_none(), "{plan}");
+        assert!(plan.get("revision").is_none(), "{plan}");
+
+        let one = judge_set(
+            &json!([{"id": "q1", "question": "Which store backs the ledger?",
+            "recommended": "SQLite", "depends_on": []}]),
+        )
+        .unwrap();
+        let set = open_set(&store, R4, &one, &story(1));
+        let story_set = run(&store, &set, &json!([take("q1")]), &terminal(R5), OWNER);
+        assert_eq!(story_set["status"], "ok", "{story_set}");
+        assert_eq!(story_set["now"]["state"], "closed", "{story_set}");
+        assert!(story_set.get("ready").is_none(), "{story_set}");
+        assert!(story_set.get("drafting").is_none(), "{story_set}");
+        assert_eq!(orders(&store), before);
     }
 }

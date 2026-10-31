@@ -9,7 +9,7 @@
 use baley_core::questions::{
     Pending, QUESTIONS_VIEW, Round, SetFacts, UnreadableSet, questions_key, round_of, set_facts,
 };
-use baley_store::{ProjectId, StoreError, Views};
+use baley_store::{Hash, ProjectId, StoreError, Views};
 use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
@@ -106,6 +106,18 @@ pub struct HeldSet {
     /// The story whose set this is, read from the set's subject, or none for
     /// a plan draft's set.
     pub story: Option<u32>,
+    /// The plan draft whose set this is, read from the set's subject, or none
+    /// for a story's set.
+    pub plan: Option<PlanSubject>,
+}
+
+/// The plan draft a set belongs to: its phase and the draft's digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanSubject {
+    /// The phase the draft plans.
+    pub phase: u32,
+    /// The draft's digest.
+    pub draft: Hash,
 }
 
 /// What a read of one set found.
@@ -139,7 +151,7 @@ pub fn read<V: Views + ?Sized>(
             "the set's stream cannot be read".into(),
         )));
     };
-    let Some(story) = story_of(&document.body) else {
+    let Some((story, plan)) = subject_of(&document.body) else {
         return Ok(SetRead::Unreadable(UnreadableSet(
             "the set's subject cannot be read".into(),
         )));
@@ -150,21 +162,36 @@ pub fn read<V: Views + ?Sized>(
         facts,
         stream: stream.into(),
         story,
+        plan,
     })))
 }
 
-/// The story a set's document names as its subject: `Some(Some(id))` for a
-/// story's set, `Some(None)` for a plan draft's, and `None` for a subject
-/// that cannot be read.
-fn story_of(document: &Value) -> Option<Option<u32>> {
+/// The subject a set's document names: the story for a story's set, the
+/// phase and draft digest for a plan draft's, and `None` for a subject that
+/// cannot be read.
+fn subject_of(document: &Value) -> Option<(Option<u32>, Option<PlanSubject>)> {
     let subject = document.get("subject")?;
-    match subject.get("kind").and_then(Value::as_str)? {
-        "story" => subject
-            .get("story")
+    let whole = |name: &str| {
+        subject
+            .get(name)
             .and_then(Value::as_u64)
-            .and_then(|story| u32::try_from(story).ok())
-            .map(Some),
-        "plan" => Some(None),
+            .and_then(|value| u32::try_from(value).ok())
+    };
+    match subject.get("kind").and_then(Value::as_str)? {
+        "story" => Some((Some(whole("story")?), None)),
+        "plan" => {
+            let draft = subject
+                .get("plan_digest")
+                .and_then(Value::as_str)
+                .and_then(Hash::from_hex)?;
+            Some((
+                None,
+                Some(PlanSubject {
+                    phase: whole("phase")?,
+                    draft,
+                }),
+            ))
+        }
         _ => None,
     }
 }

@@ -1096,4 +1096,27 @@ pub(crate) mod tests {
                 .all(|event| event.payload["digest"] != x1.to_hex())
         );
     }
+
+    #[test]
+    fn a_plan_approved_on_an_unmade_or_rejected_decision_is_caught() {
+        use crate::mcp::questions::tests::{REVISION, postgres, relayed};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let submitted = plan_submitted(&store, &pl2(), O, None, R2, T5);
+        let x2 = digest_of(&submitted);
+        let s2 = submitted["set"].as_str().unwrap().to_owned();
+
+        refused_with(&store, Hash([0x11; 32]), &p0(), "unknown-draft");
+        let open = refused_with(&store, x2, &p0(), "question-open");
+        assert_eq!(open["details"], json!({"questions": ["q1"]}));
+
+        let closed = relayed(&store, &s2, &postgres(), R3, T6, REVISION);
+        assert_eq!(closed["revision"]["work_order"], REVISION, "{closed}");
+        let rejected = refused_with(&store, x2, &p0(), "answer-not-applied");
+        assert_eq!(rejected["details"], json!({"questions": ["q1"]}));
+
+        digest_of(&plan_submitted(&store, &pl1(), REVISION, None, R4, T7));
+        refused_with(&store, x2, &p0(), "stale-draft");
+    }
 }
