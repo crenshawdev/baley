@@ -153,7 +153,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     retired("execution-admit", 5),
     retired("execution-extend", 5),
     retired("execution-authorize", 5),
-    retired("plan-submit", 4),
+    with_project("plan-submit"),
     with_project("context-submit"),
     retired("review-admit", 4),
     retired("review-observation", 4),
@@ -213,6 +213,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     with_project("story-refine"),
     with_project("story-questions-submit"),
     with_project("phase-plan"),
+    with_project("plan-replace"),
 ];
 
 /// A spelling served only from a project, which its call prepares.
@@ -391,6 +392,12 @@ enum RequestShape {
     // `phase-plan` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "phase-plan")]
     PhasePlan(#[allow(dead_code)] crate::mcp::planning::PhasePlanShape),
+    // `plan-submit` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-submit")]
+    PlanSubmit(#[allow(dead_code)] crate::mcp::planning::PlanSubmitShape),
+    // `plan-replace` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-replace")]
+    PlanReplace(#[allow(dead_code)] crate::mcp::planning::PlanReplaceShape),
     // `context-intake` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "context-intake")]
     ContextIntake(#[allow(dead_code)] crate::mcp::refine::IntakeShape),
@@ -679,6 +686,7 @@ pub(crate) mod expected {
         "story-refine",
         "story-questions-submit",
         "phase-plan",
+        "plan-replace",
     ];
 }
 
@@ -749,6 +757,8 @@ mod tests {
                     "story-refine",
                     "story-questions-submit",
                     "phase-plan",
+                    "plan-submit",
+                    "plan-replace",
                     "context-submit",
                     "context-intake",
                     "route",
@@ -795,6 +805,8 @@ mod tests {
             "story-refine",
             "story-questions-submit",
             "phase-plan",
+            "plan-submit",
+            "plan-replace",
             "context-submit",
         ] {
             assert_eq!(

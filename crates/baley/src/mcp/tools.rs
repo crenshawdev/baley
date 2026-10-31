@@ -397,8 +397,9 @@ mod tests {
         // story-refine takes request_id, story and instruction,
         // story-questions-submit takes request_id, story, work_order and
         // questions, phase-plan takes request_id, phase, stories and
-        // instruction, context-submit takes request_id, work_order, story, set
-        // and truths,
+        // instruction, plan-submit takes request_id, work_order and plan,
+        // plan-replace takes those and replaces, context-submit takes
+        // request_id, work_order, story, set and truths,
         // context-intake takes story and part,
         // and route takes role or work_order.
         let names = |tool| {
@@ -435,8 +436,10 @@ mod tests {
                 "kind",
                 "operation",
                 "phase",
+                "plan",
                 "questions",
                 "reason",
+                "replaces",
                 "request_id",
                 "set",
                 "stories",

@@ -10,10 +10,11 @@
 //! `scope-submit`, the ten change operations from `project-describe` to
 //! `backlog-reorder`, `project-start`, `work-order-fail`, `work-order-retry`,
 //! `questions-answer`, `story-refine`, `story-questions-submit`,
-//! `phase-plan`, `context-submit`, `document`, `context-intake` and `route`
-//! set `needs_project`, and in their [`operate`] arms the writes prepare a write
-//! from it, `document` and `context-intake` a read and `route` a read that
-//! also reads the settings.
+//! `phase-plan`, `plan-submit`, `plan-replace`, `context-submit`, `document`,
+//! `context-intake` and `route` set `needs_project`, and in their [`operate`]
+//! arms the writes prepare a write from it, `plan-submit` and `plan-replace`
+//! after a settings read that records nothing, `document` and
+//! `context-intake` a read and `route` a read that also reads the settings.
 //! rmcp has already validated the request's metadata by the time any
 //! of this runs, so a protocol-required metadata error stays a protocol error
 //! and runs nothing.
@@ -212,6 +213,11 @@ pub(crate) fn operate(
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "phase-plan" => {
             planning::serve(arguments_or_null, preparation)
+        }
+        (Called::Operation(_, spelling), Some(preparation))
+            if spelling == "plan-submit" || spelling == "plan-replace" =>
+        {
+            planning::serve_submit(arguments_or_null, preparation)
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "context-submit" => {
             refine::serve_context(arguments_or_null, preparation)
