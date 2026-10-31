@@ -191,6 +191,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "1",
         "65a03cb2fcbee8ff52445f5363a51054404085166b9ff2e285117f084315d8c6",
     ),
+    (
+        "bal-phase-planner",
+        "2",
+        "2cfbbeb4b7f766a275204f5ac3bbbad9ff286e7d209bb4d7cb2ddbc3f90210f9",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -931,7 +936,7 @@ fn a_planner_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "1");
+    assert_eq!(text.version, "2");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -945,6 +950,28 @@ fn a_planner_text_given_a_help_row_or_a_skill_stub_is_caught() {
         "{identity} is a front door"
     );
     assert!(!identity.starts_with("bal-planner-"));
+}
+
+#[test]
+fn a_planner_input_list_missing_the_approved_plans_items_is_caught() {
+    let Lookup::Served { text, .. } = lookup("bal-phase-planner") else {
+        panic!("bal-phase-planner is served");
+    };
+    let start = text
+        .body
+        .find("<input>")
+        .expect("the text has an input list");
+    let end = text.body.find("</input>").expect("the input list ends");
+    let list = &text.body[start..end];
+    assert!(
+        list.contains("the evidence items of the phase's approved plans"),
+        "the input list lacks the approved plans' items: {list}"
+    );
+    assert!(
+        list.contains("the phase's number, goal and detail"),
+        "{list}"
+    );
+    assert_eq!(text.version, "2");
 }
 
 #[test]

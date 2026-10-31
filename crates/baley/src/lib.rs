@@ -77,6 +77,8 @@ pub mod ledger;
 pub mod mcp;
 /// `baley models`: the per-user model catalog and the seeding step before each use.
 pub mod models;
+/// A phase's planning over the storage port: what a planner order binds and the planner's work order.
+pub mod planning;
 /// The policy step: records the effective policy a command ran under when it changed.
 pub mod policy_step;
 /// Which paths the guard protects, and the decisions that judge a tool call's paths against them.
