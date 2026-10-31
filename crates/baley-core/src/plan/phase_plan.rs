@@ -344,7 +344,8 @@ fn phase_of(event: &Event) -> Option<u32> {
     whole(&event.payload, member).ok()
 }
 
-fn whole(payload: &Value, name: &str) -> Result<u32, String> {
+/// The member `name` of `payload` as a whole number within `u32`.
+pub(super) fn whole(payload: &Value, name: &str) -> Result<u32, String> {
     payload
         .get(name)
         .and_then(Value::as_u64)
@@ -352,14 +353,16 @@ fn whole(payload: &Value, name: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("{name} is not a whole number"))
 }
 
-fn text<'a>(payload: &'a Value, name: &str) -> Result<&'a str, String> {
+/// The member `name` of `payload` as text.
+pub(super) fn text<'a>(payload: &'a Value, name: &str) -> Result<&'a str, String> {
     payload
         .get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{name} is not text"))
 }
 
-fn wholes(payload: &Value, name: &str) -> Result<Vec<u32>, String> {
+/// The member `name` of `payload` as a list of whole numbers within `u32`.
+pub(super) fn wholes(payload: &Value, name: &str) -> Result<Vec<u32>, String> {
     payload
         .get(name)
         .and_then(Value::as_array)

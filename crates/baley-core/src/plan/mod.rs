@@ -7,7 +7,8 @@
 //! replacement is judged under; and the four plan events on a phase's
 //! stream, `plan.approved`, `plan.replaced`, `plan.continuation` and
 //! `plan.continuation_followed`, with their payloads; and the `phase_plan`
-//! view, a phase's planning state, projected from those events alone.
+//! view, a phase's planning state, and the `plan` view, each approved
+//! plan's record, projected from those events alone.
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
@@ -25,6 +26,7 @@ mod judge;
 mod lease;
 mod link;
 mod phase_plan;
+mod plan_view;
 mod replace;
 mod stories;
 mod submission;
@@ -54,6 +56,7 @@ pub use phase_plan::{
     ACTIVE, IN_FORCE, INACTIVE, PHASE_PLAN_STATUS_INDEX, PHASE_PLAN_VIEW, PhasePlanProjector,
     REPLACED, phase_plan_key, phase_plan_spec,
 };
+pub use plan_view::{APPROVED, PLAN_VIEW, PlanProjector, plan_key, plan_spec};
 pub use replace::{
     ADMITTED_PLAN, NO_SUCH_PLAN, PlanInForce, ReplacementFacts, ReplacementRefusal,
     judge_replacement,
