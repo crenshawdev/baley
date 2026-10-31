@@ -5,7 +5,11 @@
 //! and `phase plan`, which chooses between drafting a changed commitment,
 //! issuing an order and handing one over; then `plan submit`, which checks a
 //! planner's plan against its order and the phase, over facts read from the
-//! views.
+//! views, and records it as the phase's one draft with its question set;
+//! and the owner's approval of that draft, in two steps.
+
+/// The owner's approval of a plan draft: the first step and the recording.
+pub mod approve;
 
 /// The facts a plan is judged on, read from the views.
 pub mod facts;
@@ -20,7 +24,8 @@ pub mod order;
 /// `phase plan`: the check run before admission and the run after it.
 pub mod phase_plan;
 
-/// `plan submit`: the check run before admission.
+/// `plan submit`: the check run before admission and the recording after
+/// it.
 pub mod submit;
 
 #[cfg(test)]
@@ -207,7 +212,6 @@ pub(crate) mod fixtures {
 
     /// PL3: a second plan of phase 1, PL1 with another goal and task id and
     /// PL1's items unchanged.
-    #[allow(dead_code)]
     pub(crate) fn pl3() -> Value {
         let mut plan = pl1();
         plan["goal"] = json!("Record again");
