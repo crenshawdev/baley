@@ -6,19 +6,24 @@
 //! records nothing: the draft in D-16's order, then `phase-not-active` when
 //! a different phase is active, then the plan judged again against the
 //! phase as it stands now. Build 4 T14 adds `review-unsettled` after these
-//! refusals, judged against the same digest.
+//! refusals, judged against the same digest. The second step records one
+//! `plan.approved` as the owner with the next plan number, confirming
+//! inside its transaction that nothing the first step read has moved.
+
+use std::collections::BTreeMap;
 
 use baley_core::plan::{
-    DraftRead, PHASE_PLAN_VIEW, PLAN_APPROVED, PLAN_KIND, Plan, PlanApprovalFacts,
-    PlanApprovalRefusal, PlanDraft, RecordedPlan, judge_plan, judge_plan_approval,
-    judge_submit_phase, phase_plan_key, phase_stream, read_plan_draft,
+    DraftRead, PHASE_PLAN_VIEW, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_KIND, Plan,
+    PlanApproval, PlanApprovalFacts, PlanApprovalRefusal, PlanDraft, RecordedPlan, judge_plan,
+    judge_plan_approval, judge_submit_phase, phase_plan_key, phase_stream, read_plan_draft,
 };
 use baley_core::policy::{EffectivePolicy, Value as Setting};
 use baley_core::questions::{QUESTIONS_VIEW, SetFacts, questions_key};
-use baley_core::scope::{DRAFT_VIEW, PriorApproval, SCOPE_SUBMITTED};
+use baley_core::scope::{DRAFT_VIEW, PROJECT_STREAM, PriorApproval, SCOPE_SUBMITTED, draft_key};
 use baley_store::{
-    Absence, EVENT_PAGE_BOUND, Hash, HistoryFilter, Ledger, ObservedDocument, PageRequest,
-    PayloadRef, Payloads, ProjectId, StoreError, Views,
+    Absence, Actor, Command, Decision, Document, EVENT_PAGE_BOUND, EventMatch, Hash, HistoryFilter,
+    Ledger, NewEvent, Observed, ObservedDocument, OutcomeKind, PageRequest, PayloadRef, Payloads,
+    ProjectId, Recorded, StaleInput, StoreError, StreamName, Transaction, Views,
 };
 use serde_json::{Value, json};
 
@@ -40,8 +45,6 @@ const SUITE_SETTING: &str = "workflow.test_command";
 
 /// What the first step read and judged, which the second step confirms and
 /// records.
-// The recording reads these fields.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Judged {
     /// The approved draft's digest.
@@ -217,6 +220,190 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
         documents,
         absences: read.absences().to_vec(),
     })
+}
+
+/// The second step: records the approval judged by the first step under a
+/// copy of `command` whose actor is the owner, with `owner` as the owner's
+/// name and the command's time as Baley's (D-06). Inside the transaction it
+/// confirms the draft at the sequence read with its `scope.submitted`, the
+/// newest plan draft of the phase unchanged by digest and sequence, and no
+/// `plan.approved` of the digest since; then takes one more than the highest
+/// number ever assigned in the phase from `phase_plan`, 1 when none, a
+/// number past `u32::MAX` being a store fault with nothing recorded (D-07);
+/// and appends `plan.approved` on `phase/<n>` with the phase, the number,
+/// the digest, the stories, the size, the suite or null, the set, the
+/// evidence map inline exactly as submitted and the body's reference
+/// attached as it is held. The decision observes every document the first
+/// step read and declares its absences, so anything moved since, a phase
+/// made active among them, makes the call `ledger-busy` with nothing
+/// recorded. A retry of a request the store holds is answered from its
+/// record before any decision runs; a decision run without the first step's
+/// reads records nothing.
+///
+/// The receipt: `status`, `kind`, `digest`, `phase`, `plan`, `stories`,
+/// `size`, `suite` (null when none, with `notice` naming
+/// `workflow.test_command` and why it matters), `set`, `owner` and `at`.
+pub fn record<L: Ledger + ?Sized>(
+    store: &L,
+    command: &Command,
+    judged: Option<&Judged>,
+    owner: &str,
+) -> Result<Recorded, StoreError> {
+    let command = Command {
+        actor: Actor::Owner,
+        ..command.clone()
+    };
+    let at = command.recorded_at.clone();
+    store.transact(&command, &mut |tx| {
+        let Some(judged) = judged else {
+            return Err(StoreError::Unavailable(
+                "a plan approval reached its transaction without its first step's reads".into(),
+            ));
+        };
+        let phase = judged.plan.phase();
+        confirm_draft(tx, judged)?;
+        // A transaction cannot ask for an approval after a sequence, so when
+        // one preceded the latest submission a later one is left to the
+        // `phase_plan` document, which every approval of the phase moves.
+        let approved = approval_of(phase, judged.digest);
+        if !judged.approved_before && tx.event_exists(&approved)? {
+            return Err(StoreError::Stale(StaleInput::Absence(Absence::Event(
+                approved,
+            ))));
+        }
+        confirm_newest(tx, phase, judged)?;
+        let number = next_number(tx, phase)?;
+        let approval = PlanApproval {
+            phase,
+            plan: number,
+            digest: judged.digest,
+            stories: judged.plan.stories(),
+            size: judged.plan.size(),
+            suite: judged.suite.as_deref(),
+            question_set: &judged.set,
+            evidence_map: &judged.evidence_map,
+            body: &judged.body,
+            owner,
+            at: &at,
+        };
+        tx.append(NewEvent {
+            stream: StreamName(phase_stream(phase)),
+            type_name: PLAN_APPROVED.into(),
+            type_version: PLAN_APPROVED_VERSION,
+            git: None,
+            payload: approval.payload(),
+            attachments: vec![judged.body.clone()],
+        })?;
+        let mut receipt = json!({
+            "status": "ok",
+            "kind": PLAN_KIND,
+            "digest": judged.digest.to_hex(),
+            "phase": phase,
+            "plan": number,
+            "stories": judged.plan.stories(),
+            "size": judged.plan.size(),
+            "suite": judged.suite,
+            "set": judged.set,
+            "owner": owner,
+            "at": at,
+        });
+        if judged.suite.is_none() {
+            receipt["notice"] = json!(format!(
+                "{SUITE_SETTING} is not set, so the plan was approved with no suite and cannot be admitted to execution until it is set"
+            ));
+        }
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: receipt,
+            sensitive: false,
+            observed: Observed {
+                documents: judged.documents.clone(),
+                absences: judged.absences.clone(),
+                ..Observed::default()
+            },
+            git: None,
+        })
+    })
+}
+
+/// A `plan.approved` on phase `phase`'s stream naming `digest`.
+fn approval_of(phase: u32, digest: Hash) -> EventMatch {
+    EventMatch {
+        type_name: PLAN_APPROVED.into(),
+        stream: Some(StreamName(phase_stream(phase))),
+        fields: BTreeMap::from([("digest".to_string(), json!(digest.to_hex()))]),
+    }
+}
+
+/// The draft is at the sequence read and its `scope.submitted` is there.
+fn confirm_draft(tx: &mut dyn Transaction, judged: &Judged) -> Result<(), StoreError> {
+    let key = draft_key(judged.digest);
+    let now = tx.get(DRAFT_VIEW, &key)?.as_ref().and_then(sequence);
+    let submitted = EventMatch {
+        type_name: SCOPE_SUBMITTED.into(),
+        stream: Some(StreamName(PROJECT_STREAM.into())),
+        fields: BTreeMap::from([("digest".to_string(), json!(judged.digest.to_hex()))]),
+    };
+    if now != Some(judged.seq) || !tx.event_exists(&submitted)? {
+        return Err(StoreError::Stale(StaleInput::Document {
+            view: DRAFT_VIEW.into(),
+            key,
+            seen: Some(judged.seq),
+            now,
+        }));
+    }
+    Ok(())
+}
+
+/// The newest plan draft of phase `phase` is the one the first step read,
+/// by digest and sequence, never by time: two submissions can share a time.
+fn confirm_newest(tx: &mut dyn Transaction, phase: u32, judged: &Judged) -> Result<(), StoreError> {
+    let newest = tx
+        .find(DRAFT_VIEW, &newest_query(PLAN_KIND, &phase_stream(phase)))?
+        .items
+        .into_iter()
+        .next();
+    let now = newest.as_ref().and_then(|document| {
+        let digest = document
+            .body
+            .get("digest")
+            .and_then(Value::as_str)
+            .and_then(Hash::from_hex)?;
+        Some((digest, sequence(document)?))
+    });
+    if now != Some(judged.newest) {
+        return Err(StoreError::Stale(StaleInput::Document {
+            view: DRAFT_VIEW.into(),
+            key: draft_key(judged.newest.0),
+            seen: Some(judged.newest.1),
+            now: now.map(|(_, seq)| seq),
+        }));
+    }
+    Ok(())
+}
+
+/// One more than the highest plan number ever assigned in phase `phase`,
+/// read from `phase_plan` inside `tx`, 1 when none was (D-07).
+fn next_number(tx: &mut dyn Transaction, phase: u32) -> Result<u32, StoreError> {
+    let highest = match tx.get(PHASE_PLAN_VIEW, &phase_plan_key(phase))? {
+        None => 0,
+        Some(document) => document
+            .body
+            .get("highest")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                StoreError::Unavailable(format!("phase {phase}'s plan numbers cannot be read"))
+            })?,
+    };
+    highest
+        .checked_add(1)
+        .and_then(|next| u32::try_from(next).ok())
+        .ok_or_else(|| StoreError::Unavailable(format!("phase {phase} has no plan number left")))
+}
+
+/// The latest submission's sequence a `draft` document holds.
+fn sequence(document: &Document) -> Option<u64> {
+    document.body.get("seq").and_then(Value::as_u64)
 }
 
 /// The suite `policy` sets, or none.
@@ -508,5 +695,154 @@ pub(crate) mod tests {
         activate_phase_2(&store, R4);
         let refusal = refused_with(&store, x1, &p0(), "phase-not-active");
         assert_eq!(refusal["details"], json!({"phase": 2}));
+    }
+
+    /// P3: P0 with a project file setting
+    /// `workflow.test_command = "cargo nextest run"`.
+    fn p3() -> EffectivePolicy {
+        let file = crate::settings::file(
+            Path::new("/r/baley.toml"),
+            b"[workflow]\ntest_command = \"cargo nextest run\"\n".to_vec(),
+        );
+        effective_policy(
+            Schema::standard(),
+            Some(Host::ClaudeCode),
+            None,
+            Some(&file),
+        )
+        .expect("the test command is read")
+    }
+
+    /// The owner's command for an approval under `request_id` at `at`, as
+    /// the terminal runs it with no session caller.
+    fn owner_command(request_id: &str, at: &str) -> Command {
+        let mut command = command("plan.approve", request_id, 10, at);
+        command.caller = None;
+        command
+    }
+
+    /// Records `judged` as `Ada Owner` under `request_id` at `at`. Gives the
+    /// answer.
+    fn recorded(store: &SqliteStore, judged: &Judged, request_id: &str, at: &str) -> Value {
+        let command = owner_command(request_id, at);
+        crate::scope::submit::answer(record(store, &command, Some(judged), "Ada Owner"), store)
+    }
+
+    /// Approves `digest` through both steps under `policy`. Gives the answer.
+    pub(crate) fn approved(
+        store: &SqliteStore,
+        digest: Hash,
+        policy: &EffectivePolicy,
+        request_id: &str,
+        at: &str,
+    ) -> Value {
+        match judge(store, &project(), digest, policy) {
+            Ok(judged) => recorded(store, &judged, request_id, at),
+            Err(refusal) => refusal,
+        }
+    }
+
+    /// Every `plan.approved` in the store, oldest first.
+    fn approvals(store: &SqliteStore) -> Vec<baley_store::Event> {
+        history(store)
+            .into_iter()
+            .filter(|event| event.type_name == "plan.approved")
+            .collect()
+    }
+
+    #[test]
+    fn a_plan_number_reused_or_a_map_left_out_of_its_approval_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let submitted = plan_submitted(&store, &pl1(), O, None, R2, T5);
+        let x1 = digest_of(&submitted);
+        let first = approved(&store, x1, &p3(), R3, T6);
+        assert_eq!(first["status"], "ok", "{first}");
+        assert_eq!(first["plan"], 1);
+        let x3 = digest_of(&plan_submitted(&store, &pl3(), O, None, R4, T7));
+        let second = approved(&store, x3, &p3(), R5, T8);
+        assert_eq!(second["status"], "ok", "{second}");
+
+        let events = history(&store);
+        let draft = events
+            .iter()
+            .find(|event| {
+                event.type_name == "scope.submitted" && event.payload["digest"] == x1.to_hex()
+            })
+            .unwrap();
+        let approvals = approvals(&store);
+        assert_eq!(approvals.len(), 2);
+        let event = &approvals[0];
+        assert_eq!(event.stream, "phase/1");
+        assert_eq!(event.actor, Actor::Owner);
+        assert_eq!(event.payload["plan"], 1);
+        assert_eq!(event.payload["digest"], x1.to_hex());
+        assert_eq!(event.payload["evidence_map"], json!([e1(), e2()]));
+        assert_eq!(event.payload["body"], draft.payload["body"]);
+        assert_eq!(event.payload["question_set"], submitted["set"]);
+        assert_eq!(event.payload["suite"], "cargo nextest run");
+        assert_eq!(event.payload["owner"], "Ada Owner");
+        assert_eq!(event.payload["stories"], json!([1]));
+        assert_eq!(event.payload["size"], 1);
+        assert_eq!(approvals[1].payload["plan"], 2);
+        assert_eq!(approvals[1].payload["digest"], x3.to_hex());
+
+        let phase_plan = store
+            .get(&project(), PHASE_PLAN_VIEW, &phase_plan_key(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(phase_plan.body["size"], 2);
+        assert_eq!(phase_plan.body["highest"], 2);
+    }
+
+    #[test]
+    fn a_missing_test_command_refusing_approval_or_inventing_a_suite_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R2, T5));
+        let answer = approved(&store, x1, &p0(), R3, T6);
+        assert_eq!(answer["status"], "ok", "{answer}");
+        assert_eq!(answer["suite"], Value::Null);
+        assert!(
+            answer["notice"]
+                .as_str()
+                .is_some_and(|notice| notice.contains("workflow.test_command")),
+            "{answer}"
+        );
+        let approvals = approvals(&store);
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0].payload["suite"], Value::Null);
+    }
+
+    #[test]
+    fn an_approval_landing_twice_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R2, T5));
+        let one = judge(&store, &project(), x1, &p0()).expect("the first is judged");
+        let two = judge(&store, &project(), x1, &p0()).expect("the second is judged");
+        assert_eq!(recorded(&store, &one, R3, T6)["status"], "ok");
+        let busy = recorded(&store, &two, R4, T7);
+        assert_eq!(busy["status"], "failed", "{busy}");
+        assert_eq!(busy["code"], "ledger-busy", "{busy}");
+        assert_eq!(approvals(&store).len(), 1);
+    }
+
+    #[test]
+    fn an_approval_landing_beside_a_newly_active_phase_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        order_q(&store, R2);
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R3, T5));
+        let judged = judge(&store, &project(), x1, &p0()).expect("PL1 is judged");
+        activate_phase_2(&store, R4);
+        let busy = recorded(&store, &judged, R5, T6);
+        assert_eq!(busy["status"], "failed", "{busy}");
+        assert_eq!(busy["code"], "ledger-busy", "{busy}");
+        assert!(
+            approvals(&store)
+                .iter()
+                .all(|event| event.payload["digest"] != x1.to_hex())
+        );
     }
 }
