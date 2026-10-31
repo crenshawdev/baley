@@ -9,6 +9,7 @@
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
 
+mod approval;
 mod binding;
 mod capacity;
 mod content;
@@ -24,6 +25,9 @@ mod stories;
 mod submission;
 mod task;
 
+pub use approval::{
+    ANSWER_NOT_APPLIED, DraftRead, PlanApprovalFacts, PlanApprovalRefusal, judge_plan_approval,
+};
 pub use event::{
     PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED,
     PLAN_CONTINUATION_FOLLOWED_VERSION, PLAN_CONTINUATION_VERSION, PLAN_REPLACED,
