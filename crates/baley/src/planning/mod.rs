@@ -1,13 +1,13 @@
 //! A phase's planning over the storage port (design 0005 sections 4 and 5,
-//! D-11, D-12, D-15): what a planner order binds at issue, read from the
+//! D-01, D-11, D-12, D-15): what a planner order binds at issue, read from the
 //! views, and the planner order itself, issued on its phase's stream with
-//! one live per phase.
+//! one live per phase and handed to a session once an approval issued it.
 
 /// What a planner order binds at issue, read outside any transaction.
 pub mod inputs;
 
-/// The planner's work order: its preparation, its issue on `phase/<n>`, and
-/// the pending lookup and refusal.
+/// The planner's work order: its preparation, its issue on `phase/<n>`, the
+/// pending lookup and refusal, and the hand-over of an approved order.
 pub mod order;
 
 #[cfg(test)]

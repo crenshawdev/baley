@@ -7,22 +7,36 @@
 //! order of the phase is pending, so a second one recorded since the caller
 //! looked makes the call `ledger-busy` with nothing recorded. A revision
 //! starts a new chain at attempt 1, as a planning order does.
+//!
+//! An order the approval of a changed selection issued is handed to the
+//! session once (D-01, D-09): `plan.continuation_followed` is recorded and
+//! the answer is the order's receipt as its issue gave it, so the session
+//! launches it as it would a fresh order.
 
 use std::num::NonZeroU32;
 
-use baley_core::plan::PLANNER_ORDER_PENDING;
+use baley_core::plan::{
+    PHASE_PLAN_VIEW, PLAN_CONTINUATION_FOLLOWED, PLAN_CONTINUATION_FOLLOWED_VERSION,
+    PLANNER_ORDER_PENDING, continuation_followed_payload, phase_plan_key, phase_stream,
+};
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, Role};
-use baley_core::work_order::{PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_VIEW, phase_subject};
+use baley_core::work_order::{
+    PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_VIEW, phase_subject, work_order_key,
+};
 use baley_store::{
-    Absence, Command, IndexQuery, InstructionEvidence, KeyValue, Ledger, ObservedDocument,
-    PageRequest, Payloads, ProjectId, StoreError, Transaction, Views,
+    Absence, Command, Decision, Hash, IndexQuery, InstructionEvidence, KeyValue, Ledger, NewEvent,
+    Observed, ObservedDocument, OutcomeKind, PageRequest, Payloads, ProjectId, StoreError,
+    StreamName, Transaction, Views,
 };
 use serde_json::{Map, Value, json};
 
 use crate::envelope::Refusal;
 use crate::instruction::planner::IDENTITY;
+use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
+use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::inputs::{self, Revision};
-use crate::work_order::issue::{self, Input, Issue};
+use crate::scope::submit::NOT_RECORDED_BUSY;
+use crate::work_order::issue::{self, Input, Issue, launch, prompt};
 use crate::work_order::route::{IssuedRoute, compose};
 
 /// A planner order prepared outside any transaction: everything it is
@@ -218,6 +232,133 @@ pub fn planner_order_pending(phase: u32, pending: &str, not_issued: &str) -> Val
     .value()
 }
 
+/// What a hand-over read: the order's receipt as its issue gave it, and the
+/// documents it was read from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HandOver {
+    /// The phase the order plans.
+    phase: u32,
+    /// The approved `phase edit` draft whose continuation names the order.
+    edit: Hash,
+    /// The order's id.
+    work_order: String,
+    /// The receipt's members other than `status`.
+    receipt: Map<String, Value>,
+    /// The `phase_plan` document, then the order's `work_order` document,
+    /// each at the sequence that produced it.
+    documents: Vec<ObservedDocument>,
+}
+
+/// Reads the hand-over of order `work_order` of phase `phase` in `project`,
+/// which the approval of the `phase edit` draft `edit` issued (D-01): the
+/// `phase_plan` document's sequence first, then the order's `work_order`
+/// document, from which its receipt is built as its issue gave it: its id,
+/// request, attempt, agent, model, `prompt`, `launch` and the time it was
+/// recorded. Nothing is recorded. An order whose document is not held or
+/// cannot be read is a ledger fault.
+pub fn read_hand_over<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    phase: u32,
+    edit: Hash,
+    work_order: &str,
+) -> Result<HandOver, Value> {
+    let busy = |error: StoreError| store_failed(&error, NOT_RECORDED_BUSY);
+    let phase_plan = store
+        .get(project, PHASE_PLAN_VIEW, &phase_plan_key(phase))
+        .map_err(busy)?
+        .map(|document| document.produced_seq);
+    let order = store
+        .get(project, WORK_ORDER_VIEW, &work_order_key(work_order))
+        .map_err(busy)?
+        .ok_or_else(order_unreadable)?;
+    let receipt = receipt_of(&order.body).ok_or_else(order_unreadable)?;
+    Ok(HandOver {
+        phase,
+        edit,
+        work_order: work_order.into(),
+        receipt,
+        documents: vec![
+            ObservedDocument {
+                view: PHASE_PLAN_VIEW.into(),
+                key: phase_plan_key(phase),
+                produced_seq: phase_plan,
+            },
+            ObservedDocument {
+                view: WORK_ORDER_VIEW.into(),
+                key: work_order_key(work_order),
+                produced_seq: Some(order.produced_seq),
+            },
+        ],
+    })
+}
+
+/// Hands `read`'s order to the session under `command`, in one
+/// transaction: one `plan.continuation_followed` on `phase/<n>` naming the
+/// edit and the order. The decision observes the `phase_plan` and
+/// `work_order` documents the read saw, so an order failed or answered, or a
+/// continuation replaced or followed, since the read makes the call
+/// `ledger-busy` with nothing recorded. The answer is the order's receipt
+/// with `status` `ok`.
+pub fn hand_over<S: Ledger + Payloads>(store: &S, command: &Command, read: &HandOver) -> Value {
+    let mut answer = Map::new();
+    answer.insert("status".into(), json!("ok"));
+    answer.extend(read.receipt.clone());
+    let answer = Value::Object(answer);
+    let result = store.transact(command, &mut |tx| {
+        tx.append(NewEvent {
+            stream: StreamName(phase_stream(read.phase)),
+            type_name: PLAN_CONTINUATION_FOLLOWED.into(),
+            type_version: PLAN_CONTINUATION_FOLLOWED_VERSION,
+            git: None,
+            payload: continuation_followed_payload(read.phase, read.edit, &read.work_order),
+            attachments: Vec::new(),
+        })?;
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: answer.clone(),
+            sensitive: false,
+            observed: Observed {
+                documents: read.documents.clone(),
+                ..Observed::default()
+            },
+            git: None,
+        })
+    });
+    issue::answer(result, store)
+}
+
+/// The receipt members an order's `work_order` document gives, as its issue
+/// gave them, or none when a member cannot be read.
+fn receipt_of(order: &Value) -> Option<Map<String, Value>> {
+    let text = |field: &str| order.get(field).and_then(Value::as_str);
+    let id = text("id")?;
+    let agent = text("agent")?;
+    let model = match order.get("route")?.get("model")? {
+        Value::Null => None,
+        Value::String(model) => Some(model.as_str()),
+        _ => return None,
+    };
+    let mut receipt = Map::new();
+    receipt.insert("work_order".into(), json!(id));
+    receipt.insert("request".into(), json!(text("request")?));
+    receipt.insert("attempt".into(), json!(order.get("attempt")?.as_u64()?));
+    receipt.insert("agent".into(), json!(agent));
+    receipt.insert("model".into(), json!(model));
+    receipt.insert("prompt".into(), json!(prompt(id)));
+    receipt.insert("launch".into(), json!(launch(agent, model)));
+    receipt.insert("recorded_at".into(), json!(text("recorded_at")?));
+    Some(receipt)
+}
+
+fn order_unreadable() -> Value {
+    failed(
+        LEDGER_UNAVAILABLE,
+        "the ledger holds no readable document for the planner order the approval issued, so nothing was recorded",
+        PLACE_LEDGER,
+    )
+}
+
 /// The `live` index prefix of phase `phase`'s pending planner orders.
 fn live(phase: u32) -> Vec<KeyValue> {
     let text = |value: &str| KeyValue::Text(value.into());
@@ -327,6 +468,83 @@ pub(crate) mod tests {
         assert_eq!(busy["status"], "failed", "{busy}");
         assert_eq!(busy["code"], "ledger-busy", "{busy}");
         assert_eq!(head(&store), before);
+    }
+
+    /// Store C with a continuation of phase 1 for `[1]` naming edit X and
+    /// order O appended by hand, then O issued under P0 and N0 as that id.
+    /// Gives O's issue receipt.
+    fn continued(store: &SqliteStore) -> Value {
+        append(
+            store,
+            R1,
+            T4,
+            vec![NewEvent {
+                stream: StreamName(phase_stream(1)),
+                type_name: baley_core::plan::PLAN_CONTINUATION.into(),
+                type_version: baley_core::plan::PLAN_CONTINUATION_VERSION,
+                git: None,
+                payload: baley_core::plan::continuation_payload(1, &[1], x(), O),
+                attachments: Vec::new(),
+            }],
+        );
+        let (command_o, o) = prepared(store, &[1], O, R2, T5);
+        let receipt = issue(store, &command_o, &o);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        receipt
+    }
+
+    /// X, the approved edit's digest.
+    fn x() -> Hash {
+        Hash([0x5c; 32])
+    }
+
+    #[test]
+    fn an_approved_order_handed_over_without_its_launch_or_its_marker_is_caught() {
+        let (_dir, store) = store_c();
+        let issued_receipt = continued(&store);
+        let read = read_hand_over(&store, &project(), 1, x(), O).unwrap();
+        let answer = hand_over(&store, &command("phase.plan", R3, 7, T6), &read);
+
+        assert_eq!(answer["status"], "ok", "{answer}");
+        for member in [
+            "work_order",
+            "request",
+            "attempt",
+            "agent",
+            "model",
+            "prompt",
+            "launch",
+        ] {
+            assert_eq!(answer[member], issued_receipt[member], "{member}");
+        }
+        assert_eq!(
+            answer["prompt"],
+            format!("Read Baley work order {O} and follow it.")
+        );
+        let events = history(&store);
+        let followed = of_type(&events, "plan.continuation_followed");
+        assert_eq!(followed.len(), 1);
+        assert_eq!(followed[0].stream, "phase/1");
+        assert_eq!(
+            followed[0].payload,
+            json!({"phase": 1, "edit": "5c".repeat(32), "work_order": O})
+        );
+        assert_eq!(issued(&store).len(), 1);
+    }
+
+    #[test]
+    fn an_order_failed_since_it_was_read_handed_over_is_caught() {
+        let (_dir, store) = store_c();
+        continued(&store);
+        let read = read_hand_over(&store, &project(), 1, x(), O).unwrap();
+        fail_by_hand(&store, O, R3);
+        let before = head(&store);
+        let answer = hand_over(&store, &command("phase.plan", R4, 7, T7), &read);
+
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
+        assert!(of_type(&history(&store), "plan.continuation_followed").is_empty());
     }
 
     #[test]
