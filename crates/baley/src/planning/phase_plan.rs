@@ -376,6 +376,7 @@ pub fn run<S: Ledger + Views + Payloads>(
                 stories: &checked.stories,
                 work_order: id,
                 documents: &checked.documents,
+                absences: &checked.absences,
             };
             return match submit_phase_edit(store, command, phase, fields, Some(continuation)) {
                 Ok(digest) => drafted(digest, phase, &checked.stories),
@@ -720,6 +721,27 @@ pub(crate) mod tests {
         assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
         assert!(issued(&store).is_empty());
+    }
+
+    #[test]
+    fn a_draft_landing_beside_a_newly_active_phase_is_caught() {
+        let (_dir, store) = store_c();
+        let checked = check(&store, &project(), 1, &[1, 4]).expect("nothing is active yet");
+        activate_phase_2(&store, R1);
+        let before = head(&store);
+        let answer = run(
+            &store,
+            &command(PHASE_PLAN_COMMAND, R2, 7, T6),
+            &checked,
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            O,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
+        assert!(of_type(&history(&store), "plan.continuation").is_empty());
     }
 
     #[test]

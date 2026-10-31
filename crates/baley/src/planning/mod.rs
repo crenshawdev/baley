@@ -226,6 +226,7 @@ pub(crate) mod fixtures {
             stories,
             work_order,
             documents: &[],
+            absences: &[],
         };
         submit_phase_edit(
             store,

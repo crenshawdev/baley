@@ -344,7 +344,7 @@ pub fn record_change<L: Ledger + ?Sized>(
 /// A planning continuation recorded with a `phase edit` of phase `phase`'s
 /// stories (D-09): the selection the edit commits and the planner order its
 /// approval issues, with the documents the caller read when it chose to
-/// draft.
+/// draft and what it relied on being absent.
 #[derive(Debug, Clone, Copy)]
 pub struct PlanningContinuation<'a> {
     /// The selection, in order.
@@ -353,16 +353,22 @@ pub struct PlanningContinuation<'a> {
     /// a rerun finds the same order.
     pub work_order: &'a str,
     /// The documents the caller read when it chose to draft, at the sequence
-    /// that produced each, so a phase made active, an order issued or a story
-    /// moved since makes the call `ledger-busy` with nothing recorded.
+    /// that produced each, so an order issued or a story moved since makes
+    /// the call `ledger-busy` with nothing recorded.
     pub documents: &'a [ObservedDocument],
+    /// What the caller relied on being absent when it chose to draft, such
+    /// as an active phase an empty read of `phase_plan`'s status index left
+    /// no document for, so one recorded since makes the call `ledger-busy`
+    /// with nothing recorded.
+    pub absences: &'a [Absence],
 }
 
 /// [`record_change`] with a planning continuation of phase `phase`: in the
 /// same transaction, after the draft, one `plan.continuation` on `phase/<n>`
 /// naming the phase, the selection in order, the draft's digest and the
-/// order, and the decision observes the continuation's documents. Without
-/// one it records and observes exactly what `record_change` does.
+/// order, and the decision observes the continuation's documents and
+/// declares its absences. Without one it records and observes exactly what
+/// `record_change` does.
 fn record_with<L: Ledger + ?Sized>(
     store: &L,
     command: &Command,
@@ -409,6 +415,7 @@ fn record_with<L: Ledger + ?Sized>(
                 attachments: Vec::new(),
             })?;
             observed.documents = continuation.documents.to_vec();
+            observed.absences = continuation.absences.to_vec();
         }
         Ok(Decision {
             kind: OutcomeKind::Done,
@@ -437,7 +444,8 @@ fn record_with<L: Ledger + ?Sized>(
 ///
 /// T9's `phase plan` passes `continuation` for a changed selection, and the
 /// edit is then recorded with its `plan.continuation` in one transaction or
-/// not at all, observing the documents the caller read (D-09). With none,
+/// not at all, observing the documents the caller read and declaring what it
+/// relied on being absent (D-09). With none,
 /// the edit records exactly what `record_change` records.
 pub fn submit_phase_edit<S: Ledger + Views + Payloads>(
     store: &S,
@@ -1262,6 +1270,7 @@ mod tests {
             stories: &[1, 4],
             work_order: O,
             documents: &[],
+            absences: &[],
         };
         let edit = command(SUBMIT_COMMAND, R1, 1, T4);
         let digest = submit_phase_edit(&store, &edit, 1, &stories, Some(continuation)).unwrap();
