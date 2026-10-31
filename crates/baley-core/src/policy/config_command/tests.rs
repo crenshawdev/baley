@@ -2021,3 +2021,37 @@ fn config_set_accepting_a_blank_multi_line_or_control_owner_name_or_trimming_a_v
         assert_eq!(String::from_utf8(bytes).unwrap(), written, "{value:?}");
     }
 }
+
+#[test]
+fn config_set_writing_a_capacity_as_a_string_or_taking_zero_is_caught() {
+    let set = |name: &str, value: &str| {
+        judge_pairs(
+            Schema::standard(),
+            FileLayer::Project,
+            true,
+            None,
+            &[(name, value)],
+        )
+    };
+    let five = set("planning.phase_capacity", "5").unwrap();
+    let bytes = render_file(Schema::standard(), FileLayer::Project, None, &five).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[planning]\nphase_capacity = 5\n"
+    );
+    for value in ["0", "five"] {
+        let refusal = set("planning.phase_capacity", value).expect_err(value);
+        assert_eq!(refusal.code(), "invalid-value", "{value}");
+        let message = refusal.to_string();
+        assert!(
+            message.ends_with("which is not a whole number from 1 to 4294967295"),
+            "{message}"
+        );
+    }
+    let command = set("workflow.test_command", "cargo test").unwrap();
+    let bytes = render_file(Schema::standard(), FileLayer::Project, None, &command).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "[workflow]\ntest_command = \"cargo test\"\n"
+    );
+}
