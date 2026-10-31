@@ -235,8 +235,9 @@ pub fn planner_order_pending(phase: u32, pending: &str, not_issued: &str) -> Val
     .value()
 }
 
-/// What a hand-over read: the order's receipt as its issue gave it, and the
-/// documents it was read from.
+/// What a hand-over read: the order's receipt as its issue gave it, the
+/// documents it was read from, and what its caller read when it judged the
+/// hand-over.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HandOver {
     /// The phase the order plans.
@@ -248,8 +249,23 @@ pub struct HandOver {
     /// The receipt's members other than `status`.
     receipt: Map<String, Value>,
     /// The `phase_plan` document, then the order's `work_order` document,
-    /// each at the sequence that produced it.
+    /// each at the sequence that produced it, then the caller's.
     documents: Vec<ObservedDocument>,
+    /// What the caller relies on being absent, none unless it added some.
+    absences: Vec<Absence>,
+}
+
+impl HandOver {
+    /// The hand-over also observing `documents` and declaring `absences`,
+    /// what its caller read when it judged that the order is handed over, so
+    /// a change since that the caller's judgement would refuse, such as a
+    /// phase made active or a story's truths emptied, makes the hand-over
+    /// `ledger-busy` with nothing recorded.
+    pub fn observing(mut self, documents: &[ObservedDocument], absences: Vec<Absence>) -> Self {
+        self.documents.extend_from_slice(documents);
+        self.absences.extend(absences);
+        self
+    }
 }
 
 /// Reads the hand-over of order `work_order` of phase `phase` in `project`,
@@ -311,16 +327,18 @@ pub fn read_hand_over<S: Views + ?Sized>(
                 produced_seq: Some(order.produced_seq),
             },
         ],
+        absences: Vec::new(),
     })
 }
 
 /// Hands `read`'s order to the session under `command`, in one
 /// transaction: one `plan.continuation_followed` on `phase/<n>` naming the
 /// edit and the order. The decision observes the `phase_plan` and
-/// `work_order` documents the read saw, so an order failed or answered, or a
-/// continuation replaced or followed, since the read makes the call
-/// `ledger-busy` with nothing recorded. The answer is the order's receipt
-/// with `status` `ok`.
+/// `work_order` documents the read saw and declares what the read's caller
+/// added through [`HandOver::observing`], so an order failed or answered, a
+/// continuation replaced or followed, or anything the caller judged moved
+/// since the read makes the call `ledger-busy` with nothing recorded. The
+/// answer is the order's receipt with `status` `ok`.
 pub fn hand_over<S: Ledger + Payloads>(store: &S, command: &Command, read: &HandOver) -> Value {
     let mut answer = Map::new();
     answer.insert("status".into(), json!("ok"));
@@ -340,6 +358,7 @@ pub fn hand_over<S: Ledger + Payloads>(store: &S, command: &Command, read: &Hand
             answer: answer.clone(),
             sensitive: false,
             observed: Observed {
+                absences: read.absences.clone(),
                 documents: read.documents.clone(),
                 ..Observed::default()
             },

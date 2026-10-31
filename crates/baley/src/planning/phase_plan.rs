@@ -314,13 +314,11 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
                 .as_ref()
                 .map(|latest| latest.edit)
                 .ok_or_else(|| unreadable(PHASE_PLAN_VIEW))?;
-            Planned::HandOver(Box::new(read_hand_over(
-                store,
-                project,
-                phase,
-                edit,
-                &work_order,
-            )?))
+            // The hand-over observes what this check read, so a phase made
+            // active or a story unrefined since it is not handed over.
+            let read = read_hand_over(store, project, phase, edit, &work_order)?
+                .observing(&documents, readiness.absences());
+            Planned::HandOver(Box::new(read))
         }
         PhasePlanPath::Draft => {
             let members = json!({"phase": phase, "stories": stories});
@@ -358,7 +356,8 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
 /// effective policy, for `host` with the catalog `names` (D-15); its
 /// decision declares no pending planner order of the phase and observes the
 /// check's documents and the inputs'. An approved continuation's order is
-/// handed over (D-01).
+/// handed over (D-01), observing the check's documents and declaring its
+/// absences beside the hand-over's own.
 #[allow(clippy::too_many_arguments)]
 pub fn run<S: Ledger + Views + Payloads>(
     store: &S,
@@ -781,5 +780,62 @@ pub(crate) mod tests {
 
         let refusal = refused_with(&store, 1, &[4, 1], "planner-order-pending", "operation");
         assert_eq!(refusal["details"], json!({"work_order": O}));
+    }
+
+    /// Store C with the `[4, 1]` edit E2 approved through the commitment
+    /// approval's two steps, issuing O, and phase 1's `phase-plan` with
+    /// `[4, 1]` checked, so its run hands O over.
+    fn hand_over_checked() -> (tempfile::TempDir, SqliteStore, Checked) {
+        let (dir, store) = store_c();
+        let e2 = edit(&store, &[4, 1], O, R1, T4);
+        let approved = approve_commitment(&store, e2, R2, T5);
+        assert_eq!(approved["status"], "ok", "{approved}");
+        let checked = check(&store, &project(), 1, &[4, 1]).expect("O is handed over");
+        (dir, store, checked)
+    }
+
+    /// The run of `checked`, which must fail `ledger-busy` with nothing
+    /// recorded and O not handed over.
+    fn handed_over_busy(store: &SqliteStore, checked: &Checked) {
+        use crate::planning::order::tests::O2;
+
+        let before = head(store);
+        let answer = run(
+            store,
+            &command(PHASE_PLAN_COMMAND, R4, 7, T7),
+            checked,
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            O2,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(store), before);
+        assert!(of_type(&history(store), "plan.continuation_followed").is_empty());
+    }
+
+    #[test]
+    fn a_hand_over_landing_beside_a_newly_active_phase_or_an_unrefined_story_is_caught() {
+        // Phase 2 made active after the check, which a fresh check refuses
+        // `phase-active`.
+        let (_dir, store, checked) = hand_over_checked();
+        activate_phase_2(&store, R3);
+        handed_over_busy(&store, &checked);
+
+        // Story 4's approved truths emptied after the check, which a fresh
+        // check refuses `story-unrefined`.
+        let (_dir, store, checked) = hand_over_checked();
+        append(
+            &store,
+            R3,
+            T6,
+            vec![refined(
+                4,
+                "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f",
+                Vec::new(),
+            )],
+        );
+        handed_over_busy(&store, &checked);
     }
 }
