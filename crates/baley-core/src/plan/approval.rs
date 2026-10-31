@@ -436,6 +436,14 @@ mod tests {
 
         let retitled = recorded(with(p1(), "/tasks/0", "title", json!("Another")));
         assert_eq!(stale(&retitled), path("tasks[0].title"));
+        // `goal` comes before `tasks` in the judge's order.
+        let regoaled = recorded(with(
+            with(p1(), "", "goal", json!("Another goal.")),
+            "/tasks/0",
+            "title",
+            json!("Another"),
+        ));
+        assert_eq!(stale(&regoaled), path("goal"));
         let extended = recorded(plus(p1(), c4()));
         assert_eq!(stale(&extended), path("evidence_map[3]"));
         let replacing = RecordedPlan {

@@ -101,7 +101,8 @@ pub struct RecordedPlan {
 
 /// Reads a recorded plan draft body, or `None` when it is not an object,
 /// its `kind` is not `plan`, or its `replaces` is not an object holding a
-/// whole `plan` from 1 and a 64-character lowercase hex `digest`. The plan
+/// whole `plan` from 1 and a 64-character lowercase hex `digest` and no
+/// other member. The plan
 /// itself is not judged here: callers judge it again against the phase as
 /// it stands.
 pub fn read_plan_draft(body: &Value) -> Option<RecordedPlan> {
@@ -114,10 +115,22 @@ pub fn read_plan_draft(body: &Value) -> Option<RecordedPlan> {
     }
     let replaces = match plan.remove(REPLACES_MEMBER) {
         None => None,
-        Some(binding) => Some(Replaces {
-            plan: counter(binding.get("plan"))?,
-            digest: lowercase_digest(binding.get("digest"))?,
-        }),
+        Some(binding) => {
+            // The digest covers every member of the binding, so one this
+            // read would drop could make two drafts of different digests
+            // read back the same.
+            let binding = binding.as_object()?;
+            if binding
+                .keys()
+                .any(|name| name != "plan" && name != "digest")
+            {
+                return None;
+            }
+            Some(Replaces {
+                plan: counter(binding.get("plan"))?,
+                digest: lowercase_digest(binding.get("digest"))?,
+            })
+        }
     };
     Some(RecordedPlan {
         plan: Value::Object(plan),
@@ -202,6 +215,28 @@ mod tests {
         let x = "5c".repeat(32);
         assert_eq!(binding(&of_one), json!({"plan": 1, "digest": x}));
         assert_eq!(binding(&of_two), json!({"plan": 2, "digest": x}));
+
+        // Only the replaced digest differs, so a digest that skipped it
+        // would give both replacements one digest.
+        let by_hand = |digest: &str| {
+            json!({"phase": 8, "stories": [1], "files": ["src/judge.rs"],
+                "directories": ["docs"], "goal": "Judge a plan whole.", "context": "Pure core.",
+                "notes": "", "tasks": [k1()], "evidence_map": [c1(), c2(), o1()], "questions": [],
+                "kind": "plan", "replaces": {"plan": 1, "digest": digest}})
+        };
+        let at_y = PlanDraft::replacing(
+            &plan,
+            Replaces {
+                plan: 1,
+                digest: Hash([0x6d; 32]),
+            },
+        );
+        assert_eq!(of_one.digest(), request_digest(&by_hand(&x)).unwrap());
+        assert_eq!(
+            at_y.digest(),
+            request_digest(&by_hand(&"6d".repeat(32))).unwrap()
+        );
+        assert_ne!(of_one.digest(), at_y.digest());
     }
 
     #[test]
@@ -229,6 +264,8 @@ mod tests {
             altered("kind", json!("phase-edit")),
             altered("replaces", json!({"plan": 1, "digest": "XYZ"})),
             altered("replaces", json!({"plan": 0, "digest": x})),
+            // A member the digest covers but the binding would drop.
+            altered("replaces", json!({"plan": 1, "digest": x, "note": "extra"})),
         ] {
             assert_eq!(read_plan_draft(&refused), None, "{refused}");
         }
