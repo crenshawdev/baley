@@ -28,8 +28,8 @@ use baley_core::capture::NO_SUCH_PHASE;
 use baley_core::policy::recorded::recorded_policy;
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile};
 use baley_core::scope::{
-    ChangeKind, ChangeSubmission, Destination, START_KIND, ScopeChange, UNKNOWN_DRAFT,
-    judge_change, judge_submission,
+    ChangeKind, ChangeSubmission, DRAFT_APPROVED, Destination, START_KIND, ScopeChange,
+    UNKNOWN_DRAFT, judge_change, judge_submission,
 };
 use baley_core::truth::{STORY_TRUTHS, TruthSubmission, Versions, judge_truths, versions};
 use baley_store::{
@@ -563,12 +563,16 @@ pub(crate) fn owner_command(
 /// malformed submission's naming its section and field; a failure the same
 /// way, exit 1. A commitment's receipt, or a `draft-approved` refusal of one,
 /// names the planner order its approval issued, and a further line says so
-/// with the order's id (D-01).
+/// with the order's id (D-01). Any other refusal naming an order, such as
+/// `planner-order-pending`, names one this approval did not issue, so it
+/// gets no such line.
 pub(crate) fn answer_render(answer: &Value) -> Render {
     let mut render = approval_lines(answer);
     let order = match answer["status"].as_str() {
         Some("ok") => answer["work_order"].as_str(),
-        Some("refused") => answer["details"]["work_order"].as_str(),
+        Some("refused") if answer["code"] == DRAFT_APPROVED => {
+            answer["details"]["work_order"].as_str()
+        }
         _ => None,
     };
     if let Some(order) = order {
@@ -1496,6 +1500,19 @@ mod tests {
         );
         assert!(names_order(&rerun.lines), "{:?}", rerun.lines);
         assert_eq!((rerun.code, rerun.error), (2, true));
+    }
+
+    #[test]
+    fn a_pending_planner_order_refusal_printed_as_this_approvals_order_is_caught() {
+        // Q is another selection's order, still pending, which this
+        // approval did not issue and a phase-plan cannot launch.
+        const Q: &str = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+        let reason = "the phase's planner work order Q is still pending, and a phase has one live planner order, so nothing was approved";
+        let pending = answer_render(&json!({"status": "refused",
+            "code": "planner-order-pending", "reason": reason, "slot": "digest",
+            "details": {"work_order": Q}}));
+        assert_eq!(pending.lines, [format!("planner-order-pending: {reason}")]);
+        assert_eq!((pending.code, pending.error), (2, true));
     }
 
     #[test]
