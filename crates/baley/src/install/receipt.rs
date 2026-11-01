@@ -278,6 +278,7 @@ mod tests {
             (Artifact::Stub("bal-story".into()), outcome.clone()),
             (Artifact::Stub("bal-backlog".into()), outcome.clone()),
             (Artifact::Stub("bal-context".into()), outcome.clone()),
+            (Artifact::Stub("bal-plan".into()), outcome.clone()),
             (Artifact::Stub("bal-capture".into()), outcome.clone()),
             (Artifact::Stub("bal-help".into()), outcome.clone()),
             (Artifact::Registration, outcome.clone()),
@@ -316,6 +317,10 @@ mod tests {
                     ArtifactOutcome::Unchanged,
                 ),
                 (
+                    Artifact::Stub("bal-plan".into()),
+                    ArtifactOutcome::Unchanged,
+                ),
+                (
                     Artifact::Stub("bal-capture".into()),
                     ArtifactOutcome::Replaced,
                 ),
@@ -339,15 +344,15 @@ mod tests {
             &Ok(true),
         );
         assert_eq!(
-            receipt.lines[8],
+            receipt.lines[9],
             "stub `bal-capture` at /home/o/.claude/skills/bal-capture/SKILL.md: replaced"
         );
         assert_eq!(
-            receipt.lines[9],
+            receipt.lines[10],
             "stub `bal-help` at /home/o/.claude/skills/bal-help/SKILL.md: unchanged"
         );
 
-        applied.outcomes[7].1 = ArtifactOutcome::Failed("Permission denied".into());
+        applied.outcomes[8].1 = ArtifactOutcome::Failed("Permission denied".into());
         applied.failure = Some(
             "not-writable: /home/o/.claude/skills/bal-help/SKILL.md: Permission denied".into(),
         );
@@ -360,7 +365,7 @@ mod tests {
             &Err(StoreError::Busy),
         );
         assert_eq!(
-            receipt.lines[9],
+            receipt.lines[10],
             "stub `bal-help` at /home/o/.claude/skills/bal-help/SKILL.md: not written: Permission denied"
         );
         assert!(receipt.lines.contains(applied.failure.as_ref().unwrap()));
@@ -390,7 +395,7 @@ mod tests {
                 .any(|line| line == "install outcome: complete")
         );
         assert_eq!(
-            receipt.lines[2..13],
+            receipt.lines[2..14],
             [
                 "stub `bal-project` at /home/o/.claude/skills/bal-project/SKILL.md: not written",
                 "stub `bal-scope` at /home/o/.claude/skills/bal-scope/SKILL.md: not written",
@@ -398,6 +403,7 @@ mod tests {
                 "stub `bal-story` at /home/o/.claude/skills/bal-story/SKILL.md: not written",
                 "stub `bal-backlog` at /home/o/.claude/skills/bal-backlog/SKILL.md: not written",
                 "stub `bal-context` at /home/o/.claude/skills/bal-context/SKILL.md: not written",
+                "stub `bal-plan` at /home/o/.claude/skills/bal-plan/SKILL.md: not written",
                 "stub `bal-capture` at /home/o/.claude/skills/bal-capture/SKILL.md: not written",
                 "stub `bal-help` at /home/o/.claude/skills/bal-help/SKILL.md: not written",
                 "registration at /home/o/.claude.json: not written",
@@ -422,7 +428,7 @@ mod tests {
         );
         assert_eq!(receipt.lines[1], "baley 0.2.0 at /home/o/.local/bin/baley");
         assert_eq!(
-            receipt.lines[14..],
+            receipt.lines[15..],
             [
                 "start a new Claude Code session to load the wiring",
                 "run baley init in each checkout Baley should manage",
@@ -447,7 +453,7 @@ mod tests {
             &Err(StoreError::Busy),
         );
         assert_eq!(
-            receipt.lines[13],
+            receipt.lines[14],
             "the model catalog seed was not recorded: the ledger is busy; run the command again"
         );
         assert_eq!(receipt.lines[0], "install outcome: partial");
@@ -473,7 +479,7 @@ mod tests {
                     "the model catalog seed with hint table version {HINT_VERSION} is already recorded"
                 )
             };
-            assert_eq!(receipt.lines[13], expected);
+            assert_eq!(receipt.lines[14], expected);
         }
     }
     #[test]
@@ -528,6 +534,10 @@ mod tests {
             ),
             (
                 "/home/o/.claude/skills/bal-context/SKILL.md".into(),
+                seen(FileState::Absent),
+            ),
+            (
+                "/home/o/.claude/skills/bal-plan/SKILL.md".into(),
                 seen(FileState::Absent),
             ),
             (
@@ -833,11 +843,11 @@ mod tests {
         let removed = render_with(RetiredOutcome::Removed);
         assert_eq!(removed.lines[0], "install outcome: complete");
         assert_eq!(
-            removed.lines[13],
+            removed.lines[14],
             "stub `bal-old` at /home/o/.claude/skills/bal-old/SKILL.md: removed, since this binary no longer ships it"
         );
         assert!(
-            removed.lines[14].contains("model catalog"),
+            removed.lines[15].contains("model catalog"),
             "{:?}",
             removed.lines
         );
@@ -846,7 +856,7 @@ mod tests {
         let left = render_with(RetiredOutcome::Failed("not-removable: denied".into()));
         assert_eq!(left.lines[0], "install outcome: partial");
         assert_eq!(
-            left.lines[13],
+            left.lines[14],
             "stub `bal-old` at /home/o/.claude/skills/bal-old/SKILL.md: not removed: not-removable: denied"
         );
         assert_eq!(left.code, 1);
@@ -856,7 +866,7 @@ mod tests {
         let carried = render_with(RetiredOutcome::Carried);
         assert_eq!(carried.lines[0], "install outcome: complete");
         assert!(
-            carried.lines[13].contains("model catalog"),
+            carried.lines[14].contains("model catalog"),
             "{:?}",
             carried.lines
         );

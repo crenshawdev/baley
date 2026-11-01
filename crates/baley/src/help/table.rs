@@ -53,7 +53,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "bal-plan",
         cluster: "Build spine",
-        description: "Author a phase's plans and publish the exact owner-approved content through Baley",
+        description: "Plan a phase with its owner: the committed stories, the planner's typed plan and its questions in rounds, then the draft the owner approves at the terminal.",
     },
     Command {
         name: "bal-execute",
@@ -287,7 +287,7 @@ mod tests {
         ("bal-help", true, 3),
         ("bal-capture", true, 3),
         ("bal-context", true, 4),
-        ("bal-plan", false, 4),
+        ("bal-plan", true, 4),
         ("bal-review", false, 4),
         ("bal-plan-review", false, 4),
         ("bal-decision-review", false, 4),
@@ -340,7 +340,7 @@ mod tests {
         let plan = answer(Some("plan"));
         let rows = plan["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(triple(&rows[0]), ("bal-plan".to_owned(), false, 4));
+        assert_eq!(triple(&rows[0]), ("bal-plan".to_owned(), true, 4));
         let help = answer(Some("/bal-help"));
         assert_eq!(
             triple(&help["rows"].as_array().unwrap()[0]),

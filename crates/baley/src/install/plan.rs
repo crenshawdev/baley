@@ -838,6 +838,10 @@ mod tests {
                 PathBuf::from("/home/o/.claude/skills/bal-context/SKILL.md"),
                 seen(FileState::Absent),
             ),
+            (
+                PathBuf::from("/home/o/.claude/skills/bal-plan/SKILL.md"),
+                seen(FileState::Absent),
+            ),
             (capture.clone(), seen(FileState::Absent)),
             (help.clone(), seen(FileState::Bytes(b"mine".to_vec()))),
         ]);
@@ -879,6 +883,7 @@ mod tests {
                 (Artifact::Stub("bal-story".into()), stubs.clone()),
                 (Artifact::Stub("bal-backlog".into()), stubs.clone()),
                 (Artifact::Stub("bal-context".into()), stubs.clone()),
+                (Artifact::Stub("bal-plan".into()), stubs.clone()),
                 (Artifact::Stub("bal-capture".into()), stubs.clone()),
                 (Artifact::Stub("bal-help".into()), stubs),
                 (Artifact::Registration, ArtifactOutcome::NotWritten),
@@ -924,7 +929,7 @@ mod tests {
         assert_eq!(facts.hook, None);
         assert_eq!(facts.sandbox, None);
         assert!(!facts.complete);
-        assert_eq!(facts.stubs.len(), 8);
+        assert_eq!(facts.stubs.len(), 9);
 
         // A completed installation left unchanged stays in the record.
         let complete = complete_settings();
@@ -947,8 +952,8 @@ mod tests {
                 "/home/o/.config/crenshawdev/baley"
             ]
         );
-        assert_eq!(sandbox.deny_write.len(), 14);
-        assert_eq!(sandbox.permissions_deny.len(), 16);
+        assert_eq!(sandbox.deny_write.len(), 15);
+        assert_eq!(sandbox.permissions_deny.len(), 17);
 
         // The write failed over Baley's own older entries.
         let old_hook = json!({
@@ -1203,7 +1208,7 @@ mod tests {
 
         assert!(plan.writes.is_empty(), "{:?}", plan.writes);
         assert_eq!(plan.registration, Step::Unchanged);
-        assert_eq!(plan.outcomes.len(), 11);
+        assert_eq!(plan.outcomes.len(), 12);
         for (artifact, outcome) in &plan.outcomes {
             assert_eq!(*outcome, ArtifactOutcome::Unchanged, "{artifact}");
         }
@@ -1231,6 +1236,7 @@ mod tests {
                     Artifact::Stub("bal-context".into()),
                     ArtifactOutcome::Written,
                 ),
+                (Artifact::Stub("bal-plan".into()), ArtifactOutcome::Written),
                 (
                     Artifact::Stub("bal-capture".into()),
                     ArtifactOutcome::Written,
@@ -1333,14 +1339,14 @@ mod tests {
             assert_eq!(document["sandbox"]["enabled"], true);
             assert_eq!(
                 document["permissions"]["deny"].as_array().unwrap().len(),
-                16
+                17
             );
             let stubs = plan
                 .writes
                 .iter()
                 .filter(|write| matches!(write.artifacts[0], Artifact::Stub(_)))
                 .count();
-            assert_eq!(stubs, 8);
+            assert_eq!(stubs, 9);
             assert_eq!(plan.writes[0].artifacts, [Artifact::Settings]);
             let wiring = plan.wiring.as_ref().expect("the wiring is held back");
             assert!(wiring.gap.contains(stable), "{}", wiring.gap);
@@ -1668,6 +1674,10 @@ mod tests {
                         ArtifactOutcome::Unchanged,
                     ),
                     (
+                        Artifact::Stub("bal-plan".into()),
+                        ArtifactOutcome::Unchanged,
+                    ),
+                    (
                         Artifact::Stub("bal-capture".into()),
                         ArtifactOutcome::Unchanged,
                     ),
@@ -1713,6 +1723,7 @@ mod tests {
                 "bal-story",
                 "bal-backlog",
                 "bal-context",
+                "bal-plan",
                 "bal-capture",
                 "bal-help",
             ]
@@ -1729,13 +1740,14 @@ mod tests {
                 "bal-story",
                 "bal-backlog",
                 "bal-context",
+                "bal-plan",
                 "bal-capture",
                 "bal-help",
                 "bal-old",
             ]
         );
         assert_eq!(
-            left.stubs[8],
+            left.stubs[9],
             event::Stub {
                 identity: "bal-old".into(),
                 path: OLD.into(),
@@ -1755,6 +1767,7 @@ mod tests {
                 "bal-story",
                 "bal-backlog",
                 "bal-context",
+                "bal-plan",
                 "bal-capture",
                 "bal-help",
                 "bal-old",

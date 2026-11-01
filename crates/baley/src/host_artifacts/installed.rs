@@ -203,6 +203,10 @@ mod tests {
                         PathBuf::from(format!("{folder}/skills/bal-context/SKILL.md")),
                     ),
                     (
+                        Artifact::Stub("bal-plan".into()),
+                        PathBuf::from(format!("{folder}/skills/bal-plan/SKILL.md")),
+                    ),
+                    (
                         Artifact::Stub("bal-capture".into()),
                         PathBuf::from(format!("{folder}/skills/bal-capture/SKILL.md")),
                     ),
@@ -298,6 +302,7 @@ mod tests {
                     "/home/o/.claude/skills/bal-story/SKILL.md",
                     "/home/o/.claude/skills/bal-backlog/SKILL.md",
                     "/home/o/.claude/skills/bal-context/SKILL.md",
+                    "/home/o/.claude/skills/bal-plan/SKILL.md",
                     "/home/o/.claude/skills/bal-capture/SKILL.md",
                     "/home/o/.claude/skills/bal-help/SKILL.md",
                 ]
@@ -381,6 +386,7 @@ mod tests {
                 PathBuf::from("/home/o/.claude/skills/bal-story/SKILL.md"),
                 PathBuf::from("/home/o/.claude/skills/bal-backlog/SKILL.md"),
                 PathBuf::from("/home/o/.claude/skills/bal-context/SKILL.md"),
+                PathBuf::from("/home/o/.claude/skills/bal-plan/SKILL.md"),
                 PathBuf::from("/home/o/.claude/skills/bal-capture/SKILL.md"),
                 PathBuf::from("/home/o/.claude/skills/bal-help/SKILL.md"),
                 PathBuf::from("/home/o/.claude.json"),

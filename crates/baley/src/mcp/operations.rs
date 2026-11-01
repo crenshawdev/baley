@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn an_unavailable_instruction_is_refused_naming_its_build() {
-        let answer = instruction_call("bal-plan");
+        let answer = instruction_call("bal-review");
         assert_eq!(answer["code"], "instruction-unavailable");
         assert_eq!(answer["slot"], "identity");
         assert_eq!(answer["details"], json!({"build": 4}));
