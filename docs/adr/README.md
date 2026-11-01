@@ -56,3 +56,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0047](0047-owner-acts-relayed-by-a-session.md) | Record an owner's act a session relays as Baley's, naming the session | Accepted |
 | [0048](0048-port-what-cadence-hands-agents.md) | Port what Cadence hands its agents into the binary | Accepted |
 | [0049](0049-rules-added-to-ported-texts.md) | Let a ported text add a rule an accepted design requirement states | Accepted |
+| [0050](0050-phase-plan-commits-stories-through-an-approved-edit.md) | Commit a phase plan's stories through an approved phase edit that issues the planner's order | Accepted |
