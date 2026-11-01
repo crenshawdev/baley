@@ -161,9 +161,12 @@ pub fn prepare<S: Views + Payloads + ?Sized>(
 /// issues over MCP, as `id` for `command`'s project (D-15, PLN-R27): as
 /// [`prepare`] prepares a revision for phase `phase`'s committed stories in
 /// their order, its `questions` input built from `closed`, the set's facts
-/// with the closing call's own answers and deferrals. The caller issues it
-/// inside its own transaction with [`PreparedOrder::issue_within`]. Nothing
-/// is recorded. A fault is the answer to give.
+/// with the closing call's own answers and deferrals. Its documents hold the
+/// `roadmap` document the committed stories were read from as well as the
+/// inputs', so a commitment changed between the two reads is never issued
+/// for. The caller issues it inside its own transaction with
+/// [`PreparedOrder::issue_within`]. Nothing is recorded. A fault is the
+/// answer to give.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_revision<S: Views + Payloads + ?Sized>(
     store: &S,
@@ -189,13 +192,18 @@ pub fn prepare_revision<S: Views + Payloads + ?Sized>(
         revision,
         closed,
     )?;
+    // The selection came from the readiness read, so its documents are
+    // observed beside the inputs': a commitment changed between the two
+    // reads makes the issue `ledger-busy`.
+    let mut documents = readiness.documents().to_vec();
+    documents.extend(read.documents);
     Ok(PreparedOrder {
         id: id.into(),
         phase,
         route,
         instructions,
         inputs: read.inputs,
-        documents: read.documents,
+        documents,
     })
 }
 
@@ -732,6 +740,130 @@ pub(crate) mod tests {
         assert_eq!(refusal["code"], "planner-order-pending", "{refusal}");
         assert_eq!(refusal["slot"], "operation", "{refusal}");
         assert_eq!(refusal["details"], json!({"work_order": O2}));
+        assert_eq!(head(&store), before);
+    }
+
+    /// Commits `[1, 4]` to phase 1 through a plain `phase edit`, with no
+    /// continuation, approved by the owner under R5 and R6 at T7.
+    fn story_4_committed(store: &SqliteStore) {
+        let fields = baley_core::scope::PhaseFields {
+            stories: Some(vec![1, 4]),
+            ..baley_core::scope::PhaseFields::default()
+        };
+        let submit = command(crate::scope::submit::SUBMIT_COMMAND, R5, 7, T7);
+        let digest = crate::scope::submit::submit_phase_edit(store, &submit, 1, &fields, None)
+            .expect("the edit is recorded");
+        let judged = crate::scope::approve::judge(store, &project(), digest)
+            .expect("the edit is approvable");
+        let approval = command(crate::scope::approve::APPROVE_COMMAND, R6, 6, T7);
+        let answer = crate::scope::submit::answer(
+            crate::scope::approve::record(store, &approval, Some(&judged), "Ada Owner"),
+            store,
+        );
+        assert_eq!(answer["status"], "ok", "{answer}");
+    }
+
+    /// The real store, with `land` run once just after the first read of
+    /// `phase_plan`'s status index returns: the end of the readiness read
+    /// a revision's selection comes from, before its inputs are read.
+    struct CommitsDuring<'a> {
+        store: &'a SqliteStore,
+        land: std::cell::RefCell<Option<Box<dyn FnOnce() + 'a>>>,
+    }
+
+    impl Views for CommitsDuring<'_> {
+        fn get(
+            &self,
+            project: &ProjectId,
+            view: &str,
+            key: &baley_store::DocKey,
+        ) -> Result<Option<Document>, StoreError> {
+            Views::get(self.store, project, view, key)
+        }
+
+        fn get_many(
+            &self,
+            project: &ProjectId,
+            view: &str,
+            keys: &[baley_store::DocKey],
+        ) -> Result<Vec<Option<Document>>, StoreError> {
+            Views::get_many(self.store, project, view, keys)
+        }
+
+        fn find(
+            &self,
+            project: &ProjectId,
+            view: &str,
+            query: &IndexQuery,
+        ) -> Result<baley_store::Page<Document>, StoreError> {
+            let read = Views::find(self.store, project, view, query);
+            if view == PHASE_PLAN_VIEW {
+                let land = self.land.borrow_mut().take();
+                if let Some(land) = land {
+                    land();
+                }
+            }
+            read
+        }
+    }
+
+    impl Payloads for CommitsDuring<'_> {
+        fn open(&self, hash: &Hash) -> Result<baley_store::PayloadBody<'_>, StoreError> {
+            Payloads::open(self.store, hash)
+        }
+
+        fn status(&self, hash: &Hash) -> Result<baley_store::PayloadStatus, StoreError> {
+            Payloads::status(self.store, hash)
+        }
+    }
+
+    #[test]
+    fn a_revision_issued_for_a_selection_changed_between_its_reads_is_caught() {
+        use crate::planning::approve::tests::digest_of;
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let submitted = plan_submitted(&store, &pl2(), O, None, R2, T5);
+        let x2 = digest_of(&submitted);
+        let s2 = submitted["set"].as_str().unwrap().to_owned();
+        let closed = SetFacts {
+            questions: Vec::new(),
+            answers: Vec::new(),
+            deferrals: Vec::new(),
+            abandoned: None,
+        };
+        let moving = CommitsDuring {
+            store: &store,
+            land: std::cell::RefCell::new(Some(Box::new(|| story_4_committed(&store)))),
+        };
+        let command = command("questions.answer", R3, 9, T6);
+        let prepared = prepare_revision(
+            &moving,
+            &command,
+            1,
+            Revision {
+                draft: x2,
+                set: &s2,
+            },
+            &closed,
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            O2,
+        )
+        .expect("the revision is prepared");
+        assert!(
+            moving.land.borrow().is_none(),
+            "story 4 was committed between the reads"
+        );
+
+        // Phase 1 commits `[1, 4]` now, so a revision bound to `[1]` alone
+        // is refused rather than recorded.
+        let before = head(&store);
+        let busy = issue(&store, &command, &prepared);
+        assert_eq!(busy["status"], "failed", "{busy}");
+        assert_eq!(busy["code"], "ledger-busy", "{busy}");
         assert_eq!(head(&store), before);
     }
 }
