@@ -229,8 +229,8 @@ pub(crate) mod tests {
     //! Stores are real SQLite stores in fresh temporary directories, with
     //! times supplied; expected values are written out from design 0001
     //! Appendix B `plan-read`, design 0005 section 6 Views, D-07, D-17 and
-    //! the plan's data store C, O, PL1, PL2, PL3 and PL1r, never from
-    //! running this code.
+    //! the plan's data store C, O, PL1 and PL2, with PL3 and PL1r given maps
+    //! of their own here, never from running this code.
 
     use baley_store::Hash;
     use serde_json::json;
@@ -249,9 +249,37 @@ pub(crate) mod tests {
         assert_eq!(answer["status"], "ok", "{answer}");
     }
 
+    /// E3, a unit check of story 1's `t2` at version 1, where E2 checks it
+    /// at the integration level.
+    fn e3() -> Value {
+        json!({"id": "e3", "story": 1, "truth": "t2", "truth_version": 1, "kind": "check",
+            "spec": {"command": "cargo test round_unit",
+                "expected": {"kind": "literal", "value": "one round"},
+                "test": {"file": "src/ledger.rs", "function": "one_round"},
+                "setup": "a set answered once", "call": "read the round",
+                "level": "unit", "boundary": "the round read", "fakes": []},
+            "reason": "a round read wrongly"})
+    }
+
+    /// PL3 with E1 alone, so plan 2's map differs from plan 1's. Plan 1's
+    /// E2 still checks `t2`, and a truth takes one check id in a phase.
+    fn pl3_e1() -> Value {
+        let mut plan = pl3();
+        plan["evidence_map"] = json!([e1()]);
+        plan
+    }
+
+    /// PL1r with E1 and E3, so the replacement checks `t2` at another level
+    /// than the plan it replaces. E2 leaves the phase with plan 1.
+    fn pl1r_e3() -> Value {
+        let mut plan = pl1r();
+        plan["evidence_map"] = json!([e1(), e3()]);
+        plan
+    }
+
     /// The plan read expects for plan `plan` at `digest` with set `set`,
-    /// approved at `at`, carrying PL1's map E1 and E2, ready.
-    fn expected(plan: u32, digest: Hash, set: &Value, at: &str) -> ApprovedPlan {
+    /// approved at `at`, carrying `items`, ready.
+    fn expected(plan: u32, digest: Hash, set: &Value, at: &str, items: Vec<Value>) -> ApprovedPlan {
         ApprovedPlan {
             plan,
             digest: digest.to_hex(),
@@ -267,7 +295,7 @@ pub(crate) mod tests {
                 ready: true,
                 not_ready: Vec::new(),
             },
-            items: vec![e1(), e2()],
+            items,
         }
     }
 
@@ -278,13 +306,14 @@ pub(crate) mod tests {
         let first = plan_submitted(&store, &pl1(), O, None, R2, T5);
         let x1 = digest_of(&first);
         approved_ok(&store, x1, R3, T5);
-        let second = plan_submitted(&store, &pl3(), O, None, R4, T6);
+        let second = plan_submitted(&store, &pl3_e1(), O, None, R4, T6);
         let x3 = digest_of(&second);
         approved_ok(&store, x3, R5, T6);
         let x2 = digest_of(&plan_submitted(&store, &pl2(), O, None, R6, T7));
 
-        let one = expected(1, x1, &first["set"], T5);
-        let two = expected(2, x3, &second["set"], T6);
+        // Each plan's map is its own: one read under another plan's key fails.
+        let one = expected(1, x1, &first["set"], T5, vec![e1(), e2()]);
+        let two = expected(2, x3, &second["set"], T6, vec![e1()]);
         let read_1 = read(&store, &project(), 1).expect("phase 1 is read");
         assert_eq!(
             read_1,
@@ -307,20 +336,30 @@ pub(crate) mod tests {
         store.rebuild(&project()).expect("the views rebuild");
         assert_eq!(read(&store, &project(), 1).expect("read again"), read_1);
 
-        let replaced = plan_replaced(&store, &pl1r(), O, 1, x1, R7, T7);
+        let replaced = plan_replaced(&store, &pl1r_e3(), O, 1, x1, R7, T7);
         let x1r = digest_of(&replaced);
         approved_ok(&store, x1r, R8, T8);
         let mut one_replaced = one.clone();
         one_replaced.state = "replaced".into();
         one_replaced.replaced_by = Some(x1r.to_hex());
-        let three = expected(3, x1r, &replaced["set"], T8);
+        let three = expected(3, x1r, &replaced["set"], T8, vec![e1(), e3()]);
+        let after_replacement = read(&store, &project(), 1).expect("read after the replacement");
         assert_eq!(
-            read(&store, &project(), 1).expect("read after the replacement"),
+            after_replacement,
             PhasePlans {
                 phase: 1,
                 plans: vec![one_replaced.clone(), two.clone(), three.clone()]
             }
         );
+        // The replaced plan keeps E2 at integration, its replacement has E3
+        // at unit.
+        assert_eq!(after_replacement.plans[0].items[1]["id"], "e2");
+        assert_eq!(
+            after_replacement.plans[0].items[1]["spec"]["level"],
+            "integration"
+        );
+        assert_eq!(after_replacement.plans[2].items[1]["id"], "e3");
+        assert_eq!(after_replacement.plans[2].items[1]["spec"]["level"], "unit");
 
         let revised = with_version(t1(), 2);
         append(
