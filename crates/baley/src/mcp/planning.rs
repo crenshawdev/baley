@@ -42,6 +42,7 @@ use crate::mcp::work_order::{
 };
 use crate::planning::phase_plan::{self, PHASE_PLAN_COMMAND};
 use crate::planning::{facts, replace, submit};
+use crate::process::Process;
 use crate::scope::submit::{NOT_RECORDED_BUSY, SUBMIT_COMMAND};
 use crate::work_order::issue as recording;
 use crate::work_order::route::host_names;
@@ -320,6 +321,16 @@ fn lowercase_digest(text: &str) -> Option<Hash> {
 /// the order's instruction evidence and the draft is recorded. A replay goes
 /// to the recording with no read, and the store answers it from its record.
 pub fn serve_submit(arguments: &Value, preparation: &Preparation) -> Value {
+    submit_through(arguments, preparation, &mut crate::process::System)
+}
+
+/// [`serve_submit`] with the settings read for the capacity running git
+/// through `process`, the seam a test supplies.
+fn submit_through(
+    arguments: &Value,
+    preparation: &Preparation,
+    process: &mut dyn Process,
+) -> Value {
     let judged = match judge_submit_arguments(arguments) {
         Ok(judged) => judged,
         Err(refusal) => return refusal,
@@ -328,7 +339,7 @@ pub fn serve_submit(arguments: &Value, preparation: &Preparation) -> Value {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
-    let capacity = capacity(preparation);
+    let capacity = capacity(preparation, process);
     // Kept for the binding and the recording. A replay skips the check.
     let kept = RefCell::new(None);
     let check = |store: &SqliteStore, project: &ProjectId| {
@@ -362,8 +373,11 @@ pub fn serve_submit(arguments: &Value, preparation: &Preparation) -> Value {
 }
 
 /// The capacity the session's settings set, read and judged with nothing
-/// recorded, or the answer that read ended with.
-fn capacity(preparation: &Preparation) -> Result<Option<NonZeroU32>, Value> {
+/// recorded, or the answer that read ended with. Git runs through `process`.
+fn capacity(
+    preparation: &Preparation,
+    process: &mut dyn Process,
+) -> Result<Option<NonZeroU32>, Value> {
     let ledger = preparation.ledger.as_deref();
     // With no ledger, the read fails at the project check, before any
     // settings are read from the config folder.
@@ -374,7 +388,7 @@ fn capacity(preparation: &Preparation) -> Result<Option<NonZeroU32>, Value> {
         config,
         preparation.host,
         &preparation.at,
-        &mut crate::process::System,
+        process,
     )?;
     prepared
         .policy
@@ -549,5 +563,83 @@ mod tests {
         let (last, earlier) = names.split_last().expect("a baseline");
         assert_eq!(*last, "plan-replace");
         assert_eq!(earlier.last(), Some(&"phase-plan"));
+    }
+
+    #[test]
+    fn a_replacement_resent_after_its_approval_judged_instead_of_replayed_is_caught() {
+        use baley_core::policy::Host;
+        use baley_store::ServerCaller;
+
+        use crate::mcp::handler::SessionLedger;
+        use crate::mcp::prepare::prepared_command;
+        use crate::planning::approve::tests::{approved, digest_of};
+        use crate::planning::fixtures::{p0, pl1, store_c};
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+        use crate::scope::fixtures::{ID, R2, R3, R4, R5, SESSION, T5, T6, T7, T8, head, project};
+
+        let (dir, store) = store_c();
+        // The checkout the session is in: a project file naming the
+        // project and a `.git` entry, which discovery only looks for.
+        let root = dir.path().join("r");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(
+            root.join("baley.toml"),
+            format!("[project]\nid = \"{ID}\"\nname = \"r\"\n"),
+        )
+        .unwrap();
+        let directory = root.to_str().unwrap();
+        let session =
+            ServerCaller::new(directory, directory, "claude-code", SESSION, &json!(7)).unwrap();
+
+        order_o(&store, R1);
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R2, T5));
+        assert_eq!(approved(&store, x1, &p0(), R3, T5)["status"], "ok");
+        // PL1r replacing plan 1 at X1, recorded as `plan-replace` records
+        // it below the session, then approved, so plan 1 is no longer in
+        // force when the same request is sent again.
+        let mut pl1r = pl1();
+        pl1r["goal"] = json!("Record every step, revised");
+        let arguments = json!({"operation": "plan-replace", "request_id": R4,
+            "work_order": O, "plan": pl1r,
+            "replaces": {"plan": 1, "digest": x1.to_hex()}});
+        let judged = judge_submit_arguments(&arguments).expect("accepted");
+        let checked = replace::check(
+            &store,
+            &project(),
+            &judged.plan,
+            &judged.work_order,
+            judged.replaces.expect("a replacement"),
+            None,
+        )
+        .expect("plan 1 is in force");
+        let on = order_caller(&session, O).expect("O's form");
+        let command = bind_instructions(
+            prepared_command(&project(), &judged.request, 8, T6, &on),
+            Some(&checked.evidence),
+        )
+        .expect("the instructions are carried");
+        let receipt =
+            crate::scope::submit::answer(submit::record(&store, &command, Some(&checked)), &store);
+        let x1r = digest_of(&receipt);
+        assert_eq!(approved(&store, x1r, &p0(), R5, T7)["status"], "ok");
+
+        let preparation = Preparation {
+            ledger: Some(std::sync::Arc::new(SessionLedger {
+                store,
+                config: dir.path().join("config"),
+            })),
+            host: Host::ClaudeCode,
+            caller: session,
+            at: T8.into(),
+        };
+        let ledger = preparation.ledger.as_deref().unwrap();
+        let before = head(&ledger.store);
+        // The capacity's settings read fails at git, which a replay never
+        // needs.
+        let mut process =
+            crate::process::Recorded::new().unavailable(std::io::Error::other("no git in tests"));
+        let resent = submit_through(&arguments, &preparation, &mut process);
+        assert_eq!(resent, receipt);
+        assert_eq!(head(&ledger.store), before);
     }
 }
