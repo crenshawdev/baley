@@ -13,12 +13,16 @@
 //! answer's receipt carries, and a sentence naming the rounds relay
 //! instruction (design 0005 `questions round`). A story's refinement by its
 //! id comes from `refine::read`, the read `context-intake` and `baley story
-//! refinement` give too (D-10).
+//! refinement` give too (D-10). A phase by its number, with its approved
+//! plans, and one approved plan by its phase and number come from
+//! `planning::read`, the read `plan-read` and `baley plan show` give too, so
+//! a draft is never answered (D-17).
 
 use std::io::Read;
 use std::path::Path;
 
 use baley_core::capture::{CAPTURE_ID_INDEX, CAPTURE_VIEW, NO_SUCH_PHASE};
+use baley_core::plan::NO_SUCH_PLAN;
 use baley_core::questions::UnreadableSet;
 use baley_core::scope::UNKNOWN_DRAFT;
 use baley_core::work_order::NO_SUCH_WORK_ORDER;
@@ -36,6 +40,7 @@ use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::handler::Preparation;
 use crate::mcp::parts::{Cut, PART_BOUND, cut};
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, prepare};
+use crate::planning::read as planning;
 use crate::questions::read::{self as questions, SetRead};
 use crate::refine::read::StoryRefinement;
 use crate::scope::read::{
@@ -102,6 +107,21 @@ pub enum Identity {
     Refinement {
         /// The story id Baley assigned when the scope was approved.
         story: u32,
+    },
+    /// A phase as the roadmap gives it, with every plan approved in it and
+    /// its evidence map, in plan-number order, replaced plans included.
+    #[serde(rename = "phase")]
+    Phase {
+        /// The phase's number, as the roadmap gives it.
+        phase: u32,
+    },
+    /// One approved plan of a phase with its evidence map.
+    #[serde(rename = "plan")]
+    Plan {
+        /// The phase's number, as the roadmap gives it.
+        phase: u32,
+        /// The plan's number, as its approval gave it.
+        plan: u32,
     },
 }
 
@@ -274,7 +294,8 @@ const SCOPE_NOT_READ_BUSY: &str = "the ledger is busy, so the scope was not read
 /// read from its view document by id, then its body only when the view says
 /// this project still holds it; a draft, the roadmap and a story through
 /// `scope::read`; a work order through `work_order::read`; a question set
-/// through `questions::read`; a story's refinement through `refine::read`.
+/// through `questions::read`; a story's refinement through `refine::read`;
+/// a phase and its approved plans, or one of them, through `planning::read`.
 /// Nothing is appended.
 pub fn read<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
@@ -308,6 +329,70 @@ pub fn read<S: Ledger + Views + Payloads + ?Sized>(
             Ok(refinement) => refinement_answer(Some(identity), refinement, shape.part),
             Err(error) => read_failed(error),
         },
+        Identity::Phase { phase } => phase_answer(store, project, identity, *phase, shape.part),
+        Identity::Plan { phase, plan } => {
+            plan_answer(store, project, identity, *phase, *plan, shape.part)
+        }
+    }
+}
+
+/// The answer for phase `number`'s read: the phase as the roadmap gives it
+/// and its approved plans as `planning::read` gives them to `plan-read`, in
+/// parts when large. A phase the roadmap does not hold is `no-such-phase`,
+/// echoing none of its number.
+fn phase_answer<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    identity: &Identity,
+    number: u32,
+    part: Option<usize>,
+) -> Value {
+    let held = match scope::roadmap(store, project) {
+        Ok(roadmap) => roadmap
+            .phases
+            .into_iter()
+            .find(|held| held.number == number),
+        Err(error) => return read_failed(error),
+    };
+    let Some(held) = held else {
+        return read_failed(ReadError::NoSuchPhase);
+    };
+    match planning::read(store, project, number) {
+        Ok(read) => in_parts(
+            json!({"status": "ok", "identity": identity, "phase": held, "plans": read.plans}),
+            part,
+        ),
+        Err(error) => read_failed(error),
+    }
+}
+
+/// The answer for plan `plan` of phase `phase`: that one plan with its
+/// evidence map from the read [`phase_answer`] shares, in parts when large.
+/// A plan number never approved in the phase is `no-such-plan` naming it.
+fn plan_answer<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    identity: &Identity,
+    phase: u32,
+    plan: u32,
+    part: Option<usize>,
+) -> Value {
+    let read = match planning::read(store, project, phase) {
+        Ok(read) => read,
+        Err(error) => return read_failed(error),
+    };
+    match read.plans.into_iter().find(|held| held.plan == plan) {
+        Some(held) => in_parts(
+            json!({"status": "ok", "identity": identity, "phase": phase, "plan": held}),
+            part,
+        ),
+        None => Refusal::new(
+            NO_SUCH_PLAN,
+            format!("this phase has no plan {plan}: no plan of that number was approved in it"),
+        )
+        .slot("identity")
+        .details(json!({"plan": plan}))
+        .value(),
     }
 }
 
@@ -854,7 +939,7 @@ mod tests {
                 "instruction": "bal-capture"}),
             json!({"operation": "document", "identity": {"kind": "capture", "id": ID,
                 "phase": 1}}),
-            json!({"operation": "document", "identity": {"kind": "plan", "id": ID}}),
+            json!({"operation": "document", "identity": {"kind": "review", "id": ID}}),
             json!({"operation": "document", "identity": {"kind": "questions",
                 "set": "5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "id": "x"}}),
             json!({"operation": "document", "identity": {"kind": "capture", "id": ID},
@@ -864,6 +949,125 @@ mod tests {
             assert_eq!(refusal["status"], "refused", "{arguments}");
             assert_eq!(refusal["code"], "invalid-arguments", "{arguments}");
             assert_eq!(refusal["slot"], "arguments", "{arguments}");
+        }
+    }
+
+    #[test]
+    fn a_phase_or_plan_document_shape_judged_wrongly_is_caught() {
+        let judged = |identity: Value| {
+            judge_arguments(&json!({"operation": "document", "identity": identity}))
+        };
+        assert_eq!(
+            judged(json!({"kind": "phase", "phase": 1}))
+                .unwrap()
+                .identity,
+            Identity::Phase { phase: 1 }
+        );
+        assert_eq!(
+            judged(json!({"kind": "plan", "phase": 1, "plan": 2}))
+                .unwrap()
+                .identity,
+            Identity::Plan { phase: 1, plan: 2 }
+        );
+        for identity in [
+            json!({"kind": "phase", "phase": "1"}),
+            json!({"kind": "plan", "phase": 1}),
+            json!({"kind": "plan", "phase": 1, "plan": 2, "digest": "x"}),
+        ] {
+            let refusal = judged(identity.clone()).expect_err("refused");
+            assert_eq!(refusal["code"], "invalid-arguments", "{identity}");
+        }
+    }
+
+    mod plans {
+        //! Store C with order O over the real store: PL1 approved as plan 1,
+        //! PL3 with E1 alone approved as plan 2, and PL2 submitted and never
+        //! approved. Expected answers are written out from design 0012's
+        //! `document` identities, D-07, D-17 and the plan's data, never from
+        //! running this code.
+
+        use serde_json::{Value, json};
+
+        use super::super::*;
+        use crate::planning::approve::tests::{approved, digest_of};
+        use crate::planning::fixtures::*;
+        use crate::planning::order::tests::O;
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+        use crate::scope::fixtures::*;
+
+        fn shape(identity: Identity) -> DocumentShape {
+            DocumentShape {
+                identity,
+                part: None,
+            }
+        }
+
+        #[test]
+        fn a_plan_document_answering_a_draft_another_plan_or_a_missing_one_is_caught() {
+            let (_dir, store) = store_c();
+            order_o(&store, R1);
+            let first = plan_submitted(&store, &pl1(), O, None, R2, T5);
+            let x1 = digest_of(&first);
+            assert_eq!(approved(&store, x1, &p0(), R3, T5)["status"], "ok");
+            let mut pl3 = pl3();
+            pl3["evidence_map"] = json!([e1()]);
+            let second = plan_submitted(&store, &pl3, O, None, R4, T6);
+            let x3 = digest_of(&second);
+            assert_eq!(approved(&store, x3, &p0(), R5, T6)["status"], "ok");
+            let x2 = digest_of(&plan_submitted(&store, &pl2(), O, None, R6, T7));
+            let before = head(&store);
+
+            let phase = read(&store, &project(), &shape(Identity::Phase { phase: 1 }));
+            assert_eq!(phase["status"], "ok", "{phase}");
+            assert_eq!(phase["identity"], json!({"kind": "phase", "phase": 1}));
+            assert_eq!(phase["phase"]["number"], 1, "{phase}");
+            assert_eq!(phase["phase"]["name"], "Records", "{phase}");
+            assert_eq!(phase["phase"]["goal"], "Steps are recorded", "{phase}");
+            assert_eq!(phase["phase"]["stories"], json!([1]), "{phase}");
+            let plans = phase["plans"].as_array().expect("plans");
+            assert_eq!(plans.len(), 2, "{phase}");
+            assert_eq!(plans[0]["plan"], 1);
+            assert_eq!(plans[0]["digest"], x1.to_hex());
+            assert_eq!(plans[0]["items"], json!([e1(), e2()]));
+            assert_eq!(plans[1]["plan"], 2);
+            assert_eq!(plans[1]["digest"], x3.to_hex());
+            assert_eq!(plans[1]["items"], json!([e1()]));
+            assert!(
+                !phase.to_string().contains(&x2.to_hex()),
+                "a draft answered as a plan: {phase}"
+            );
+            assert_eq!(head(&store), before);
+
+            let plan = read(
+                &store,
+                &project(),
+                &shape(Identity::Plan { phase: 1, plan: 2 }),
+            );
+            assert_eq!(plan["status"], "ok", "{plan}");
+            assert_eq!(
+                plan["identity"],
+                json!({"kind": "plan", "phase": 1, "plan": 2})
+            );
+            assert_eq!(plan["plan"]["plan"], 2, "{plan}");
+            assert_eq!(plan["plan"]["digest"], x3.to_hex(), "{plan}");
+            assert_eq!(plan["plan"]["items"], json!([e1()]), "{plan}");
+            assert!(plan.get("plans").is_none(), "{plan}");
+            assert_eq!(head(&store), before);
+
+            let missing = read(
+                &store,
+                &project(),
+                &shape(Identity::Plan { phase: 1, plan: 3 }),
+            );
+            assert_eq!(missing["status"], "refused", "{missing}");
+            assert_eq!(missing["code"], "no-such-plan", "{missing}");
+            assert_eq!(missing["details"], json!({"plan": 3}), "{missing}");
+            assert_eq!(head(&store), before);
+
+            let unknown: Value = read(&store, &project(), &shape(Identity::Phase { phase: 9 }));
+            assert_eq!(unknown["status"], "refused", "{unknown}");
+            assert_eq!(unknown["code"], "no-such-phase", "{unknown}");
+            assert_eq!(head(&store), before);
         }
     }
 

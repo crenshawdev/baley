@@ -1058,22 +1058,29 @@ mod tests {
     fn the_document_schema_does_not_omit_or_widen_the_capture_identity() {
         // Design 0012: a capture by its string id, a draft by its string
         // digest, the roadmap with no other field, a story by its integer id,
-        // a work order by its string id, a question set by its string set id
-        // and a refinement by its integer story id, each refusing any other
-        // field.
+        // a work order by its string id, a question set by its string set id,
+        // a refinement by its integer story id, a phase by its integer number
+        // and a plan by its integer phase and plan numbers, each refusing any
+        // other field.
         let schema = served_schema("document").unwrap();
         let identities = schema["properties"]["identity"]["oneOf"]
             .as_array()
             .unwrap();
-        assert_eq!(identities.len(), 7, "{identities:?}");
-        for (identity, kind, field) in [
-            (&identities[0], "capture", Some(("id", "string"))),
-            (&identities[1], "draft", Some(("digest", "string"))),
-            (&identities[2], "roadmap", None),
-            (&identities[3], "story", Some(("id", "integer"))),
-            (&identities[4], "work_order", Some(("id", "string"))),
-            (&identities[5], "questions", Some(("set", "string"))),
-            (&identities[6], "refinement", Some(("story", "integer"))),
+        assert_eq!(identities.len(), 9, "{identities:?}");
+        for (identity, kind, fields) in [
+            (&identities[0], "capture", &[("id", "string")][..]),
+            (&identities[1], "draft", &[("digest", "string")]),
+            (&identities[2], "roadmap", &[]),
+            (&identities[3], "story", &[("id", "integer")]),
+            (&identities[4], "work_order", &[("id", "string")]),
+            (&identities[5], "questions", &[("set", "string")]),
+            (&identities[6], "refinement", &[("story", "integer")]),
+            (&identities[7], "phase", &[("phase", "integer")]),
+            (
+                &identities[8],
+                "plan",
+                &[("phase", "integer"), ("plan", "integer")],
+            ),
         ] {
             assert_eq!(identity["type"], "object", "{identity}");
             assert_eq!(identity["properties"]["kind"]["const"], kind, "{identity}");
@@ -1086,19 +1093,14 @@ mod tests {
                 .collect();
             required.sort_unstable();
             let properties = identity["properties"].as_object().unwrap();
-            match field {
-                Some((name, kind)) => {
-                    assert_eq!(identity["properties"][name]["type"], kind, "{identity}");
-                    let mut expected = vec!["kind", name];
-                    expected.sort_unstable();
-                    assert_eq!(required, expected, "{identity}");
-                    assert_eq!(properties.len(), 2, "{identity}");
-                }
-                None => {
-                    assert_eq!(required, ["kind"], "{identity}");
-                    assert_eq!(properties.len(), 1, "{identity}");
-                }
+            for (name, kind) in fields {
+                assert_eq!(identity["properties"][name]["type"], *kind, "{identity}");
             }
+            let mut expected: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
+            expected.push("kind");
+            expected.sort_unstable();
+            assert_eq!(required, expected, "{identity}");
+            assert_eq!(properties.len(), fields.len() + 1, "{identity}");
         }
     }
 
