@@ -58,7 +58,11 @@ pub fn run(args: PlanArgs) -> ExitCode {
 /// policy, recording nothing, since the first step needs the capacity and
 /// the suite while a refusal must leave no policy step behind; the
 /// approval's first step under that policy, whose refusal prints and records
-/// nothing; checkout admission and the policy step; the owner over the
+/// nothing; checkout admission and the policy step, which reads the settings
+/// again; the judgement held to the policy the step recorded, judged again
+/// when its capacity or suite differs from the first read's, so the
+/// approval never names one read's version over the other read's judgement
+/// (a refusal there leaves only the policy step behind); the owner over the
 /// policy the step recorded, falling back to git's `user.name`; the owner's
 /// command; the second step; and the answer printed.
 fn approve(digest: &str) -> Result<Render, Render> {
@@ -70,6 +74,8 @@ fn approve(digest: &str) -> Result<Render, Render> {
     let judged = approve::judge(&store, project, digest, &policy)
         .map_err(|answer| approval_render(&answer))?;
     let (policy, version) = admitted(&store, &checkout)?;
+    let judged = approve::rejudged(&store, project, judged, &policy)
+        .map_err(|answer| approval_render(&answer))?;
 
     let owner = identity::owner(identity::owner_name(&policy), &mut crate::process::System)
         .map_err(Render::refusal)?;

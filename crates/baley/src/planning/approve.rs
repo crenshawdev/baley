@@ -7,12 +7,15 @@
 //! a different phase is active, then the plan judged again against the
 //! phase as it stands now. Build 4 T14 adds `review-unsettled` after these
 //! refusals, judged against the same digest. A replacement draft is judged
-//! by the replacement judge again before its plan is. The second step
-//! records one `plan.approved` as the owner with the next plan number, and
-//! for a replacement `plan.replaced` with it, confirming
-//! inside its transaction that nothing the first step read has moved.
+//! by the replacement judge again before its plan is. A first step whose
+//! capacity or suite differs from the policy the approval is recorded under
+//! is run again under that policy. The second step records one
+//! `plan.approved` as the owner with the next plan number, and for a
+//! replacement `plan.replaced` with it, confirming inside its transaction
+//! that nothing the first step read has moved.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 use baley_core::plan::{
     DraftRead, PHASE_PLAN_VIEW, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_KIND, PLAN_REPLACED,
@@ -67,6 +70,8 @@ pub struct Judged {
     evidence_map: Vec<Value>,
     /// The id of the draft's question set.
     set: String,
+    /// The capacity the plan was judged under, or none.
+    capacity: Option<NonZeroU32>,
     /// The project's test command, or none (D-14).
     suite: Option<String>,
     /// The draft body's reference, as its `scope.submitted` holds it.
@@ -222,7 +227,8 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
         ));
     };
 
-    let read = facts::read(store, project, phase, facts::capacity(policy))?;
+    let capacity = facts::capacity(policy);
+    let read = facts::read(store, project, phase, capacity)?;
     judge_submit_phase(phase, &read.active)
         .map_err(|refusal| phase_not_active(&refusal, "digest", NOT_APPROVED))?;
     let facts = match target.replaces {
@@ -256,11 +262,31 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
         replaces: target.replaces,
         evidence_map,
         set,
+        capacity,
         suite: suite(policy),
         body,
         documents,
         absences: read.absences().to_vec(),
     })
+}
+
+/// The first step's `judged` held to `policy`, the policy the approval is
+/// recorded under: `judged` itself when `policy` sets the capacity and the
+/// suite it was judged under, otherwise the first step run again under
+/// `policy`. The terminal reads the settings once to judge and again at
+/// the policy step, so a change between the two reads is judged under the
+/// version the approval names, never recorded on the first read's
+/// judgement. Nothing is recorded.
+pub fn rejudged<S: Ledger + Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    judged: Judged,
+    policy: &EffectivePolicy,
+) -> Result<Judged, Value> {
+    if judged.capacity == facts::capacity(policy) && judged.suite == suite(policy) {
+        return Ok(judged);
+    }
+    judge(store, project, judged.digest, policy)
 }
 
 /// The second step: records the approval judged by the first step under a
@@ -748,6 +774,29 @@ pub(crate) mod tests {
         approve_by_hand(&store, R3, 1, 1, Hash([0x7d; 32]), &[1], 1, &[], Vec::new());
         let refusal = refused_with(&store, x1, &capacity_one(), "over-capacity");
         assert_eq!(refusal["details"], json!({"stories": [1], "size": 2}));
+    }
+
+    #[test]
+    fn an_approval_recorded_on_settings_other_than_its_policy_steps_is_caught() {
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R2, T5));
+        approve_by_hand(&store, R3, 1, 1, Hash([0x7d; 32]), &[1], 1, &[], Vec::new());
+        // Judged under P0, with no capacity and no suite set; the policy
+        // step then reads a capacity of 1, or a suite.
+        let judged = judge(&store, &project(), x1, &p0()).expect("PL1 fits with no capacity");
+
+        let before = head(&store);
+        let refusal = rejudged(&store, &project(), judged.clone(), &capacity_one())
+            .expect_err("PL1 takes phase 1 to 2 tasks, over a capacity of 1");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "over-capacity", "{refusal}");
+        assert_eq!(refusal["slot"], "digest", "{refusal}");
+        assert_eq!(refusal["details"], json!({"stories": [1], "size": 2}));
+        assert_eq!(head(&store), before);
+
+        let suited = rejudged(&store, &project(), judged, &p3()).expect("PL1 fits under P3");
+        assert_eq!(suited.suite.as_deref(), Some("cargo nextest run"));
     }
 
     #[test]
