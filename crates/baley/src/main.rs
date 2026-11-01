@@ -40,6 +40,8 @@ enum Command {
     Story(baley::scope::command::StoryArgs),
     /// Show a question set's current round and what it has settled.
     Questions(baley::questions::command::QuestionsArgs),
+    /// Approve a plan draft by its digest as the owner, numbering it in its phase.
+    Plan(baley::planning::command::PlanArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),
     /// Install Claude Code's user-level wiring and seed the model catalog.
@@ -128,6 +130,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::Backlog(args) => return baley::scope::command::run_backlog(args),
         Command::Story(args) => return baley::scope::command::run_story(args),
         Command::Questions(args) => return baley::questions::command::run(args),
+        Command::Plan(args) => return baley::planning::command::run(args),
         Command::Update(args) => return baley::update::command::run(args),
         Command::Install(args) => return baley::install::command::run(args),
         other => other,
@@ -143,6 +146,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         | Command::Backlog(_)
         | Command::Story(_)
         | Command::Questions(_)
+        | Command::Plan(_)
         | Command::Install(_)
         | Command::Update(_) => {
             unreachable!("dispatched above")

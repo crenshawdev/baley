@@ -6,10 +6,16 @@
 //! issuing an order and handing one over; then `plan submit`, which checks a
 //! planner's plan against its order and the phase, over facts read from the
 //! views, and records it as the phase's one draft with its question set;
-//! and the owner's approval of that draft, in two steps.
+//! `plan replace`, recorded as a submit is and approved into a new number;
+//! and the owner's approval of that draft, in two steps, at the terminal
+//! through `baley plan approve`.
 
 /// The owner's approval of a plan draft: the first step and the recording.
 pub mod approve;
+
+/// `baley plan approve`: the owner's approval of a plan draft at the
+/// terminal.
+pub mod command;
 
 /// The facts a plan is judged on, read from the views.
 pub mod facts;
