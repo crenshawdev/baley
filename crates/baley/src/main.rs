@@ -40,7 +40,7 @@ enum Command {
     Story(baley::scope::command::StoryArgs),
     /// Show a question set's current round and what it has settled.
     Questions(baley::questions::command::QuestionsArgs),
-    /// Approve a plan draft by its digest as the owner, numbering it in its phase.
+    /// Approve a plan draft by its digest as the owner, or show a phase's approved plans and evidence maps.
     Plan(baley::planning::command::PlanArgs),
     /// Check the update source and stage a newer version behind the stable path.
     Update(baley::update::command::UpdateArgs),

@@ -1,6 +1,8 @@
 //! `baley plan approve <digest>`: the owner approves a plan draft by its
 //! digest at the terminal, the only way a plan is approved (design 0005
-//! section 5 `plan approve`, D-16, ADR 0044).
+//! section 5 `plan approve`, D-16, ADR 0044). `baley plan show <phase>`:
+//! the owner reads a phase's approved plans with their evidence maps and
+//! readiness, through the read `plan-read` serves (D-17), recording nothing.
 //!
 //! Gathering finds the project, opens the ledger and reads the settings; the
 //! approval's two steps are `planning::approve`'s, and what is printed is
@@ -15,11 +17,13 @@ use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::Render;
 use crate::planning::approve;
+use crate::planning::read::{self, PhasePlans};
 use crate::providers::identity;
 use crate::scope::command::{
-    admitted, approve_command, checkout, effective, emit, escaped, judge_digest,
-    open as open_ledger,
+    admitted, approve_command, checkout, effective, emit, escaped, judge_digest, judge_number,
+    open as open_ledger, read_error, reading,
 };
+use crate::scope::read::ReadError;
 use crate::scope::submit;
 
 /// The setting a plan's suite is read from.
@@ -44,12 +48,21 @@ pub enum PlanCommand {
         #[arg(value_name = "DIGEST")]
         digest: String,
     },
+    /// Show a phase's approved plans in plan-number order, replaced ones
+    /// included, each with its evidence map and whether its items still
+    /// name their truths' current versions.
+    Show {
+        /// The phase's number, as the roadmap gives it.
+        #[arg(value_name = "PHASE")]
+        phase: String,
+    },
 }
 
 /// Runs one `baley plan` command and prints its result.
 pub fn run(args: PlanArgs) -> ExitCode {
     emit(match args.command {
         PlanCommand::Approve { digest } => approve(&digest),
+        PlanCommand::Show { phase } => show(&phase),
     })
 }
 
@@ -89,6 +102,82 @@ fn approve(digest: &str) -> Result<Render, Render> {
     .map_err(|e| Render::refusal(e.to_string()))?;
     let recorded = approve::record(&store, &command, Some(&judged), &owner);
     Ok(approval_render(&submit::answer(recorded, &store)))
+}
+
+/// `plan show`: the phase number is judged before anything is read; then
+/// the phase's approved plans are read, recording nothing (ADR 0044).
+fn show(phase: &str) -> Result<Render, Render> {
+    let phase = judge_number(phase)?;
+    reading(|store, project| show_render(read::read(store, project, phase)))
+}
+
+/// What `baley plan show` prints for a phase's plans read: each plan as
+/// `plan <n> at <digest>: <state>`, the state `replaced by <digest>` for
+/// a replaced one, then `ready` or `not ready:` and the items bound to a
+/// version that is not current; then its stories, its size and its suite or
+/// `suite: none`; then one line per item as `item <id>: story <s>, truth
+/// <t> version <v>, <kind>`, with `level <level>` for a check. A phase with
+/// no approved plan prints one line saying so. A refusal prints `<code>:
+/// <reason>`, exit 2, and a failure exit 1. Every text from the ledger is
+/// printed through `escaped`.
+pub(crate) fn show_render(read: Result<PhasePlans, ReadError>) -> Render {
+    let plans = match read {
+        Ok(plans) => plans,
+        Err(error) => return read_error(error),
+    };
+    let text = |value: &Value| escaped(value.as_str().unwrap_or_default());
+    let mut lines = Vec::new();
+    if plans.plans.is_empty() {
+        lines.push(format!("phase {} has no approved plan", plans.phase));
+    }
+    for plan in &plans.plans {
+        let state = match &plan.replaced_by {
+            Some(by) => format!("{} by {}", escaped(&plan.state), escaped(by)),
+            None => escaped(&plan.state),
+        };
+        let readiness = if plan.readiness.ready {
+            "ready".to_owned()
+        } else {
+            let named: Vec<String> = plan
+                .readiness
+                .not_ready
+                .iter()
+                .map(|id| escaped(id))
+                .collect();
+            format!("not ready: {}", named.join(", "))
+        };
+        lines.push(format!(
+            "plan {} at {}: {state}, {readiness}",
+            plan.plan,
+            escaped(&plan.digest)
+        ));
+        let stories: Vec<String> = plan.stories.iter().map(u32::to_string).collect();
+        lines.push(format!("stories: {}", stories.join(", ")));
+        lines.push(format!("size: {} tasks", plan.size));
+        lines.push(match &plan.suite {
+            Some(suite) => format!("suite: {}", escaped(suite)),
+            None => "suite: none".to_owned(),
+        });
+        for item in &plan.items {
+            let mut line = format!(
+                "item {}: story {}, truth {} version {}, {}",
+                text(&item["id"]),
+                item["story"],
+                text(&item["truth"]),
+                item["truth_version"],
+                text(&item["kind"])
+            );
+            if item["kind"] == "check" {
+                line = format!("{line}, level {}", text(&item["spec"]["level"]));
+            }
+            lines.push(line);
+        }
+    }
+    Render {
+        lines,
+        code: 0,
+        error: false,
+    }
 }
 
 /// What a plan approval's answer prints: an `ok` receipt as `approved plan
@@ -237,6 +326,65 @@ mod tests {
             forged.lines[0],
             format!("approved plan 3 of phase 1 as Ada\\nbaley: approved plan 9 at {AT}")
         );
+    }
+
+    #[test]
+    fn a_plan_shown_without_its_levels_versions_or_readiness_is_caught() {
+        use crate::planning::fixtures::{e1, e2};
+        use crate::planning::read::{ApprovedPlan, Readiness};
+
+        const Y: &str = "6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d";
+        let plan = |number: u32, digest: &str, suite: Option<&str>| ApprovedPlan {
+            plan: number,
+            digest: digest.into(),
+            stories: vec![1],
+            size: 1,
+            suite: suite.map(str::to_owned),
+            set: "s".into(),
+            owner: "Ada Owner".into(),
+            at: AT.into(),
+            state: "approved".into(),
+            replaced_by: None,
+            readiness: Readiness {
+                ready: true,
+                not_ready: Vec::new(),
+            },
+            items: vec![e1(), e2()],
+        };
+        let mut one = plan(1, X, None);
+        one.state = "replaced".into();
+        one.replaced_by = Some(Y.into());
+        let mut two = plan(2, OLD, Some("cargo test\nplan 9 at x: approved, ready"));
+        two.readiness = Readiness {
+            ready: false,
+            not_ready: vec!["e1".into()],
+        };
+        let shown = show_render(Ok(PhasePlans {
+            phase: 1,
+            plans: vec![one, two],
+        }));
+        assert_eq!(shown.code, 0);
+        assert!(!shown.error);
+        assert_eq!(
+            shown.lines[..6],
+            [
+                format!("plan 1 at {X}: replaced by {Y}, ready"),
+                "stories: 1".to_owned(),
+                "size: 1 tasks".to_owned(),
+                "suite: none".to_owned(),
+                "item e1: story 1, truth t1 version 1, check, level unit".to_owned(),
+                "item e2: story 1, truth t2 version 1, check, level integration".to_owned(),
+            ]
+        );
+        assert_eq!(
+            shown.lines[6],
+            format!("plan 2 at {OLD}: approved, not ready: e1")
+        );
+        assert_eq!(
+            shown.lines[9],
+            "suite: cargo test\\nplan 9 at x: approved, ready"
+        );
+        assert_eq!(shown.lines.len(), 12, "{:?}", shown.lines);
     }
 
     /// The `baley plan` part of the command line, over the library's own
