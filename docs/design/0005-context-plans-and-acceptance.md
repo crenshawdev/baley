@@ -527,10 +527,13 @@ sequenceDiagram
   participant L as Ledger
   O->>H: plan phase N with stories S1, S2
   H->>B: phase-plan N [S1, S2]
-  break another phase active, a story unrefined or in another phase, or a planner order of N pending
-    B-->>H: phase-active, story-unrefined, story-in-phase or planner-order-pending, naming it
+  break another phase active, or a story unrefined or in another phase
+    B-->>H: phase-active, story-unrefined or story-in-phase, naming it
   end
   alt S1, S2 differ from N's committed stories
+    break a planner order of N pending
+      B-->>H: planner-order-pending, naming it
+    end
     B->>L: scope.submitted of kind phase-edit and plan.continuation
     B-->>H: the edit's digest with the preview and approve commands, no work order
     H->>O: the digest
@@ -539,9 +542,13 @@ sequenceDiagram
     B->>L: phase.declared (edit), scope.approved and work_order.issued, the planner order
     B-->>O: receipt naming the planner order
     H->>B: phase-plan N [S1, S2] again
+    Note over H,B: readiness is judged again, then the hand-over comes before any pending-order refusal
     B->>L: plan.continuation_followed
     B-->>H: the planner order the approval issued
-  else S1, S2 are N's committed stories
+  else S1, S2 are N's committed stories, no hand-over due
+    break a planner order of N pending
+      B-->>H: planner-order-pending, naming it
+    end
     B->>L: work_order.issued, the planning order
     B-->>H: the planner order
   end
@@ -601,7 +608,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 5. Phase planning and a plan's submission, check, questions and approval. A `phase-plan` that changes the phase's stories, a reorder included, only drafts the `phase edit` with its continuation; the owner's approval at the terminal rechecks the selection and records the stories and the planner order in one transaction, and the session's next `phase-plan` with the same stories hands that order over once ([ADR 0050](../adr/0050-phase-plan-commits-stories-through-an-approved-edit.md)). An unchanged selection issues its order at once, the revision order when the current draft's set closed on a rejected recommendation. A revised draft is checked and previewed again and opens its own question set, abandoning the set of the draft it replaces. The revision order is issued by the closing `questions-answer` over MCP; after a close at the terminal, which issues no order, the session's next `phase-plan` issues it. A replacement goes the same way through `plan-replace`, and its approval also records `plan.replaced`. Every refusal records nothing. Round 2 reads the full revision or its changes, as selected by PLN-R16, and both scopes check every first-round blocker. Missing or mismatched retained inputs refuse the re-check before dispatch. The plan gate's path draws the checker's revision order before the draft's `scope.submitted`, which is what answers the planner order the draft came from, so the phase's one live planner order is not yet settled there; section 12 holds that ordering open for Build 4 T10.*
+*Figure 5. Phase planning and a plan's submission, check, questions and approval. A `phase-plan` that changes the phase's stories, a reorder included, only drafts the `phase edit` with its continuation; the owner's approval at the terminal rechecks the selection and records the stories and the planner order in one transaction, and the session's next `phase-plan` with the same stories hands that order over once ([ADR 0050](../adr/0050-phase-plan-commits-stories-through-an-approved-edit.md)). Every `phase-plan` is judged for readiness first; the hand-over is judged next, so the call that collects the approval's order is never refused for that order, and `planner-order-pending` refuses only a call with no hand-over due. An unchanged selection issues its order at once, the revision order when the current draft's set closed on a rejected recommendation. A revised draft is checked and previewed again and opens its own question set, abandoning the set of the draft it replaces. The revision order is issued by the closing `questions-answer` over MCP; after a close at the terminal, which issues no order, the session's next `phase-plan` issues it. A replacement goes the same way through `plan-replace`, and its approval also records `plan.replaced`. Every refusal records nothing. Round 2 reads the full revision or its changes, as selected by PLN-R16, and both scopes check every first-round blocker. Missing or mismatched retained inputs refuse the re-check before dispatch. The plan gate's path draws the checker's revision order before the draft's `scope.submitted`, which is what answers the planner order the draft came from, so the phase's one live planner order is not yet settled there; section 12 holds that ordering open for Build 4 T10.*
 
 ```mermaid
 sequenceDiagram
