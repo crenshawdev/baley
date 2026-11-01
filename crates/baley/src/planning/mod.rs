@@ -8,7 +8,8 @@
 //! views, and records it as the phase's one draft with its question set;
 //! `plan replace`, recorded as a submit is and approved into a new number;
 //! and the owner's approval of that draft, in two steps, at the terminal
-//! through `baley plan approve`.
+//! through `baley plan approve`; and a phase's approved plans read back with
+//! their evidence maps and readiness, for `plan-read` and `baley plan show`.
 
 /// The owner's approval of a plan draft: the first step and the recording.
 pub mod approve;
@@ -29,6 +30,9 @@ pub mod order;
 
 /// `phase plan`: the check run before admission and the run after it.
 pub mod phase_plan;
+
+/// A phase's approved plans with their evidence maps, read back.
+pub mod read;
 
 /// `plan replace`: the check of a replacement, recorded as a submit is.
 pub mod replace;
@@ -226,6 +230,54 @@ pub(crate) mod fixtures {
         plan["goal"] = json!("Record again");
         plan["tasks"][0]["id"] = json!("k2");
         plan
+    }
+
+    /// PL1r: PL1 with goal `Record every step, revised`.
+    pub(crate) fn pl1r() -> Value {
+        let mut plan = pl1();
+        plan["goal"] = json!("Record every step, revised");
+        plan
+    }
+
+    /// Submits `plan` answering order `work_order` as the replacement of plan
+    /// `number` at `digest`, with no capacity, through the replacement's
+    /// check and the submit's recording, as `plan-replace` runs them below
+    /// the session, under `request_id` at `at`. Gives the answer.
+    pub(crate) fn plan_replaced(
+        store: &SqliteStore,
+        plan: &Value,
+        work_order: &str,
+        number: u32,
+        digest: Hash,
+        request_id: &str,
+        at: &str,
+    ) -> Value {
+        let replaces = baley_core::plan::Replaces {
+            plan: number,
+            digest,
+        };
+        let checked = match crate::planning::replace::check(
+            store,
+            &project(),
+            plan,
+            work_order,
+            replaces,
+            None,
+        ) {
+            Ok(checked) => checked,
+            Err(refusal) => return refusal,
+        };
+        let mut command = command("plan.replace", request_id, 8, at);
+        let on = caller()
+            .with_work_order(work_order)
+            .expect("an order id")
+            .with_instructions(checked.evidence.clone())
+            .expect("the plan's instructions");
+        command.caller = Some(baley_store::Caller::Server(on));
+        crate::scope::submit::answer(
+            crate::planning::submit::record(store, &command, Some(&checked)),
+            store,
+        )
     }
 
     /// Records the `phase edit` of phase 1's stories to `stories` with its
