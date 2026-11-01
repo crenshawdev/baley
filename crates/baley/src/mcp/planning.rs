@@ -20,13 +20,21 @@
 //! as its own check, and the draft is recorded through
 //! [`crate::planning::submit::record`]. The owner approves the draft at the
 //! terminal with `baley plan approve`.
+//!
+//! `plan-read` on `baley_query` (design 0001 Appendix B `plan-read`, D-08,
+//! D-17): a phase's approved plans with their evidence maps and readiness,
+//! read through [`crate::planning::read`] as `baley plan show` reads them,
+//! prepared as `context-intake` is and recording nothing.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::path::Path;
 
+use baley_core::capture::NO_SUCH_PHASE;
 use baley_core::plan::Replaces;
-use baley_store::{CommandKind, Hash, InstructionEvidence, ProjectId, RequestId, request_digest};
+use baley_store::{
+    CommandKind, Hash, InstructionEvidence, ProjectId, RequestId, Views, request_digest,
+};
 use baley_store_sqlite::SqliteStore;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -34,6 +42,7 @@ use serde_json::{Map, Value, json};
 
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
+use crate::mcp::document::{in_parts, prepared_read, read_failed};
 use crate::mcp::handler::Preparation;
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, WriteRequest, prepare_settings_read};
 use crate::mcp::scope::{bind_instructions, order_caller};
@@ -41,8 +50,9 @@ use crate::mcp::work_order::{
     evidenced, judge_instruction, judge_order_id, judge_request_id, prepared_write, shape_fault,
 };
 use crate::planning::phase_plan::{self, PHASE_PLAN_COMMAND};
-use crate::planning::{facts, replace, submit};
+use crate::planning::{facts, read, replace, submit};
 use crate::process::Process;
+use crate::scope::read::ReadError;
 use crate::scope::submit::{NOT_RECORDED_BUSY, SUBMIT_COMMAND};
 use crate::work_order::issue as recording;
 use crate::work_order::route::host_names;
@@ -403,6 +413,79 @@ fn capacity(
         })
 }
 
+// `schema` serves this same declaration, so its doc comments are wire text.
+/// The arguments `plan-read` takes beside its `operation`. Unknown fields
+/// are refused.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanReadShape {
+    /// The number of the phase whose approved plans to read, as the roadmap
+    /// gives it.
+    pub phase: u32,
+    /// One-based part for answers over 24,576 bytes; defaults to 1.
+    /// Concatenate the returned bodies in order.
+    pub part: Option<usize>,
+}
+
+/// The tagged form `plan-read`'s arguments arrive in.
+#[derive(Deserialize)]
+#[serde(tag = "operation")]
+enum ReadCall {
+    #[serde(rename = "plan-read")]
+    Read(PlanReadShape),
+}
+
+/// Judges `plan-read`'s arguments. A shape fault is `invalid-arguments`,
+/// answered before anything is prepared.
+pub fn judge_read_arguments(arguments: &Value) -> Result<PlanReadShape, Value> {
+    match serde_json::from_value::<ReadCall>(arguments.clone()) {
+        Ok(ReadCall::Read(shape)) => Ok(shape),
+        Err(error) => Err(Refusal::new("invalid-arguments", error.to_string())
+            .slot("arguments")
+            .value()),
+    }
+}
+
+/// Serves one `plan-read` call for the session's `preparation`, as
+/// `context-intake` serves its read: the arguments are judged first, then
+/// the read is prepared, which records nothing, then [`read_answer`] reads
+/// the phase's approved plans. A `failed` preparation answer is returned as
+/// it is (D-17).
+pub fn serve_read(arguments: &Value, preparation: &Preparation) -> Value {
+    let shape = match judge_read_arguments(arguments) {
+        Ok(shape) => shape,
+        Err(refusal) => return refusal,
+    };
+    match prepared_read(preparation) {
+        Ok((store, project)) => read_answer(store, &project, &shape),
+        Err(answer) => answer,
+    }
+}
+
+/// The answer for `plan-read` over `store`: the phase's approved plans in
+/// plan-number order, each with its evidence map and its readiness, cut
+/// into parts when large. A phase the roadmap does not hold is refused
+/// `no-such-phase` echoing none of its number; any other fault is the read's
+/// `failed` answer.
+pub fn read_answer<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    shape: &PlanReadShape,
+) -> Value {
+    match read::read(store, project, shape.phase) {
+        Ok(read) => in_parts(
+            json!({"status": "ok", "phase": read.phase, "plans": read.plans}),
+            shape.part,
+        ),
+        Err(ReadError::NoSuchPhase) => {
+            Refusal::new(NO_SUCH_PHASE, "this project has no such phase")
+                .slot("phase")
+                .value()
+        }
+        Err(error) => read_failed(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Expected answers are written out from design 0005 `phase plan` and
@@ -641,5 +724,44 @@ mod tests {
         let resent = submit_through(&arguments, &preparation, &mut process);
         assert_eq!(resent, receipt);
         assert_eq!(head(&ledger.store), before);
+    }
+
+    #[test]
+    fn a_plan_read_left_retired_or_answering_a_missing_phase_wrongly_is_caught() {
+        use crate::mcp::operations::QUERY_OPERATIONS;
+        use crate::mcp::operations::expected::QUERY;
+
+        assert_eq!(
+            lookup(Tool::Query, Some("plan-read")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
+        assert_eq!(lookup(Tool::Apply, Some("plan-read")), Lookup::Unknown);
+        let names: Vec<&str> = QUERY_OPERATIONS.iter().map(|op| op.name).collect();
+        // `plan-read` keeps the place its retired spelling held, written out
+        // by hand in `expected`, between `evidence-read` and `context-intake`.
+        let at = names.iter().position(|name| *name == "plan-read");
+        assert_eq!(at, QUERY.iter().position(|name| *name == "plan-read"));
+        let at = at.expect("plan-read is listed");
+        assert_eq!(
+            (names[at - 1], names[at + 1]),
+            ("evidence-read", "context-intake")
+        );
+
+        let refusal =
+            judge_read_arguments(&json!({"operation": "plan-read", "phase": 1, "plans": [1]}))
+                .expect_err("an unknown member is refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "invalid-arguments", "{refusal}");
+
+        let (_dir, store) = crate::planning::fixtures::store_c();
+        let shape =
+            judge_read_arguments(&json!({"operation": "plan-read", "phase": 9})).expect("accepted");
+        let missing = read_answer(&store, &crate::scope::fixtures::project(), &shape);
+        assert_eq!(missing["status"], "refused", "{missing}");
+        assert_eq!(missing["code"], "no-such-phase", "{missing}");
+        assert_eq!(missing["slot"], "phase", "{missing}");
+        assert!(!missing.to_string().contains('9'), "{missing}");
     }
 }

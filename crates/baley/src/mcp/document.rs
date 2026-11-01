@@ -588,7 +588,7 @@ fn gone_status(status: &PayloadStatus) -> Value {
 
 /// `answer` whole when its JSON text fits one part, or one numbered part of
 /// that text, as `help` cuts its answer.
-fn in_parts(answer: Value, part: Option<usize>) -> Value {
+pub(crate) fn in_parts(answer: Value, part: Option<usize>) -> Value {
     let text = serde_json::to_string(&answer).expect("a document answer serializes");
     match cut(&text, part) {
         Cut::Whole(_) => answer,

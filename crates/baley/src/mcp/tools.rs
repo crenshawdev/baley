@@ -400,7 +400,7 @@ mod tests {
         // instruction, plan-submit takes request_id, work_order and plan,
         // plan-replace takes those and replaces, context-submit takes
         // request_id, work_order, story, set and truths,
-        // context-intake takes story and part,
+        // context-intake takes story and part, plan-read takes phase and part,
         // and route takes role or work_order.
         let names = |tool| {
             let schema = input_schema(tool);
@@ -421,6 +421,7 @@ mod tests {
                 "name",
                 "operation",
                 "part",
+                "phase",
                 "role",
                 "story",
                 "tool",
@@ -481,7 +482,7 @@ mod tests {
         assert!(
             parts
                 .iter()
-                .any(|d| d.ends_with("Taken by help and context-intake.")),
+                .any(|d| d.ends_with("Taken by help, plan-read and context-intake.")),
             "{parts:?}"
         );
         assert!(

@@ -104,7 +104,7 @@ pub const QUERY_OPERATIONS: &[Operation] = &[
     retired("verification-audit", 5),
     retired("execution-history", 5),
     retired("evidence-read", 5),
-    retired("plan-read", 4),
+    with_project("plan-read"),
     with_project("context-intake"),
     with_project("route"),
     retired("config-entry", 2),
@@ -398,6 +398,9 @@ enum RequestShape {
     // `plan-replace` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "plan-replace")]
     PlanReplace(#[allow(dead_code)] crate::mcp::planning::PlanReplaceShape),
+    // `plan-read` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-read")]
+    PlanRead(#[allow(dead_code)] crate::mcp::planning::PlanReadShape),
     // `context-intake` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "context-intake")]
     ContextIntake(#[allow(dead_code)] crate::mcp::refine::IntakeShape),
@@ -760,6 +763,7 @@ mod tests {
                     "plan-submit",
                     "plan-replace",
                     "context-submit",
+                    "plan-read",
                     "context-intake",
                     "route",
                 ]
@@ -777,7 +781,7 @@ mod tests {
                 needs_project: true
             }
         );
-        for name in ["document", "context-intake", "route"] {
+        for name in ["document", "plan-read", "context-intake", "route"] {
             assert_eq!(
                 lookup(Tool::Query, Some(name)),
                 Lookup::Available {
@@ -827,7 +831,6 @@ mod tests {
         };
         assert_eq!(build(Tool::Query, "config-entry"), 2);
         assert_eq!(build(Tool::Apply, "config-apply"), 2);
-        assert_eq!(build(Tool::Query, "plan-read"), 4);
         assert_eq!(build(Tool::Apply, "review-admit"), 4);
         assert_eq!(build(Tool::Apply, "risk-fire"), 4);
         assert_eq!(build(Tool::Query, "detect-surfaces"), 4);
