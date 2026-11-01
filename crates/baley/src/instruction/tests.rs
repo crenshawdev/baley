@@ -2,10 +2,9 @@ use serde_json::json;
 
 use super::*;
 
-/// The eighteen front doors not served yet, with their owning builds, written out from the
+/// The seventeen front doors not served yet, with their owning builds, written out from the
 /// design rather than read from the table under test.
 const UNAVAILABLE: &[(&str, u32)] = &[
-    ("bal-plan", 4),
     ("bal-review", 4),
     ("bal-plan-review", 4),
     ("bal-decision-review", 4),
@@ -27,7 +26,7 @@ const UNAVAILABLE: &[(&str, u32)] = &[
 
 #[test]
 fn an_unavailable_front_door_is_never_presented_as_usable_and_names_its_owning_build() {
-    assert_eq!(UNAVAILABLE.len(), 18);
+    assert_eq!(UNAVAILABLE.len(), 17);
     for (identity, build) in UNAVAILABLE {
         assert_eq!(
             lookup(identity),
@@ -44,13 +43,13 @@ fn an_unavailable_front_door_is_never_presented_as_usable_and_names_its_owning_b
 
 #[test]
 fn the_unavailable_refusal_names_the_build_in_words_and_as_an_integer_in_slot_identity() {
-    let refusal = unavailable("bal-plan", 4);
+    let refusal = unavailable("bal-review", 4);
     assert_eq!(refusal["status"], "refused");
     assert_eq!(refusal["code"], "instruction-unavailable");
     assert_eq!(refusal["slot"], "identity");
     assert_eq!(refusal["details"], json!({"build": 4}));
     let reason = refusal["reason"].as_str().unwrap();
-    assert!(reason.contains("Build 4") && reason.contains("bal-plan"));
+    assert!(reason.contains("Build 4") && reason.contains("bal-review"));
 }
 
 #[test]
@@ -190,6 +189,21 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "bal-phase-planner",
         "1",
         "65a03cb2fcbee8ff52445f5363a51054404085166b9ff2e285117f084315d8c6",
+    ),
+    (
+        "bal-phase-planner",
+        "2",
+        "2cfbbeb4b7f766a275204f5ac3bbbad9ff286e7d209bb4d7cb2ddbc3f90210f9",
+    ),
+    (
+        "bal-help",
+        "4",
+        "8e5cc78fc9084512af3a9700565869b33ed2181579fbf72132125f8f07df0cfd",
+    ),
+    (
+        "bal-plan",
+        "1",
+        "54f7d52ad86a2c9fb5b0c1bd175e1d5d7e9de47df8976373b819993c4456d2a0",
     ),
 ];
 
@@ -332,8 +346,8 @@ fn every_served_entry_fits_the_caller_records_limits_as_evidence() {
 #[test]
 fn an_unavailable_or_unknown_identity_is_refused_and_given_no_evidence() {
     assert_eq!(
-        evidence("bal-plan").unwrap_err(),
-        unavailable("bal-plan", 4)
+        evidence("bal-review").unwrap_err(),
+        unavailable("bal-review", 4)
     );
     assert_eq!(evidence("no-such-instruction").unwrap_err(), unknown());
 }
@@ -794,13 +808,6 @@ fn a_number_handed_to_the_planner_is_caught() {
     for name in CADENCE_NAMES {
         assert!(!served.contains(name), "the planner text names {name}");
     }
-    assert_eq!(
-        lookup("bal-plan"),
-        Lookup::Unavailable {
-            identity: "bal-plan",
-            build: 4
-        }
-    );
 }
 
 #[test]
@@ -931,7 +938,7 @@ fn a_planner_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "1");
+    assert_eq!(text.version, "2");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -945,6 +952,28 @@ fn a_planner_text_given_a_help_row_or_a_skill_stub_is_caught() {
         "{identity} is a front door"
     );
     assert!(!identity.starts_with("bal-planner-"));
+}
+
+#[test]
+fn a_planner_input_list_missing_the_approved_plans_items_is_caught() {
+    let Lookup::Served { text, .. } = lookup("bal-phase-planner") else {
+        panic!("bal-phase-planner is served");
+    };
+    let start = text
+        .body
+        .find("<input>")
+        .expect("the text has an input list");
+    let end = text.body.find("</input>").expect("the input list ends");
+    let list = &text.body[start..end];
+    assert!(
+        list.contains("the evidence items of the phase's approved plans"),
+        "the input list lacks the approved plans' items: {list}"
+    );
+    assert!(
+        list.contains("the phase's number, goal and detail"),
+        "{list}"
+    );
+    assert_eq!(text.version, "2");
 }
 
 #[test]
@@ -1014,4 +1043,127 @@ fn a_plan_door_naming_cadence_state_or_a_later_tasks_step_is_caught() {
             "the plan front door names {name}"
         );
     }
+}
+
+/// The backticked call in `body` whose operation is `name`.
+fn call<'a>(body: &'a str, name: &str) -> &'a str {
+    let opening = format!(r#"`{{"operation":"{name}""#);
+    let start = body
+        .find(&opening)
+        .unwrap_or_else(|| panic!("the text holds no {name} call"))
+        + 1;
+    let end = start + body[start..].find('`').expect("the call's span closes");
+    &body[start..end]
+}
+
+#[test]
+fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
+    use crate::mcp::operations::{self, Tool};
+    let Lookup::Served { entry, text } = lookup("bal-plan") else {
+        panic!("bal-plan is served");
+    };
+    assert_eq!(entry.build, 4);
+    assert_eq!(text.version, "1");
+    let body = text.body;
+    // The members each call's served shape takes (D-04, D-08, D-13).
+    let phase_plan = call(body, "phase-plan");
+    for member in [
+        r#""request_id":"#,
+        r#""phase":"#,
+        r#""stories":["#,
+        r#""instruction":"bal-plan""#,
+    ] {
+        assert!(phase_plan.contains(member), "{phase_plan} lacks {member}");
+    }
+    let submit = call(body, "plan-submit");
+    for member in [r#""request_id":"#, r#""work_order":"#, r#""plan":"#] {
+        assert!(submit.contains(member), "{submit} lacks {member}");
+    }
+    let replace = call(body, "plan-replace");
+    for member in [
+        r#""work_order":"#,
+        r#""plan":"#,
+        r#""replaces":{"plan":"#,
+        r#""digest":"#,
+    ] {
+        assert!(replace.contains(member), "{replace} lacks {member}");
+    }
+    let read = call(body, "plan-read");
+    assert!(read.contains(r#""phase":"#), "{read}");
+    // Neither submission's shape nor the read's takes an instruction.
+    for refusing in [submit, replace, read] {
+        assert!(!refusing.contains("instruction"), "{refusing}");
+    }
+    for needle in [
+        "planner-order-pending",
+        "`ready`",
+        "baley scope approve",
+        "baley plan approve",
+        "baley plan show",
+    ] {
+        assert!(body.contains(needle), "the plan front door lacks {needle}");
+    }
+    for word in ["retired", "unavailable"] {
+        assert!(!body.contains(word), "the plan front door says {word}");
+    }
+    // Every operation the text sends is served on its tool.
+    let mut named = Vec::new();
+    for (at, _) in body.match_indices(r#"{"operation":""#) {
+        let rest = &body[at + r#"{"operation":""#.len()..];
+        named.push(&rest[..rest.find('"').expect("the name closes")]);
+    }
+    let applied = [
+        "phase-plan",
+        "work-order-fail",
+        "work-order-retry",
+        "plan-submit",
+        "plan-replace",
+    ];
+    for name in applied {
+        assert!(named.contains(&name), "the text sends no {name}");
+    }
+    for name in named {
+        let tool = if applied.contains(&name) {
+            Tool::Apply
+        } else {
+            Tool::Query
+        };
+        assert!(
+            matches!(
+                operations::lookup(tool, Some(name)),
+                operations::Lookup::Available { .. }
+            ),
+            "{name} is not served on {}",
+            tool.name()
+        );
+    }
+}
+
+#[test]
+fn bal_plan_left_unserved_or_without_its_stub_is_caught() {
+    use crate::host_artifacts::stubs;
+    let answer = crate::help::table::answer(Some("plan"));
+    let rows = answer["rows"].as_array().expect("help rows");
+    assert_eq!(rows.len(), 1, "{answer}");
+    assert_eq!(rows[0]["name"], "bal-plan");
+    assert_eq!(rows[0]["available"], true);
+    assert_eq!(rows[0]["build"], 4);
+    let manifest = stubs::manifest(&stubs::front_doors()).expect("a manifest");
+    let stub = manifest
+        .iter()
+        .find(|entry| entry.identity == "bal-plan")
+        .expect("the manifest holds a bal-plan stub");
+    let stub = std::str::from_utf8(&stub.bytes).expect("a stub is text");
+    let (_, body) = stub.split_once("\n---\n").expect("a frontmatter block");
+    let lines: Vec<&str> = body
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1, "{body:?}");
+    assert!(lines[0].contains("`baley_query`"), "{}", lines[0]);
+    assert!(
+        lines[0].contains(r#"{"operation":"instruction","identity":"bal-plan"}"#),
+        "{}",
+        lines[0]
+    );
 }

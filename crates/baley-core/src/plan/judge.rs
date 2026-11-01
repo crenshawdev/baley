@@ -19,7 +19,7 @@
 
 use std::num::NonZeroU32;
 
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 use super::evidence::{self, EvidenceItem};
 use super::task::{self, Task};
@@ -185,6 +185,72 @@ impl PlanRefusal {
         }
     }
 
+    /// What the refusal names, as its answer's details, under the names the
+    /// design's refusal rows use, or none for `no-truths`, which names
+    /// nothing beyond the phase the caller already sent.
+    pub fn details(&self) -> Option<Value> {
+        let item = |position: &usize, id: &String| json!({"position": position, "id": id});
+        let truth = |story: &u32, truth: &String, version: &u32| json!({"story": story, "truth": truth, "version": version});
+        Some(match self {
+            Self::TypedContent { path } => json!({"path": path}),
+            Self::Lease { position, id, file } => {
+                json!({"position": position, "id": id, "file": file})
+            }
+            Self::Questions(refusal) => match refusal {
+                SetRefusal::TypedContent { position } => json!({"position": position}),
+                SetRefusal::QuestionId { position, id }
+                | SetRefusal::QuestionBlank { position, id }
+                | SetRefusal::QuestionDependency { position, id } => item(position, id),
+                SetRefusal::QuestionCycle { questions } => {
+                    let ids: Vec<&str> = questions.iter().map(|(_, id)| id.as_str()).collect();
+                    json!({"questions": ids})
+                }
+            },
+            Self::CheckCommand { position, id }
+            | Self::CheckExpected { position, id }
+            | Self::CheckTestFile { position, id }
+            | Self::CheckBoundary { position, id }
+            | Self::EvidenceItemTruth { position, id }
+            | Self::LinkValueNotNamed { position, id } => item(position, id),
+            Self::NoTruths => return None,
+            Self::StoryNotInPhase { story } => json!({"story": story}),
+            Self::TruthVersionMismatch {
+                position,
+                id,
+                current,
+            } => json!({"position": position, "id": id, "current": current}),
+            Self::EvidenceItemConflict { position, id, plan } => {
+                json!({"position": position, "id": id, "plan": plan})
+            }
+            Self::UncoveredTruth {
+                story,
+                truth: id,
+                version,
+            }
+            | Self::TruthWithoutCheck {
+                story,
+                truth: id,
+                version,
+            }
+            | Self::TruthWithoutObservation {
+                story,
+                truth: id,
+                version,
+            } => truth(story, id, version),
+            Self::TruthCheckLimit {
+                story,
+                truth: id,
+                version,
+                checks,
+            } => {
+                let mut named = truth(story, id, version);
+                named["checks"] = json!(checks);
+                named
+            }
+            Self::OverCapacity { stories, size } => json!({"stories": stories, "size": size}),
+        })
+    }
+
     /// A `typed-content` refusal naming `path`.
     pub(super) fn typed(path: impl Into<String>) -> Self {
         Self::TypedContent {
@@ -282,6 +348,9 @@ pub struct Plan {
     pub(super) tasks: Vec<Task>,
     pub(super) evidence_map: Vec<EvidenceItem>,
     pub(super) questions: QuestionSet,
+    // The plan object as submitted, kept so its draft body is exactly what
+    // was judged (D-05).
+    pub(super) submitted: Map<String, Value>,
 }
 
 impl Plan {
@@ -427,6 +496,55 @@ mod tests {
             })
         );
         assert_eq!(waiting.code(), "question-dependency");
+    }
+
+    #[test]
+    fn a_plan_refusal_answered_without_what_it_names_is_caught() {
+        let cases = [
+            (
+                typed("tasks[0].verify[1]"),
+                json!({"path": "tasks[0].verify[1]"}),
+            ),
+            (
+                lease(0, "k1", "src/x.rs"),
+                json!({"position": 0, "id": "k1", "file": "src/x.rs"}),
+            ),
+            (
+                PlanRefusal::TruthVersionMismatch {
+                    position: 0,
+                    id: "c1".into(),
+                    current: 2,
+                },
+                json!({"position": 0, "id": "c1", "current": 2}),
+            ),
+            (
+                PlanRefusal::EvidenceItemConflict {
+                    position: 0,
+                    id: "c1".into(),
+                    plan: 1,
+                },
+                json!({"position": 0, "id": "c1", "plan": 1}),
+            ),
+            (
+                PlanRefusal::TruthCheckLimit {
+                    story: 1,
+                    truth: "t1".into(),
+                    version: 1,
+                    checks: vec!["c1".into(), "c3".into()],
+                },
+                json!({"story": 1, "truth": "t1", "version": 1, "checks": ["c1", "c3"]}),
+            ),
+            (
+                PlanRefusal::OverCapacity {
+                    stories: vec![1, 2],
+                    size: 4,
+                },
+                json!({"stories": [1, 2], "size": 4}),
+            ),
+        ];
+        for (refusal, details) in cases {
+            assert_eq!(refusal.details(), Some(details), "{}", refusal.code());
+        }
     }
 
     fn lease(position: usize, id: &str, file: &str) -> PlanRefusal {

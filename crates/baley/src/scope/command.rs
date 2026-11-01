@@ -10,6 +10,12 @@
 //! truths approve <digest>` and `baley story refinement <id>` are
 //! `refine::command`'s: the first approves a story's truth draft as `scope
 //! approve` approves a scope draft, the second prints a story's refinement.
+//! A plan draft is approved only by `baley plan approve <digest>`: `scope
+//! approve` refuses its digest naming that command, and `scope preview`
+//! prints the plan draft with it (D-05).
+//! Approving a commitment, the `phase edit` a session's `phase-plan` drafted
+//! for a changed selection, also issues the phase's planner order, routed for
+//! Claude Code, and prints its id (D-01).
 //!
 //! Gathering finds the project and opens the ledger; judging, the arguments,
 //! the commands an approval or a submission is recorded under and what is
@@ -22,17 +28,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use baley_core::capture::NO_SUCH_PHASE;
+use baley_core::plan::{PLAN_KIND, read_plan_draft};
 use baley_core::policy::recorded::recorded_policy;
-use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, SettingsFile};
+use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile};
 use baley_core::scope::{
-    ChangeKind, ChangeSubmission, Destination, START_KIND, ScopeChange, UNKNOWN_DRAFT,
-    judge_change, judge_submission,
+    ChangeKind, ChangeSubmission, DRAFT_APPROVED, Destination, START_KIND, ScopeChange,
+    UNKNOWN_DRAFT, judge_change, judge_submission,
 };
 use baley_core::truth::{STORY_TRUTHS, TruthSubmission, Versions, judge_truths, versions};
 use baley_store::{
     Actor, Admin, CanonicalError, Command, CommandKind, Hash, ProjectId, RequestId, request_digest,
 };
 use baley_store_sqlite::SqliteStore;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::checkout::{Site, gather_and_admit};
@@ -46,12 +54,13 @@ use crate::mcp::scope::change_kind;
 use crate::providers::identity;
 use crate::refine::command::{sentence, truth_detail};
 use crate::refine::submit::{current_truths, mark_str};
-use crate::scope::approve::{self, APPROVE_COMMAND};
+use crate::scope::approve::{self, APPROVE_COMMAND, OrderRoute};
 use crate::scope::read::{
     self, BacklogStory, Detail, Draft, NO_SUCH_STORY, Phase, Preview, PreviewError, ReadError,
     Roadmap, Story,
 };
 use crate::scope::submit::{self, SUBMIT_COMMAND};
+use crate::work_order::route::host_names;
 use crate::{init, policy_step, settings};
 
 /// `baley scope`: the owner's approval of scope, and its reads.
@@ -323,6 +332,12 @@ pub(crate) fn open(checkout: &Checkout) -> Result<SqliteStore, Render> {
 /// so a refused approval records nothing at all. The owner is read over the
 /// policy the policy step recorded, and the second step records the
 /// approval under the version in force.
+///
+/// A commitment's approval issues its planner order (D-01), so its policy
+/// step records Claude Code's effective policy, as a session's write records
+/// its host's, and the order is routed for Claude Code with its accepted
+/// model names. Claude Code is the only host (`Host::ALL`); a second host
+/// needs a host choice for an order the terminal issues.
 fn approve(digest: &str) -> Result<Render, Render> {
     let digest = judge_digest(digest)?;
     let checkout = checkout()?;
@@ -330,7 +345,11 @@ fn approve(digest: &str) -> Result<Render, Render> {
     let project = &checkout.project;
     let judged =
         approve::judge(&store, project, digest).map_err(|answer| answer_render(&answer))?;
-    let (policy, version) = admitted(&store, &checkout)?;
+    let [host] = Host::ALL;
+    let (policy, version) = match judged.planner_order() {
+        Some(_) => host_admitted(&store, &checkout, host)?,
+        None => admitted(&store, &checkout)?,
+    };
 
     let owner = identity::owner(identity::owner_name(&policy), &mut crate::process::System)
         .map_err(Render::refusal)?;
@@ -342,8 +361,19 @@ fn approve(digest: &str) -> Result<Render, Render> {
         &SystemClock::now(),
     )
     .map_err(|e| Render::refusal(e.to_string()))?;
-    let recorded = approve::record(&store, &command, Some(&judged), &owner);
-    Ok(answer_render(&submit::answer(recorded, &store)))
+    if judged.planner_order().is_none() {
+        let recorded = approve::record(&store, &command, Some(&judged), &owner);
+        return Ok(answer_render(&submit::answer(recorded, &store)));
+    }
+    let names = host_names(&store, host).map_err(|e| display::store_error(&e, Some(&project.0)))?;
+    let route = OrderRoute {
+        policy: &policy,
+        host,
+        names: &names,
+    };
+    Ok(answer_render(&approve::record_commitment(
+        &store, &command, &judged, &owner, route,
+    )))
 }
 
 /// One of the owner's change commands: the words are judged before anything
@@ -380,14 +410,44 @@ pub(crate) fn admitted(
     store: &SqliteStore,
     checkout: &Checkout,
 ) -> Result<(EffectivePolicy, u64), Render> {
-    let project = &checkout.project;
+    stepped(store, checkout, effective(checkout, None)?)
+}
+
+/// [`admitted`] for an owner command that issues an order for `host`: the
+/// policy step records `host`'s effective policy, so the order's route names
+/// a recorded policy version.
+pub(crate) fn host_admitted(
+    store: &SqliteStore,
+    checkout: &Checkout,
+    host: Host,
+) -> Result<(EffectivePolicy, u64), Render> {
+    stepped(store, checkout, effective(checkout, Some(host))?)
+}
+
+/// The checkout's effective policy for `host`, or with none, read from both
+/// settings files and judged, recording nothing, so a command can judge
+/// against it before it records.
+pub(crate) fn effective(
+    checkout: &Checkout,
+    host: Option<Host>,
+) -> Result<EffectivePolicy, Render> {
     let reads = policy_step::gather(
         &checkout.folders.config,
         &checkout.root,
         checkout.working.as_ref(),
         &mut crate::process::System,
     );
-    let policy = policy_step::build(&reads, None).map_err(|e| Render::refusal(e.to_string()))?;
+    policy_step::build(&reads, host).map_err(|e| Render::refusal(e.to_string()))
+}
+
+/// Checkout admission, then the policy step recording `policy`. Gives the
+/// policy and the version the step returned.
+fn stepped(
+    store: &SqliteStore,
+    checkout: &Checkout,
+    policy: EffectivePolicy,
+) -> Result<(EffectivePolicy, u64), Render> {
+    let project = &checkout.project;
     let recorded =
         recorded_policy(&checkout.root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
     let site = Site {
@@ -506,8 +566,31 @@ pub(crate) fn owner_command(
 /// three lines, an empty list as `none`, exit 0; a refusal as `<code>:
 /// <reason>`, exit 2, a stale draft's naming the first part that differs, a
 /// malformed submission's naming its section and field; a failure the same
-/// way, exit 1.
+/// way, exit 1. A commitment's receipt, or a `draft-approved` refusal of one,
+/// names the planner order its approval issued, and a further line says so
+/// with the order's id (D-01). Any other refusal naming an order, such as
+/// `planner-order-pending`, names one this approval did not issue, so it
+/// gets no such line.
 pub(crate) fn answer_render(answer: &Value) -> Render {
+    let mut render = approval_lines(answer);
+    let order = match answer["status"].as_str() {
+        Some("ok") => answer["work_order"].as_str(),
+        Some("refused") if answer["code"] == DRAFT_APPROVED => {
+            answer["details"]["work_order"].as_str()
+        }
+        _ => None,
+    };
+    if let Some(order) = order {
+        render.lines.push(format!(
+            "planner work order: {}, which a session's phase-plan with the same stories launches",
+            escaped(order)
+        ));
+    }
+    render
+}
+
+/// [`answer_render`]'s lines before any planner order's.
+fn approval_lines(answer: &Value) -> Render {
     let text = |name: &str| escaped(answer[name].as_str().unwrap_or_default());
     let joined = |name: &str| {
         let numbers: Vec<String> = answer[name]
@@ -703,14 +786,16 @@ pub(crate) fn command_change(words: &ChangeWords) -> Result<ChangeSubmission, Re
 }
 
 /// What `scope preview` prints for draft `digest`: a held truth draft
-/// through [`truth_preview`], read beside the story's `truths` document, and
-/// every other draft, a purged truth draft among them, through
-/// [`preview_render`]. Nothing is recorded.
+/// through [`truth_preview`], read beside the story's `truths` document; a
+/// held plan draft through [`plan_preview`]; and every other draft, a
+/// purged truth or plan draft among them, through [`preview_render`].
+/// Nothing is recorded.
 pub(crate) fn preview(store: &SqliteStore, project: &ProjectId, digest: Hash) -> Render {
     match read::draft(store, project, digest) {
         Ok(Draft::Held(preview)) if preview.kind == STORY_TRUTHS => {
             truth_preview(store, project, &preview)
         }
+        Ok(Draft::Held(preview)) if preview.kind == PLAN_KIND => plan_preview(&preview),
         read => preview_render(read),
     }
 }
@@ -794,6 +879,127 @@ fn truth_preview_render(
     ));
     lines.push(format!(
         "approve it with: baley story truths approve {}",
+        preview.digest.to_hex()
+    ));
+    printed(lines)
+}
+
+/// A plan draft's body as its preview reads it: the members it prints. The
+/// body was judged whole at submit; here it is only read back.
+#[derive(Deserialize)]
+struct PlanBody {
+    phase: u32,
+    stories: Vec<u32>,
+    files: Vec<String>,
+    directories: Vec<String>,
+    tasks: Vec<PlanTask>,
+    evidence_map: Vec<PlanItem>,
+    questions: Vec<PlanQuestion>,
+}
+
+/// One task as a plan body holds it.
+#[derive(Deserialize)]
+struct PlanTask {
+    id: String,
+    title: String,
+    files: Vec<String>,
+    verify: Vec<String>,
+}
+
+/// One evidence item as a plan body holds it; a check's level is in its
+/// `spec`.
+#[derive(Deserialize)]
+struct PlanItem {
+    id: String,
+    story: u32,
+    truth: String,
+    truth_version: u32,
+    kind: String,
+    spec: Value,
+}
+
+/// One question as a plan body holds it.
+#[derive(Deserialize)]
+struct PlanQuestion {
+    id: String,
+    question: String,
+    recommended: String,
+}
+
+/// What `scope preview` prints for a held plan draft (design 0005 `plan
+/// submit` preview, D-05): the header every draft prints; for a
+/// replacement, `replaces plan <n> approved at <digest>`; the phase, the
+/// stories and the lease's files and directories; each task as `task <id>:
+/// <title>` with its files and one `verify:` line per command; each evidence
+/// item as `item <id>: story <s>, truth <t> version <v>, <kind>`, with
+/// `level <level>` for a check; each question as `question <id>: <text>`
+/// with its recommended answer; and the command that approves it. A body
+/// that does not read back as a plan prints the unavailable line a change
+/// prints.
+fn plan_preview(preview: &Preview) -> Render {
+    let recorded = read_plan_draft(&preview.submission);
+    let body = recorded
+        .as_ref()
+        .and_then(|recorded| serde_json::from_value::<PlanBody>(recorded.plan.clone()).ok());
+    let (Some(recorded), Some(body)) = (recorded, body) else {
+        return unavailable("the draft is recorded, but its body no longer reads as a plan");
+    };
+    let texts = |items: &[String]| or_none(items.iter().map(|item| escaped(item)).collect());
+    let mut lines = vec![format!(
+        "draft {} ({}), submitted {}",
+        preview.digest.to_hex(),
+        escaped(&preview.kind),
+        escaped(&preview.recorded_at)
+    )];
+    if let Some(replaces) = recorded.replaces {
+        lines.push(format!(
+            "replaces plan {} approved at {}",
+            replaces.plan,
+            replaces.digest.to_hex()
+        ));
+    }
+    lines.extend([
+        format!("phase: {}", body.phase),
+        format!("stories: {}", list(&body.stories)),
+        format!("files: {}", texts(&body.files)),
+        format!("directories: {}", texts(&body.directories)),
+    ]);
+    for task in &body.tasks {
+        lines.push(format!(
+            "task {}: {}",
+            escaped(&task.id),
+            escaped(&task.title)
+        ));
+        lines.push(format!("  files: {}", texts(&task.files)));
+        for command in &task.verify {
+            lines.push(format!("  verify: {}", escaped(command)));
+        }
+    }
+    for item in &body.evidence_map {
+        let mut line = format!(
+            "item {}: story {}, truth {} version {}, {}",
+            escaped(&item.id),
+            item.story,
+            escaped(&item.truth),
+            item.truth_version,
+            escaped(&item.kind)
+        );
+        if item.kind == "check" {
+            let level = item.spec["level"].as_str().unwrap_or_default();
+            line = format!("{line}, level {}", escaped(level));
+        }
+        lines.push(line);
+    }
+    for question in &body.questions {
+        lines.push(format!(
+            "question {}: {}",
+            escaped(&question.id),
+            escaped(&question.question)
+        ));
+        lines.push(format!("  recommended: {}", escaped(&question.recommended)));
+    }
+    lines.push(format!(
+        "approve it with: baley plan approve {}",
         preview.digest.to_hex()
     ));
     printed(lines)
@@ -1384,6 +1590,60 @@ mod tests {
     }
 
     #[test]
+    fn a_commitment_approval_printed_without_its_order_or_a_plain_one_naming_one_is_caught() {
+        const O: &str = "1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f1";
+        let names_order = |lines: &[String]| {
+            lines
+                .iter()
+                .any(|line| line.contains(O) && line.contains("phase-plan"))
+        };
+        let plain = json!({"status": "ok", "kind": "phase-edit", "digest": D,
+            "owner": "Ada Owner", "at": T, "phases": [], "stories": []});
+        let mut committed = plain.clone();
+        committed["work_order"] = json!(O);
+        committed["prompt"] = json!(format!("Read Baley work order {O} and follow it."));
+
+        let done = answer_render(&committed);
+        assert!(names_order(&done.lines), "{:?}", done.lines);
+        assert_eq!((done.code, done.error), (0, false));
+
+        let done = answer_render(&plain);
+        assert_eq!(
+            done.lines,
+            [
+                format!("approved the phase-edit submission {D} as Ada Owner at {T}"),
+                "phases: none".into(),
+                "stories: none".into(),
+            ]
+        );
+
+        let rerun = answer_render(&json!({"status": "refused", "code": "draft-approved",
+            "reason": "this draft was already approved after its latest submission, so it was not approved again. The details name that approval",
+            "slot": "digest",
+            "details": {"owner": "Ada Owner", "at": T, "work_order": O}}));
+        assert!(
+            rerun.lines[0].starts_with("draft-approved:"),
+            "{:?}",
+            rerun.lines
+        );
+        assert!(names_order(&rerun.lines), "{:?}", rerun.lines);
+        assert_eq!((rerun.code, rerun.error), (2, true));
+    }
+
+    #[test]
+    fn a_pending_planner_order_refusal_printed_as_this_approvals_order_is_caught() {
+        // Q is another selection's order, still pending, which this
+        // approval did not issue and a phase-plan cannot launch.
+        const Q: &str = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+        let reason = "the phase's planner work order Q is still pending, and a phase has one live planner order, so nothing was approved";
+        let pending = answer_render(&json!({"status": "refused",
+            "code": "planner-order-pending", "reason": reason, "slot": "digest",
+            "details": {"work_order": Q}}));
+        assert_eq!(pending.lines, [format!("planner-order-pending: {reason}")]);
+        assert_eq!((pending.code, pending.error), (2, true));
+    }
+
+    #[test]
     fn a_malformed_submission_refusal_printed_without_its_section_and_field_is_caught() {
         let reason = "a field of the submission is missing, blank, of the wrong type, unknown or out of range, so nothing was recorded. The details name it";
         let malformed = answer_render(&json!({"status": "refused",
@@ -1869,5 +2129,51 @@ mod tests {
             !lines.iter().any(|line| line.contains(LEDGER_UNAVAILABLE)),
             "{lines:?}"
         );
+    }
+    #[test]
+    fn a_plan_draft_previewed_as_unavailable_or_without_its_approving_command_is_caught() {
+        use crate::planning::approve::tests::{approved, digest_of};
+        use crate::planning::fixtures::{p0, pl1, pl1r, pl2, plan_replaced, store_c};
+        use crate::planning::order::tests::O;
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+        use crate::scope::fixtures::{R1, R2, R3, R4, R5, T5, T6, T7, project};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x2 = digest_of(&plan_submitted(&store, &pl2(), O, None, R2, T5));
+        let render = preview(&store, &project(), x2);
+        let lines = shown(&render);
+        let x2 = x2.to_hex();
+        for line in [
+            format!("draft {x2} (plan), submitted {T5}").as_str(),
+            "phase: 1",
+            "stories: 1",
+            "task k1: Record",
+            "  files: src/ledger.rs",
+            "  verify: cargo test ledger",
+            "item e1: story 1, truth t1 version 1, check, level unit",
+            "question q1: Which store holds the ledger?",
+            "  recommended: SQLite",
+            format!("approve it with: baley plan approve {x2}").as_str(),
+        ] {
+            assert!(lines.contains(&line), "{line} in {lines:?}");
+        }
+        assert!(
+            !lines.iter().any(|line| line.starts_with("replaces")),
+            "{lines:?}"
+        );
+
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R3, T6));
+        let answer = approved(&store, x1, &p0(), R4, T6);
+        assert_eq!(answer["status"], "ok", "{answer}");
+        let x1r = digest_of(&plan_replaced(&store, &pl1r(), O, 1, x1, R5, T7));
+        let render = preview(&store, &project(), x1r);
+        let lines = shown(&render);
+        for line in [
+            format!("replaces plan 1 approved at {}", x1.to_hex()).as_str(),
+            format!("approve it with: baley plan approve {}", x1r.to_hex()).as_str(),
+        ] {
+            assert!(lines.contains(&line), "{line} in {lines:?}");
+        }
     }
 }

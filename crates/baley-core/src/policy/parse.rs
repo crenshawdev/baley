@@ -3,6 +3,7 @@
 //! (design 0003, CFG-R5, CFG-R7, CFG-R9).
 
 use std::fmt;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use toml::Spanned;
@@ -60,6 +61,10 @@ pub enum Value {
     HttpsAddress(String),
     /// A person's name, as written: not blank, with no control character.
     PersonName(String),
+    /// A phase's capacity in tasks.
+    Capacity(NonZeroU32),
+    /// A command line, as written: not blank, with no control character.
+    Command(String),
 }
 
 /// One setting a file writes, typed and within its scope.
@@ -232,6 +237,10 @@ pub enum Expected {
     HttpsAddress,
     /// A person's name.
     PersonName,
+    /// A whole number from 1 to `u32::MAX`.
+    Capacity,
+    /// A command on one line.
+    Command,
 }
 impl From<Kind> for Expected {
     fn from(kind: Kind) -> Expected {
@@ -245,6 +254,8 @@ impl From<Kind> for Expected {
             Kind::ReviewerList => Expected::ReviewerList,
             Kind::HttpsAddress => Expected::HttpsAddress,
             Kind::PersonName => Expected::PersonName,
+            Kind::Capacity => Expected::Capacity,
+            Kind::Command => Expected::Command,
         }
     }
 }
@@ -313,6 +324,8 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::ReviewerList => format!("a list of {}", reviewer_names()),
                 Expected::HttpsAddress => "an https:// address".to_owned(),
                 Expected::PersonName => "a name on one line".to_owned(),
+                Expected::Capacity => format!("a whole number from 1 to {}", u32::MAX),
+                Expected::Command => "a command on one line".to_owned(),
             };
             write!(
                 f,
@@ -354,6 +367,15 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Kind::PersonName => write!(
                     f,
                     "is \"{written}\"; write one line of text that is not blank and holds no control character, or remove the line"
+                ),
+                Kind::Capacity => write!(
+                    f,
+                    "is {written}, which is not a whole number from 1 to {}; write one or remove the line",
+                    u32::MAX
+                ),
+                Kind::Command => write!(
+                    f,
+                    "is \"{written}\"; write a command on one line that is not blank and holds no control character, or remove the line"
                 ),
             }
         }
@@ -648,6 +670,24 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
             let written = value.as_str().ok_or_else(wrong)?;
             if is_person_name(written) {
                 Ok(Value::PersonName(written.to_owned()))
+            } else {
+                Err(Mismatch::Grammar(written.to_owned(), None))
+            }
+        }
+        Kind::Capacity => {
+            let integer = value.as_integer().ok_or_else(wrong)?;
+            // Parsed in its own radix, so a hex or signed capacity is judged too.
+            u32::from_str_radix(integer.as_str(), integer.radix())
+                .ok()
+                .and_then(NonZeroU32::new)
+                .map(Value::Capacity)
+                .ok_or_else(|| Mismatch::Grammar(integer.to_string(), None))
+        }
+        // One line, as a person's name is.
+        Kind::Command => {
+            let written = value.as_str().ok_or_else(wrong)?;
+            if is_person_name(written) {
+                Ok(Value::Command(written.to_owned()))
             } else {
                 Err(Mismatch::Grammar(written.to_owned(), None))
             }

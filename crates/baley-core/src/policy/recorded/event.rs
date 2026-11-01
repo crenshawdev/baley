@@ -113,6 +113,8 @@ fn value_json(value: Option<&Value>) -> Json {
         Some(Value::BranchList(names) | Value::ReviewerList(names)) => names.clone().into(),
         Some(Value::HttpsAddress(address)) => address.clone().into(),
         Some(Value::PersonName(name)) => name.clone().into(),
+        Some(Value::Capacity(capacity)) => capacity.get().into(),
+        Some(Value::Command(command)) => command.clone().into(),
     }
 }
 

@@ -131,7 +131,7 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 21);
+    assert_eq!(schema.entries().len(), 23);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -697,7 +697,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 21);
+        assert_eq!(policy.settings.len(), 23);
         assert!(
             policy
                 .settings
@@ -1459,7 +1459,7 @@ fn an_update_setting_missing_or_open_to_project_files_is_caught() {
         (source.kind, source.default, source.scope, source.owner),
         (Kind::HttpsAddress, Builtin::Absent, Scope::Global, "0012")
     );
-    assert_eq!(schema.entries().len(), 21);
+    assert_eq!(schema.entries().len(), 23);
 }
 
 #[test]
@@ -1622,7 +1622,7 @@ fn an_owner_name_entry_with_another_kind_default_scope_or_owner_is_caught() {
         (owner.kind, owner.default, owner.scope, owner.owner),
         (Kind::PersonName, Builtin::Absent, Scope::Global, "0012")
     );
-    assert_eq!(schema.entries().len(), 21);
+    assert_eq!(schema.entries().len(), 23);
 }
 
 #[test]
@@ -1646,5 +1646,101 @@ fn an_owner_name_with_a_line_break_reported_on_two_lines_is_caught() {
     assert_eq!(
         message,
         "config-unavailable: /c/config.toml:2:8: owner.name is \"Ada\\nOwner\"; write one line of text that is not blank and holds no control character, or remove the line"
+    );
+}
+
+#[test]
+fn a_phase_capacity_of_zero_text_or_past_u32_accepted_is_caught() {
+    let capacity = |n: u32| Some(Value::Capacity(NonZeroU32::new(n).unwrap()));
+    let project = |line: &str| standard(None, None, Some(&format!("[planning]\n{line}\n")));
+    let three = project("phase_capacity = 3").unwrap();
+    assert_eq!(
+        value_of(&three, "planning.phase_capacity").value,
+        capacity(3)
+    );
+    let most = project("phase_capacity = 4294967295").unwrap();
+    assert_eq!(
+        value_of(&most, "planning.phase_capacity").value,
+        capacity(4_294_967_295)
+    );
+    for line in ["phase_capacity = 0", "phase_capacity = 4294967296"] {
+        let refusal = project(line).expect_err(line);
+        assert_eq!(refusal.code(), "config-unavailable", "{line}");
+        assert!(
+            matches!(
+                refusal.fault,
+                Fault::OutsideGrammar {
+                    kind: Kind::Capacity,
+                    line: 2,
+                    ..
+                }
+            ),
+            "{line}: {refusal:?}"
+        );
+    }
+    let text = project("phase_capacity = \"3\"").expect_err("a string");
+    assert!(
+        matches!(
+            text.fault,
+            Fault::WrongType {
+                expected: Expected::Capacity,
+                found: "string",
+                line: 2,
+                ..
+            }
+        ),
+        "{text:?}"
+    );
+    // Both scopes: the global file's capacity applies.
+    let global = standard(None, Some("[planning]\nphase_capacity = 3\n"), None).unwrap();
+    let effective = value_of(&global, "planning.phase_capacity");
+    assert_eq!(effective.value, capacity(3));
+    assert_eq!(effective.source.layer, Layer::Global);
+}
+
+#[test]
+fn a_test_command_blank_multiline_trimmed_or_set_globally_is_caught() {
+    let project = |line: &str| standard(None, None, Some(&format!("[workflow]\n{line}\n")));
+    for (line, kept) in [
+        ("test_command = \"cargo nextest run\"", "cargo nextest run"),
+        ("test_command = \" cargo test \"", " cargo test "),
+    ] {
+        let policy = project(line).unwrap();
+        assert_eq!(
+            value_of(&policy, "workflow.test_command").value,
+            Some(Value::Command(kept.into())),
+            "{line}"
+        );
+    }
+    for line in ["test_command = \"  \"", "test_command = \"cargo\\ntest\""] {
+        let refusal = project(line).expect_err(line);
+        assert!(
+            matches!(
+                refusal.fault,
+                Fault::OutsideGrammar {
+                    kind: Kind::Command,
+                    line: 2,
+                    ..
+                }
+            ),
+            "{line}: {refusal:?}"
+        );
+    }
+    let global = standard(
+        None,
+        Some("[workflow]\ntest_command = \"cargo test\"\n"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(value_of(&global, "workflow.test_command").value, None);
+    assert_eq!(
+        global
+            .diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        [
+            "/c/config.toml:2:1: workflow.test_command is a project setting and was ignored in the global file"
+        ]
     );
 }

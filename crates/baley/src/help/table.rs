@@ -53,7 +53,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "bal-plan",
         cluster: "Build spine",
-        description: "Author a phase's plans and publish the exact owner-approved content through Baley",
+        description: "Plan a phase with its owner: the committed stories, the planner's typed plan and its questions in rounds, then the draft the owner approves at the terminal.",
     },
     Command {
         name: "bal-execute",
@@ -209,7 +209,7 @@ pub fn render_description(name: &str, markdown: &str) -> Option<String> {
 const ABOUT: &str = "Baley keeps AI coding agents accountable to the person who answers for their work. It records what the agents did, and the proof that it works, in a hash-chained ledger the owner controls, and it refuses to let work move on an unproven claim. Claude Code is the host it serves.";
 
 /// The request a session follows so the ledger can say which instruction guided a write.
-const REQUEST: &str = "Send `bal-help` as `instruction` on the `baley_apply` operations `capture`, `project-start`, `story-refine`, `work-order-fail` and `work-order-retry` called while following help, on no other `baley_apply` operation, and on no `baley_query` call.";
+const REQUEST: &str = "Send `bal-help` as `instruction` on the `baley_apply` operations `capture`, `phase-plan`, `project-start`, `story-refine`, `work-order-fail` and `work-order-retry` called while following help, on no other `baley_apply` operation, and on no `baley_query` call.";
 
 /// The help instruction's identity, version and hash, as the registry serves them.
 fn help_instruction() -> Value {
@@ -287,7 +287,7 @@ mod tests {
         ("bal-help", true, 3),
         ("bal-capture", true, 3),
         ("bal-context", true, 4),
-        ("bal-plan", false, 4),
+        ("bal-plan", true, 4),
         ("bal-review", false, 4),
         ("bal-plan-review", false, 4),
         ("bal-decision-review", false, 4),
@@ -340,7 +340,7 @@ mod tests {
         let plan = answer(Some("plan"));
         let rows = plan["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(triple(&rows[0]), ("bal-plan".to_owned(), false, 4));
+        assert_eq!(triple(&rows[0]), ("bal-plan".to_owned(), true, 4));
         let help = answer(Some("/bal-help"));
         assert_eq!(
             triple(&help["rows"].as_array().unwrap()[0]),

@@ -131,11 +131,16 @@ pub static ENTRIES: &[Entry] = &[
             body: context::TEXT,
         }),
     },
-    // Build 4 adds this text beside its operations.
+    // Build 4 serves the plan front door beside `phase-plan`, `plan-submit`,
+    // `plan-replace`, `plan-read` and the owner's plan commands.
     Entry {
-        identity: "bal-plan",
+        identity: plan::IDENTITY,
         build: 4,
-        text: None,
+        text: Some(Text {
+            version: plan::VERSION,
+            hash: plan::HASH,
+            body: plan::TEXT,
+        }),
     },
     // Build 5 adds this text beside its operations.
     Entry {

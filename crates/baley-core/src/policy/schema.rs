@@ -190,6 +190,11 @@ pub enum Kind {
     /// control character, which also keeps it to one line. It is taken as
     /// written, never trimmed.
     PersonName,
+    /// A phase's capacity in tasks: a TOML integer from 1 to `u32::MAX`.
+    Capacity,
+    /// A command line: text that is not blank and holds no control character,
+    /// so one line, taken as written and never trimmed, as a person's name is.
+    Command,
 }
 
 /// The names a reviewer list may hold (design 0003 section 9): the host's own
@@ -289,7 +294,8 @@ impl Schema {
 
     /// The schema: each role's model and effort, `escalate_on_failure`,
     /// `git.remote`, the guard's settings under `git`, the two `updates`
-    /// settings, `review.reviewers` and `owner.name`.
+    /// settings, `review.reviewers`, `owner.name`, `planning.phase_capacity`
+    /// and `workflow.test_command`.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -379,6 +385,22 @@ impl Schema {
                 default: Default::Absent,
                 scope: Scope::Global,
                 owner: "0012",
+            });
+            // No default: with no capacity set, no plan is refused for size.
+            entries.push(Entry {
+                name: "planning.phase_capacity".into(),
+                kind: Kind::Capacity,
+                default: Default::Absent,
+                scope: Scope::Both,
+                owner: "0005",
+            });
+            // No default: the suite is the project's own, never guessed.
+            entries.push(Entry {
+                name: "workflow.test_command".into(),
+                kind: Kind::Command,
+                default: Default::Absent,
+                scope: Scope::Project,
+                owner: "0006",
             });
             Schema::new(entries)
         })

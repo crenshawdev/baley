@@ -640,10 +640,12 @@ mod tests {
     #[test]
     fn story_refine_left_out_of_the_baseline_or_unserved_is_caught() {
         let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
-        assert_eq!(
-            names[names.len() - 3..names.len() - 1],
-            ["questions-answer", "story-refine"]
-        );
+        let at = names
+            .iter()
+            .position(|name| *name == "story-refine")
+            .expect("listed");
+        assert_eq!(names[at - 1], "questions-answer");
+        assert_eq!(names[at + 1], "story-questions-submit");
         assert_eq!(
             lookup(Tool::Apply, Some("story-refine")),
             Lookup::Available {
@@ -744,10 +746,12 @@ mod tests {
     #[test]
     fn story_questions_submit_out_of_the_baseline_or_unserved_is_caught() {
         let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
-        assert_eq!(
-            names[names.len() - 3..],
-            ["questions-answer", "story-refine", "story-questions-submit"]
-        );
+        let at = names
+            .iter()
+            .position(|name| *name == "story-questions-submit")
+            .expect("listed");
+        assert_eq!(names[at - 2..at], ["questions-answer", "story-refine"]);
+        assert_eq!(names[at + 1], "phase-plan");
         let answer = schema_answer(
             &json!({"operation": "schema", "tool": "apply", "for": "story-questions-submit"}),
         );

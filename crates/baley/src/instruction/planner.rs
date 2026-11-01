@@ -115,11 +115,11 @@
 pub const IDENTITY: &str = "bal-phase-planner";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "1";
+pub const VERSION: &str = "2";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the
 /// code so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "65a03cb2fcbee8ff52445f5363a51054404085166b9ff2e285117f084315d8c6";
+pub const HASH: &str = "2cfbbeb4b7f766a275204f5ac3bbbad9ff286e7d209bb4d7cb2ddbc3f90210f9";
 
 /// What the planner reads once it holds a planning or revision order.
 /// Ported from Cadence tag `v3.9.0`: `skills/cad-planner-contract/SKILL.md`
@@ -139,10 +139,11 @@ Orders (your work order says which):
 
 <input>
 You already hold your work order: you read it with `baley_query` `document`, and it sent you here. Each input in the order's `inputs` holds JSON in its `text`, and together they carry:
-- the phase's number and goal.
-- the stories committed to the phase, in order, each with its approved truths: each truth's id, its version, its sentence slots and its `human_verify` when set.
+- the phase's number, goal and detail.
+- the stories committed to the phase, in order, each with its sentence and its approved truths: each truth's id, its version, its sentence slots and its `human_verify` when set.
 - the project's approved description.
 - when the owner set a capacity, the phase's capacity in tasks and the size the phase's approved plans already hold.
+- the evidence items of the phase's approved plans, each with its plan's number: a truth one of them already checks has its one check.
 - in a revision order, the draft plan and its question set with every answer and deferral the owner recorded.
 
 Read before planning the actual source files your tasks will touch.

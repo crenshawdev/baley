@@ -11,6 +11,7 @@ use super::event::{
     STORY_REPRIORITIZED,
 };
 use super::roadmap::reprioritized;
+use crate::plan::{PLAN_APPROVED, PLAN_REPLACED};
 use crate::questions::QUESTIONS_OPENED;
 use crate::truth::STORY_REFINED;
 
@@ -27,7 +28,7 @@ const PROJECT_KEY: &str = "project";
 pub fn backlog_spec() -> ViewSpec {
     ViewSpec {
         name: BACKLOG_VIEW.into(),
-        version: 3,
+        version: 4,
         key: vec![FieldSpec {
             name: KEY_FIELD.into(),
             kind: FieldKind::Text,
@@ -43,20 +44,27 @@ pub fn backlog_key() -> DocKey {
 }
 
 /// Keeps the `backlog` view current from the story events,
-/// `phase.declared`, a story's `questions.opened` and `story.refined`.
+/// `phase.declared`, a story's `questions.opened`, `story.refined`,
+/// `plan.approved` and `plan.replaced`.
 ///
 /// The stories are kept in declaration order, which is priority order
 /// until stories are reprioritized. Each records its latest question set
 /// (`set`), the set its latest `story.refined` names (`refined`) and that
-/// refinement's truth count, and holds none, none and 0 when declared, with
-/// no size until sizing records one. Its refinement state is never stored:
+/// refinement's truth count, and holds none, none and 0 when declared. Each
+/// also keeps the plans in force that serve it (`plans`), each by phase,
+/// number and size, and its `size` is their tasks summed, or null when none
+/// serves it (PLN-R9). An approval adds the plan to every story it serves,
+/// and a replacement takes the old plan off every story that holds it, so
+/// exactly what that plan added comes off. A plan naming a story not held
+/// is refused. Its refinement state is never stored:
 /// the reader works it out from the latest set's round, so nothing stored
 /// can drift from it. A story's set makes that set its latest and a plan
 /// draft's set changes nothing; a refinement replaces the marker and the
 /// count, and a later set leaves both, since approved truths stay until new
 /// ones are approved. A set or a refinement of a story not held is refused,
 /// as a correction of one is. A later declaration of an
-/// id already held replaces that entry in place, so it keeps its priority.
+/// id already held replaces that entry in place, so it keeps its priority,
+/// and keeps its plans and size, as every other story event does.
 /// A correction, a move and a drop change a story in place; a dropped
 /// story stays with status `dropped` and no phase. A reprioritization puts
 /// the stories it lists first and every other story after them in its
@@ -96,6 +104,8 @@ impl Projector for BacklogProjector {
             STORY_REPRIORITIZED,
             QUESTIONS_OPENED,
             STORY_REFINED,
+            PLAN_APPROVED,
+            PLAN_REPLACED,
         ]
     }
 
@@ -139,7 +149,7 @@ impl Projector for BacklogProjector {
         match event.type_name.as_str() {
             STORY_DECLARED => {
                 let id = whole("id")?;
-                let entry = json!({
+                let mut entry = json!({
                     "id": id,
                     "sentence": text("sentence")?,
                     "status": text("status")?,
@@ -147,10 +157,15 @@ impl Projector for BacklogProjector {
                     "set": null,
                     "refined": null,
                     "truths": 0,
+                    "plans": [],
                     "size": null,
                 });
                 match stories.iter().position(|story| story["id"] == id) {
-                    Some(at) => stories[at] = entry,
+                    Some(at) => {
+                        entry["plans"] = stories[at]["plans"].take();
+                        entry["size"] = stories[at]["size"].take();
+                        stories[at] = entry;
+                    }
                     None => stories.push(entry),
                 }
             }
@@ -212,6 +227,39 @@ impl Projector for BacklogProjector {
                 story["refined"] = json!(set);
                 story["truths"] = json!(count);
             }
+            PLAN_APPROVED => {
+                let (number, plan, size) = (whole("phase")?, whole("plan")?, whole("size")?);
+                let listed: Vec<u64> = payload
+                    .get("stories")
+                    .and_then(Value::as_array)
+                    .and_then(|ids| ids.iter().map(Value::as_u64).collect())
+                    .ok_or_else(fault)?;
+                if !listed
+                    .iter()
+                    .all(|id| stories.iter().any(|s| s["id"] == *id))
+                {
+                    return Err(no_story());
+                }
+                let served = json!({"phase": number, "plan": plan, "size": size});
+                for story in &mut stories {
+                    if story["id"].as_u64().is_some_and(|id| listed.contains(&id)) {
+                        plans_mut(story).ok_or_else(fault)?.push(served.clone());
+                        settle(story)
+                            .ok_or_else(|| refuse("the story's size would exceed a u64"))?;
+                    }
+                }
+            }
+            PLAN_REPLACED => {
+                let (number, plan) = (whole("phase")?, whole("plan")?);
+                for story in &mut stories {
+                    let plans = plans_mut(story).ok_or_else(fault)?;
+                    let before = plans.len();
+                    plans.retain(|held| held["phase"] != number || held["plan"] != plan);
+                    if plans.len() != before {
+                        settle(story).ok_or_else(fault)?;
+                    }
+                }
+            }
             _ => return Err(refuse("not a backlog event")),
         }
         Ok(vec![Change::Put {
@@ -224,6 +272,27 @@ impl Projector for BacklogProjector {
 /// The entry of story `id`.
 fn story_mut(stories: &mut [Value], id: u64) -> Option<&mut Value> {
     stories.iter_mut().find(|story| story["id"] == id)
+}
+
+/// A story's plans in force, `None` when the entry holds no list.
+fn plans_mut(story: &mut Value) -> Option<&mut Vec<Value>> {
+    story.get_mut("plans").and_then(Value::as_array_mut)
+}
+
+/// Sets a story's `size` to its plans' sizes summed, null when it has none;
+/// `None` when a size is unreadable or the sum passes `u64`.
+fn settle(story: &mut Value) -> Option<()> {
+    let plans = story.get("plans")?.as_array()?;
+    let mut total: Option<u64> = None;
+    for plan in plans {
+        total = Some(
+            total
+                .unwrap_or(0)
+                .checked_add(plan.get("size")?.as_u64()?)?,
+        );
+    }
+    story["size"] = json!(total);
+    Some(())
 }
 
 #[cfg(test)]
@@ -355,11 +424,13 @@ mod tests {
             fold(&events),
             json!([
                 {"id": 3, "sentence": "Teammates see the backlog", "status": "deferred",
-                    "phase": null, "set": null, "refined": null, "truths": 0, "size": null},
+                    "phase": null, "set": null, "refined": null, "truths": 0, "plans": [],
+                    "size": null},
                 {"id": 1, "sentence": "Every step is recorded", "status": "active", "phase": 1,
-                    "set": null, "refined": null, "truths": 0, "size": null},
+                    "set": null, "refined": null, "truths": 0, "plans": [], "size": null},
                 {"id": 2, "sentence": "The owner approves scope", "status": "active",
-                    "phase": 2, "set": null, "refined": null, "truths": 0, "size": null}
+                    "phase": 2, "set": null, "refined": null, "truths": 0, "plans": [],
+                    "size": null}
             ])
         );
     }
@@ -457,10 +528,12 @@ mod tests {
                 "story.dropped",
                 "story.reprioritized",
                 "questions.opened",
-                "story.refined"
+                "story.refined",
+                "plan.approved",
+                "plan.replaced"
             ]
         );
-        assert_eq!(backlog_spec().version, 3);
+        assert_eq!(backlog_spec().version, 4);
     }
 
     #[test]
@@ -588,7 +661,7 @@ mod tests {
 
     #[test]
     fn a_backlog_storing_a_state_or_missing_the_latest_set_is_caught() {
-        assert_eq!(backlog_spec().version, 3);
+        assert_eq!(backlog_spec().version, 4);
         let plan_set = event(
             17,
             "questions.opened",
@@ -622,5 +695,64 @@ mod tests {
                 BacklogProjector::new().apply(&undeclared, &[(backlog_key(), document.clone())]);
             assert!(answer.is_err(), "{}: {answer:?}", undeclared.type_name);
         }
+    }
+
+    /// Plan `plan` of phase 1 approved, serving `stories` with `size` tasks.
+    fn approved(seq: u64, plan: u32, stories: &[u32], size: usize) -> Event {
+        let body = PayloadRef {
+            hash: Hash([0xab; 32]),
+            bytes: 24,
+            class: RetentionClass::Record,
+        };
+        let approval = crate::plan::PlanApproval {
+            phase: 1,
+            plan,
+            digest: Hash([0x5c; 32]),
+            stories,
+            size,
+            suite: None,
+            question_set: S,
+            evidence_map: &[],
+            body: &body,
+            owner: "Ada Owner",
+            at: "2026-10-31T09:00:00Z",
+        };
+        event(seq, "plan.approved", approval.payload())
+    }
+
+    /// The sizes of stories 1, 2 and 3.
+    fn sizes(stories: &Value) -> [Value; 3] {
+        [1, 2, 3].map(|id| entry(stories, id)["size"].clone())
+    }
+
+    #[test]
+    fn a_story_size_counted_from_estimates_or_left_after_replacement_is_caught() {
+        let mut events = vec![approved(14, 1, &[1, 2], 2)];
+        assert_eq!(
+            sizes(&after_s1(events.clone())),
+            [json!(2), json!(2), Value::Null]
+        );
+        events.push(approved(15, 2, &[1], 3));
+        assert_eq!(
+            sizes(&after_s1(events.clone())),
+            [json!(5), json!(2), Value::Null]
+        );
+        events.push(approved(16, 3, &[2], 1));
+        let replaced = crate::plan::replaced_payload(
+            1,
+            1,
+            Hash([0x5c; 32]),
+            Hash([0x7e; 32]),
+            "Ada Owner",
+            "2026-10-31T09:00:00Z",
+        );
+        events.push(event(17, "plan.replaced", replaced));
+        let stories = after_s1(events);
+        assert_eq!(sizes(&stories), [json!(3), json!(1), Value::Null]);
+
+        let document = json!({KEY_FIELD: PROJECT_KEY, "stories": stories});
+        let unheld = approved(18, 4, &[9], 1);
+        let answer = BacklogProjector::new().apply(&unheld, &[(backlog_key(), document)]);
+        assert!(answer.is_err(), "{answer:?}");
     }
 }

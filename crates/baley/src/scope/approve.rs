@@ -9,9 +9,21 @@
 //! against accepted scope as it stands at approval (D-12). The second step
 //! records the approval as the owner, confirming inside its transaction that
 //! nothing the first step read has moved.
+//!
+//! A `phase-edit` draft whose phase's latest planning continuation names
+//! its digest is a commitment (owner ruling 9, D-01): its first step also
+//! rechecks the continuation's selection with the readiness `phase-plan`
+//! judges and refuses beside a pending planner order of the phase, and its
+//! second step, given the route, issues the continuation's planner order in
+//! the same transaction as the stories. Every other draft is approved as
+//! before, with no order.
 
 use std::collections::BTreeMap;
 
+use baley_core::plan::{
+    CommitmentRefusal, PHASE_PLAN_VIEW, PLAN_KIND, judge_readiness, phase_plan_key,
+};
+use baley_core::policy::{AcceptedNames, EffectivePolicy, Host};
 use baley_core::scope::{
     AcceptedScope, ApprovalFacts, ApprovalRefusal, ChangeApprovalFacts, ChangeApprovalRefusal,
     ChangeSubmission, DRAFT_NEWEST_INDEX, DRAFT_VIEW, NumbersExhausted, PHASE_DECLARED,
@@ -24,8 +36,9 @@ use baley_core::scope::{
 use baley_core::truth::STORY_TRUTHS;
 use baley_store::{
     Absence, Actor, Command, Decision, DocKey, Document, EVENT_PAGE_BOUND, EventMatch, Hash,
-    HistoryFilter, IndexQuery, KeyValue, Ledger, Observed, OutcomeKind, PageRequest, Payloads,
-    ProjectId, Recorded, RetentionClass, StaleInput, StoreError, StreamName, Transaction, Views,
+    HistoryFilter, IndexQuery, KeyValue, Ledger, Observed, ObservedDocument, OutcomeKind,
+    PageRequest, Payloads, ProjectId, Recorded, RetentionClass, StaleInput, StoreError, StreamName,
+    Transaction, Views,
 };
 use serde_json::{Value, json};
 
@@ -33,6 +46,8 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, TEXT_PURGED, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::mcp::scope::change_kind;
+use crate::planning::order::{self, PreparedOrder, pending_planner, planner_absences};
+use crate::planning::phase_plan::{latest_continuation, read_readiness, readiness_refused};
 use crate::scope::read::{
     self, Detail, Preview, PreviewError, ReadError, ScopeRead, preview, preview_of,
 };
@@ -79,6 +94,50 @@ struct ChangeDraft {
     scope: ScopeRead,
     /// The detail in force a `phase-edit` that gives none keeps.
     detail: Option<CarriedDetail>,
+    /// The commitment a `phase-edit` its phase's continuation names makes.
+    commitment: Option<Commitment>,
+}
+
+/// A commitment the first step rechecked (D-01): what its planner order is
+/// issued for, and what the second step observes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Commitment {
+    /// The phase it commits.
+    phase: u32,
+    /// The continuation's selection, in order.
+    stories: Vec<u32>,
+    /// The planner order the continuation names, issued under this id.
+    work_order: String,
+    /// The `phase_plan` document, then the readiness documents, each at the
+    /// sequence that produced it.
+    documents: Vec<ObservedDocument>,
+    /// The active-index absence when no phase was active.
+    absences: Vec<Absence>,
+}
+
+impl Judged {
+    /// The id of the planner order the second step issues when the draft is
+    /// a commitment, so its caller knows to route one; none otherwise.
+    pub fn planner_order(&self) -> Option<&str> {
+        self.commitment()
+            .map(|commitment| commitment.work_order.as_str())
+    }
+
+    fn commitment(&self) -> Option<&Commitment> {
+        match &self.approving {
+            Approving::Change(draft) => draft.commitment.as_ref(),
+            Approving::Start(_) => None,
+        }
+    }
+}
+
+/// A phase's latest continuation that names the draft being approved, with
+/// the `phase_plan` document it was read from.
+struct Named {
+    phase: u32,
+    stories: Vec<u32>,
+    work_order: String,
+    document: ObservedDocument,
 }
 
 /// The detail in force a `phase-edit` keeps, with the `phase_detail`
@@ -99,12 +158,13 @@ struct CarriedDetail {
 /// draft; for a change, what `judge_change_draft` names. Then it judges the
 /// approval. A story's truth draft is refused `unknown-draft`, its reason
 /// naming `baley story truths approve <digest>`, which approves it (owner
-/// ruling R2). It runs outside any transaction, since a transaction has no
+/// ruling R2), and a plan draft the same way naming `baley plan approve
+/// <digest>` (D-05). It runs outside any transaction, since a transaction has no
 /// payload read (D-02). A refusal is the `refused` answer, slot `digest`; a
 /// body that is gone or no longer judges clean is a ledger fault, never
-/// approved. Nothing is recorded. It is also the first step of approving a
-/// `phase-edit` draft T9's `phase plan` records, called with a digest its
-/// caller supplies.
+/// approved. Nothing is recorded. A commitment, a `phase-edit` its phase's
+/// latest continuation names, is also rechecked here (D-01), and
+/// [`Judged::planner_order`] then names the order its second step issues.
 pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -112,6 +172,7 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
 ) -> Result<Judged, Value> {
     let target = match preview(store, project, digest) {
         Ok(read) if read.kind == STORY_TRUTHS => return Err(truth_draft(digest)),
+        Ok(read) if read.kind == PLAN_KIND => return Err(plan_draft(digest)),
         Ok(read) if read.kind != START_KIND => return judge_change_draft(store, project, &read),
         Ok(read) => Some(accept(&read)?),
         Err(PreviewError::UnknownDraft) => None,
@@ -161,6 +222,12 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
 /// now, refused as at submission with slot `digest` (D-12). A `phase-edit` that
 /// gives no detail keeps the one in force, read here, since a transaction
 /// has no payload read; one this project purged is never opened.
+///
+/// A `phase-edit` its phase's latest continuation names is a commitment:
+/// a `draft-approved` refusal of it also names the planner order its
+/// approval issued, when the `work_order` view holds it, and after the
+/// approval judgement and before the scope judgement its selection is
+/// rechecked by [`recheck`].
 fn judge_change_draft<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -200,10 +267,27 @@ fn judge_change_draft<S: Ledger + Views + Payloads + ?Sized>(
         }),
         newest: newest.as_ref().map(|(newest, _)| newest),
     };
-    judge_change_approval(&facts).map_err(|refusal| change_refused(&refusal))?;
+    let named = continuation_naming(store, project, &change)?;
+    if let Err(refusal) = judge_change_approval(&facts) {
+        let answer = change_refused(&refusal);
+        return Err(match (&refusal, &named) {
+            (ChangeApprovalRefusal::DraftApproved { .. }, Some(named))
+                if order_held(store, project, &named.work_order)? =>
+            {
+                naming_order(answer, &named.work_order)
+            }
+            _ => answer,
+        });
+    }
     // An approved judgement had a newest draft.
     let (newest, newest_seq) =
         newest.ok_or_else(|| change_refused(&ChangeApprovalRefusal::UnknownDraft))?;
+    // Readiness before the scope judgement, so a story in another phase is
+    // `story-in-phase`, not `story-double-assigned` (D-10).
+    let commitment = match named {
+        Some(named) => Some(recheck(store, project, named)?),
+        None => None,
+    };
     let accepted = scope
         .accepted()
         .ok_or_else(|| scope_unread(&ReadError::Unreadable(String::new())))?;
@@ -219,8 +303,92 @@ fn judge_change_draft<S: Ledger + Views + Payloads + ?Sized>(
             approved_before: approvals.iter().any(|approval| approval.seq < seq),
             scope,
             detail,
+            commitment,
         })),
     })
+}
+
+/// The continuation naming `change` when it is a `phase-edit` and its
+/// phase's latest continuation in `phase_plan` names its digest, or none.
+fn continuation_naming<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    change: &ChangeSubmission,
+) -> Result<Option<Named>, Value> {
+    let ScopeChange::PhaseEdit { phase, .. } = &change.change else {
+        return Ok(None);
+    };
+    let key = phase_plan_key(*phase);
+    let document = store.get(project, PHASE_PLAN_VIEW, &key).map_err(busy)?;
+    let latest = latest_continuation(document.as_ref().map(|document| &document.body))?;
+    Ok(latest
+        .filter(|latest| latest.edit == change.digest())
+        .map(|latest| Named {
+            phase: *phase,
+            stories: latest.stories,
+            work_order: latest.work_order,
+            document: ObservedDocument {
+                view: PHASE_PLAN_VIEW.into(),
+                key,
+                produced_seq: document.map(|document| document.produced_seq),
+            },
+        }))
+}
+
+/// Rechecks a commitment's selection over facts read now, through the
+/// gathering `phase-plan` judges (D-01): a readiness refusal, then a pending
+/// planner order of the phase, each at slot `digest`, so an approval beside
+/// a pending order says why rather than failing `ledger-busy` at its second
+/// step on every retry (D-11).
+fn recheck<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    named: Named,
+) -> Result<Commitment, Value> {
+    const NOT_DONE: &str = "nothing was approved";
+    let readiness = read_readiness(store, project, named.phase, &named.stories)?;
+    judge_readiness(&readiness.readiness())
+        .map_err(|refusal| readiness_refused(&refusal, "digest", NOT_DONE))?;
+    if let Some(pending) = pending_planner(store, project, named.phase).map_err(busy)? {
+        let refusal = CommitmentRefusal::PlannerOrderPending {
+            work_order: pending,
+        };
+        return Err(readiness_refused(&refusal, "digest", NOT_DONE));
+    }
+    let mut documents = vec![named.document];
+    documents.extend(readiness.documents().iter().cloned());
+    Ok(Commitment {
+        phase: named.phase,
+        stories: named.stories,
+        work_order: named.work_order,
+        documents,
+        absences: readiness.absences(),
+    })
+}
+
+/// Whether the `work_order` view holds order `id`.
+fn order_held<S: Views + ?Sized>(store: &S, project: &ProjectId, id: &str) -> Result<bool, Value> {
+    crate::work_order::read::order(store, project, id)
+        .map(|order| order.is_some())
+        .map_err(busy)
+}
+
+/// A `draft-approved` refusal of a commitment, naming in its details and
+/// its reason the planner order its approval issued, so a rerun still tells
+/// the owner the order (flagged assumption 2).
+fn naming_order(mut answer: Value, work_order: &str) -> Value {
+    if let Some(reason) = answer["reason"].as_str() {
+        answer["reason"] = json!(format!(
+            "{reason}. That approval issued planner work order {work_order}, which a session's phase-plan with the same stories launches"
+        ));
+    }
+    match answer["details"].as_object_mut() {
+        Some(details) => {
+            details.insert("work_order".into(), json!(work_order));
+        }
+        None => answer["details"] = json!({"work_order": work_order}),
+    }
+    answer
 }
 
 /// The detail in force of the phase a `phase-edit` giving no detail
@@ -387,13 +555,76 @@ fn change_refused(refusal: &ChangeApprovalRefusal) -> Value {
 /// any decision runs, so it needs no reads; a decision asked to run without
 /// them records nothing.
 ///
-/// It is also the second step of approving a `phase-edit` draft T9's `phase
-/// plan` records, with a command and owner its caller supplies.
+/// A commitment (D-01) is recorded through [`record_commitment`], which
+/// routes its planner order; given one here, the decision records nothing.
 pub fn record<L: Ledger + ?Sized>(
     store: &L,
     command: &Command,
     judged: Option<&Judged>,
     owner: &str,
+) -> Result<Recorded, StoreError> {
+    record_with(store, command, judged, owner, None)
+}
+
+/// What a commitment's planner order is routed under at the second step.
+#[derive(Debug, Clone, Copy)]
+pub struct OrderRoute<'a> {
+    /// The host's effective policy.
+    pub policy: &'a EffectivePolicy,
+    /// The host the order is composed for.
+    pub host: Host,
+    /// The host's accepted model names.
+    pub names: &'a AcceptedNames,
+}
+
+/// The second step for a draft whose first step may have judged a
+/// commitment (D-01): [`record`], and for a commitment its planner order
+/// prepared first, outside the transaction, as the continuation's id for the
+/// continuation's selection under `route`, then issued in the approval's
+/// transaction after the stories. The decision declares no pending planner
+/// order of the phase, and the active-index absence when the recheck found
+/// no active phase, and observes the `phase_plan` document, the readiness
+/// documents and the inputs', so an order issued, a phase made active or a
+/// truth revised since the reads makes the approval `ledger-busy` with
+/// nothing recorded. The receipt adds the order's receipt members. A fault
+/// preparing the order is the answer, with nothing approved.
+pub fn record_commitment<S: Ledger + Views + Payloads>(
+    store: &S,
+    command: &Command,
+    judged: &Judged,
+    owner: &str,
+    route: OrderRoute<'_>,
+) -> Value {
+    let prepared = match judged.commitment() {
+        Some(commitment) => match order::prepare(
+            store,
+            command,
+            commitment.phase,
+            &commitment.stories,
+            None,
+            route.policy,
+            route.host,
+            route.names,
+            &commitment.work_order,
+        ) {
+            Ok(prepared) => Some(prepared),
+            Err(answer) => return answer,
+        },
+        None => None,
+    };
+    crate::scope::submit::answer(
+        record_with(store, command, Some(judged), owner, prepared.as_ref()),
+        store,
+    )
+}
+
+/// [`record`] with a commitment's prepared planner order.
+fn record_with<L: Ledger + ?Sized>(
+    store: &L,
+    command: &Command,
+    judged: Option<&Judged>,
+    owner: &str,
+    prepared: Option<&PreparedOrder>,
 ) -> Result<Recorded, StoreError> {
     let command = Command {
         actor: Actor::Owner,
@@ -408,7 +639,9 @@ pub fn record<L: Ledger + ?Sized>(
         };
         let submission = match &judged.approving {
             Approving::Start(submission) => submission,
-            Approving::Change(draft) => return change_decision(tx, judged, draft, owner, &at),
+            Approving::Change(draft) => {
+                return change_decision(tx, judged, draft, owner, &at, prepared);
+            }
         };
         confirm(tx, judged)?;
         let (highest_phase, highest_story) = highest(tx.get(ROADMAP_VIEW, &roadmap_key())?)?;
@@ -462,15 +695,29 @@ pub fn record<L: Ledger + ?Sized>(
 }
 
 /// Records an approved change inside the transaction, once what the first
-/// step read is confirmed.
+/// step read is confirmed, and a commitment's planner order `prepared` after
+/// its events. A commitment reaching here without its order records
+/// nothing.
 fn change_decision(
     tx: &mut dyn Transaction,
     judged: &Judged,
     draft: &ChangeDraft,
     owner: &str,
     at: &str,
+    prepared: Option<&PreparedOrder>,
 ) -> Result<Decision, StoreError> {
     let change = &draft.change;
+    let ordered = match (&draft.commitment, prepared) {
+        (None, _) => None,
+        (Some(commitment), Some(prepared)) if prepared.id() == commitment.work_order => {
+            Some((commitment, prepared))
+        }
+        (Some(_), _) => {
+            return Err(StoreError::Unavailable(
+                "a commitment approval reached its transaction without its planner order".into(),
+            ));
+        }
+    };
     confirm_draft(tx, judged)?;
     // A transaction cannot ask for an approval after a sequence, so when
     // one preceded the latest submission a second is left to the scope
@@ -517,7 +764,7 @@ fn change_decision(
             .map(|event| event.payload[field].clone())
             .collect()
     };
-    let receipt = json!({
+    let mut receipt = json!({
         "status": "ok",
         "kind": change.kind().as_str(),
         "digest": judged.digest.to_hex(),
@@ -532,11 +779,26 @@ fn change_decision(
     for event in events {
         tx.append(event)?;
     }
+    let mut observed = Observed::default();
+    if let Some((commitment, prepared)) = ordered {
+        let members = prepared.issue_within(tx, at)?;
+        if let Some(receipt) = receipt.as_object_mut() {
+            receipt.extend(members);
+        }
+        observed.absences = planner_absences(commitment.phase);
+        observed
+            .absences
+            .extend(commitment.absences.iter().cloned());
+        observed.documents = commitment.documents.clone();
+        observed
+            .documents
+            .extend(prepared.documents().iter().cloned());
+    }
     Ok(Decision {
         kind: OutcomeKind::Done,
         answer: receipt,
         sensitive: false,
-        observed: Observed::default(),
+        observed,
         git: None,
     })
 }
@@ -748,6 +1010,22 @@ fn truth_draft(digest: Hash) -> Value {
         ApprovalRefusal::UnknownDraft.code(),
         format!(
             "this digest is a story's truth draft, not a scope draft, so nothing was approved. Approve it with baley story truths approve {}",
+            digest.to_hex()
+        ),
+    )
+    .slot("digest")
+    .value()
+}
+
+/// The `refused` answer for a plan draft given to the scope approval:
+/// `unknown-draft`, since no scope draft has the digest, its reason naming
+/// the command that approves plans with this digest, so the owner is never
+/// told the ledger is damaged (D-05).
+fn plan_draft(digest: Hash) -> Value {
+    Refusal::new(
+        ApprovalRefusal::UnknownDraft.code(),
+        format!(
+            "this digest is a plan draft, not a scope draft, so nothing was approved. Approve it with baley plan approve {}",
             digest.to_hex()
         ),
     )
@@ -1644,5 +1922,250 @@ mod tests {
             "{reason}"
         );
         assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_plan_draft_approved_as_scope_or_reported_as_damage_is_caught() {
+        use crate::planning::fixtures::{pl1, store_c};
+        use crate::planning::order::tests::O;
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = plan_submitted(&store, &pl1(), O, None, R2, T5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        let x = receipt["digest"].as_str().unwrap().to_owned();
+        let before = head(&store);
+        let refusal = judge(&store, &project(), Hash::from_hex(&x).unwrap()).unwrap_err();
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "unknown-draft", "{refusal}");
+        assert_eq!(refusal["slot"], "digest", "{refusal}");
+        let reason = refusal["reason"].as_str().unwrap();
+        assert!(
+            reason.contains(&format!("baley plan approve {x}")),
+            "{reason}"
+        );
+        assert_eq!(head(&store), before);
+    }
+
+    /// The commitment tests: store C, the `[1, 4]` edit E1 and the `[4, 1]`
+    /// edit E2 recorded with their continuations, approved under P0 and N0
+    /// (design 0005 `phase plan`, design 0004 `phase edit`, D-01, D-09 to
+    /// D-11).
+    mod commitment {
+        use baley_core::scope::ChangeKind;
+        use baley_store_sqlite::SqliteStore;
+
+        use super::*;
+        use crate::planning::fixtures::{
+            activate_phase_2, approve_commitment, edit, n0, p0, refined, reopen, store_c, versioned,
+        };
+        use crate::planning::order::tests::{O, O2};
+        use crate::planning::phase_plan::tests::bound_stories;
+        use crate::refine::order::tests::issued;
+        use crate::refine::submit::tests::t1;
+
+        /// Phase 1's stories as the roadmap holds them.
+        pub(super) fn phase_1_stories(store: &SqliteStore) -> Vec<u32> {
+            read::phase(store, &project(), 1).unwrap().stories
+        }
+
+        /// The first step of `digest`, which must refuse with `code` at slot
+        /// `digest` and change neither phase 1's stories nor the orders.
+        pub(super) fn refused_with(store: &SqliteStore, digest: Hash, code: &str) -> Value {
+            let before = head(store);
+            let refusal = judge(store, &project(), digest).expect_err("the approval is refused");
+            assert_refused(&refusal, code);
+            assert_eq!(head(store), before);
+            assert_eq!(phase_1_stories(store), [1]);
+            assert!(issued(store).is_empty());
+            refusal
+        }
+
+        #[test]
+        fn a_planner_launched_before_its_commitment_is_approved_or_a_refused_approval_recording_is_caught()
+         {
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let e2 = edit(&store, &[4, 1], O2, R2, T5);
+            refused_with(&store, e1, "stale-draft");
+
+            let answer = approve_commitment(&store, e2, R3, T6);
+            assert_eq!(answer["status"], "ok", "{answer}");
+            assert_eq!(phase_1_stories(&store), [4, 1]);
+            let events = history(&store);
+            let named = of_type(&events, "plan.continuation")
+                .into_iter()
+                .find(|event| event.payload["edit"] == e2.to_hex())
+                .expect("E2 has its continuation")
+                .payload["work_order"]
+                .clone();
+            assert_eq!(named, O2);
+            let orders = issued(&store);
+            assert_eq!(orders.len(), 1);
+            assert_eq!(orders[0].stream, "phase/1");
+            assert_eq!(orders[0].payload["subject"], "phase/1");
+            assert_eq!(orders[0].payload["id"], named);
+            assert_eq!(bound_stories(&store, &orders[0]), [4, 1]);
+            assert_eq!(answer["work_order"], named, "{answer}");
+
+            // Story 4 moved to phase 2 by an approved reassignment.
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let reassign = submit_change(
+                &store,
+                ChangeKind::StoryReassign,
+                &json!({"story": 4, "phase": 2}),
+                R2,
+                T5,
+            )
+            .unwrap();
+            let judged = judge(&store, &project(), digest_of(&reassign)).unwrap();
+            approve(&store, Some(&judged), R3, 6, T5).unwrap();
+            let refusal = refused_with(&store, e1, "story-in-phase");
+            assert_eq!(refusal["details"], json!({"story": 4, "phase": 2}));
+
+            // Phase 2 made active.
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            activate_phase_2(&store, R2);
+            let refusal = refused_with(&store, e1, "phase-active");
+            assert_eq!(refusal["details"], json!({"phase": 2}));
+
+            // Story 4's truths emptied.
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            append(
+                &store,
+                R2,
+                T5,
+                vec![refined(
+                    4,
+                    "4e4e4e4e-4e4e-4e4e-8e4e-4e4e4e4e4e4e",
+                    Vec::new(),
+                )],
+            );
+            let refusal = refused_with(&store, e1, "story-unrefined");
+            assert_eq!(refusal["details"], json!({"story": 4}));
+        }
+
+        /// E1's second step as `Ada Owner` under P0 and N0, as
+        /// `request_id` at `at`.
+        fn second_step(store: &SqliteStore, judged: &Judged, request_id: &str, at: &str) -> Value {
+            let (policy, names) = (p0(), n0());
+            record_commitment(
+                store,
+                &command(APPROVE_COMMAND, request_id, 6, at),
+                judged,
+                OWNER,
+                OrderRoute {
+                    policy: &policy,
+                    host: Host::ClaudeCode,
+                    names: &names,
+                },
+            )
+        }
+
+        #[test]
+        fn a_commitment_landing_beside_a_moved_truth_or_a_new_planner_order_is_caught() {
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let judged = judge(&store, &project(), e1).unwrap();
+            append(
+                &store,
+                R2,
+                T5,
+                vec![refined(
+                    4,
+                    "4f4f4f4f-4f4f-4f4f-8f4f-4f4f4f4f4f4f",
+                    vec![versioned(t1())],
+                )],
+            );
+            let before = head(&store);
+            assert_busy(&second_step(&store, &judged, R3, T6));
+            assert_eq!(head(&store), before);
+
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let judged = judge(&store, &project(), e1).unwrap();
+            let (command_q, q) = crate::planning::order::tests::prepared(&store, &[1], O2, R2, T5);
+            let issued_q = crate::planning::order::issue(&store, &command_q, &q);
+            assert_eq!(issued_q["status"], "ok", "{issued_q}");
+            let before = head(&store);
+            assert_busy(&second_step(&store, &judged, R3, T6));
+            assert_eq!(head(&store), before);
+            assert_eq!(issued(&store).len(), 1);
+        }
+
+        #[test]
+        fn a_commitment_approval_rerun_naming_no_order_or_recording_is_caught() {
+            let (dir, store) = store_c();
+            let e2 = edit(&store, &[4, 1], O, R1, T4);
+            let approved = approve_commitment(&store, e2, R2, T5);
+            assert_eq!(approved["status"], "ok", "{approved}");
+            drop(store);
+            let store = reopen(&dir);
+
+            let before = head(&store);
+            let refusal = judge(&store, &project(), e2).expect_err("E2 is approved");
+            assert_refused(&refusal, "draft-approved");
+            assert_eq!(refusal["details"]["work_order"], O, "{refusal}");
+            assert!(refusal["reason"].as_str().unwrap().contains(O), "{refusal}");
+            assert_eq!(head(&store), before);
+            assert_eq!(issued(&store).len(), 1);
+        }
+
+        #[test]
+        fn a_commitment_approved_beside_a_pending_planner_order_without_naming_it_is_caught() {
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let (command_q, q) = crate::planning::order::tests::prepared(&store, &[1], O2, R2, T5);
+            let issued_q = crate::planning::order::issue(&store, &command_q, &q);
+            assert_eq!(issued_q["status"], "ok", "{issued_q}");
+
+            let before = head(&store);
+            let refusal = judge(&store, &project(), e1).expect_err("Q is pending");
+            assert_refused(&refusal, "planner-order-pending");
+            assert_eq!(refusal["details"], json!({"work_order": O2}));
+            assert_eq!(head(&store), before);
+        }
+
+        #[test]
+        fn a_commitment_landing_beside_a_newly_active_phase_is_caught() {
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let judged = judge(&store, &project(), e1).unwrap();
+            activate_phase_2(&store, R2);
+            let before = head(&store);
+            assert_busy(&second_step(&store, &judged, R3, T6));
+            assert_eq!(head(&store), before);
+            assert_eq!(phase_1_stories(&store), [1]);
+            assert!(issued(&store).is_empty());
+        }
+
+        #[test]
+        fn a_plain_phase_edit_approval_issuing_an_order_is_caught() {
+            let (_dir, store) = store_c();
+            let fields = baley_core::scope::PhaseFields {
+                goal: Some("The owner approves every change".into()),
+                ..Default::default()
+            };
+            let digest = crate::scope::submit::submit_phase_edit(
+                &store,
+                &command(crate::scope::submit::SUBMIT_COMMAND, R1, 7, T4),
+                2,
+                &fields,
+                None,
+            )
+            .unwrap();
+            let judged = judge(&store, &project(), digest).unwrap();
+            let answer = second_step(&store, &judged, R2, T5);
+            assert_eq!(answer["status"], "ok", "{answer}");
+            assert_eq!(
+                read::phase(&store, &project(), 2).unwrap().goal,
+                "The owner approves every change"
+            );
+            assert!(issued(&store).is_empty());
+        }
     }
 }

@@ -100,8 +100,9 @@ pub fn prompt(id: &str) -> String {
 /// The sentence telling the session how to start the worker: the stub
 /// `agent` with the Agent tool and the prompt, with the route's model as the
 /// Agent tool's `model` parameter, or with none so the stub's `model:
-/// inherit` applies (D-23).
-fn launch(agent: &str, model: Option<&str>) -> String {
+/// inherit` applies (D-23). An order handed over after its issue is launched
+/// with the same sentence.
+pub fn launch(agent: &str, model: Option<&str>) -> String {
     match model {
         Some(model) => format!(
             "Start the subagent {agent} with the Agent tool, giving it the prompt above, and pass {model} as the Agent tool's model parameter."

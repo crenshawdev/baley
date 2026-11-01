@@ -74,10 +74,10 @@ fn child<'t>(table: &'t mut Table, key: &str) -> &'t mut Table {
     slot.as_table_mut().expect("the slot holds a table")
 }
 
-/// The TOML type each kind reads back: a boolean, an array of strings for a
-/// branch or reviewer list, or a string for a rung name, a model name, a
-/// remote name, an `https://` address, a person's name and an `on_protected`
-/// name.
+/// The TOML type each kind reads back: a boolean, an integer for a capacity,
+/// an array of strings for a branch or reviewer list, or a string for a rung
+/// name, a model name, a remote name, an `https://` address, a person's name,
+/// a command line and an `on_protected` name.
 fn toml_value(value: &Value) -> TomlValue {
     match value {
         Value::Bool(value) => TomlValue::Boolean(*value),
@@ -87,6 +87,8 @@ fn toml_value(value: &Value) -> TomlValue {
         Value::OnProtected(on) => TomlValue::String(on.name().to_owned()),
         Value::HttpsAddress(address) => TomlValue::String(address.clone()),
         Value::PersonName(name) => TomlValue::String(name.clone()),
+        Value::Capacity(capacity) => TomlValue::Integer(i64::from(capacity.get())),
+        Value::Command(command) => TomlValue::String(command.clone()),
         Value::BranchList(names) | Value::ReviewerList(names) => {
             TomlValue::Array(names.iter().cloned().map(TomlValue::String).collect())
         }
@@ -121,6 +123,7 @@ pub fn changed_pairs(current: Option<&ParsedLayer>, pairs: &[TypedPair]) -> Vec<
 pub(super) fn value_text(value: &Value) -> String {
     match value {
         Value::Bool(value) => value.to_string(),
+        Value::Capacity(capacity) => capacity.to_string(),
         Value::Rung(rung) => format!("\"{}\"", rung.name()),
         Value::OnProtected(on) => format!("\"{}\"", on.name()),
         Value::BranchList(names) | Value::ReviewerList(names) => {
@@ -130,7 +133,8 @@ pub(super) fn value_text(value: &Value) -> String {
         Value::ModelName(name)
         | Value::RemoteName(name)
         | Value::HttpsAddress(name)
-        | Value::PersonName(name) => quoted(name),
+        | Value::PersonName(name)
+        | Value::Command(name) => quoted(name),
     }
 }
 

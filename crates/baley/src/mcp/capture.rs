@@ -1078,7 +1078,7 @@ mod tests {
 
     #[test]
     fn an_unserved_instruction_accepted_or_refused_without_its_build_is_caught() {
-        let refusal = refused(&arguments(json!({"instruction": "bal-plan"})));
+        let refusal = refused(&arguments(json!({"instruction": "bal-review"})));
         assert_eq!(refusal["code"], "instruction-unavailable");
         assert_eq!(refusal["slot"], "instruction");
         assert_eq!(refusal["details"]["build"], 4);

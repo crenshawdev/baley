@@ -267,7 +267,8 @@ mod tests {
             }],
         });
         assert_eq!(stdout_bytes(&partial), bytes.as_slice());
-        let refused: Result<Selection, Refusal> = Err(Refusal::UnknownStub("bal-plan".to_owned()));
+        let refused: Result<Selection, Refusal> =
+            Err(Refusal::UnknownStub("bal-review".to_owned()));
         assert!(stdout_bytes(&refused).is_empty());
     }
 
@@ -297,6 +298,7 @@ mod tests {
                 "bal-context",
                 "bal-help",
                 "bal-phase",
+                "bal-plan",
                 "bal-project",
                 "bal-scope",
                 "bal-story",
@@ -378,11 +380,11 @@ mod tests {
     #[test]
     fn an_unknown_stub_printed_as_another_or_refused_without_its_name_is_caught() {
         let request = Request::Stub {
-            identity: "bal-plan".to_owned(),
+            identity: "bal-review".to_owned(),
         };
         let refused = select(&request).unwrap_err();
-        assert_eq!(refused, Refusal::UnknownStub("bal-plan".to_owned()));
-        assert!(refused.to_string().contains("bal-plan"));
+        assert_eq!(refused, Refusal::UnknownStub("bal-review".to_owned()));
+        assert!(refused.to_string().contains("bal-review"));
     }
 
     #[test]

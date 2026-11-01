@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::NonZeroU32;
 
 use super::{INVALID_VALUE, LIST_NOT_SETTABLE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
 use crate::policy::schema::{is_https_address, is_person_name};
@@ -138,10 +139,11 @@ impl fmt::Display for SetRefusal {
                     Kind::HttpsAddress => {
                         "an https:// address with no spaces, query or fragment".to_owned()
                     }
-                    Kind::PersonName => {
+                    Kind::PersonName | Kind::Command => {
                         "one line of text that is not blank and holds no control character"
                             .to_owned()
                     }
+                    Kind::Capacity => format!("a whole number from 1 to {}", u32::MAX),
                 };
                 write!(
                     f,
@@ -206,6 +208,12 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::HttpsAddress => is_https_address(text).then(|| Value::HttpsAddress(text.to_owned())),
         // Taken as written: spaces either side of a name are kept.
         Kind::PersonName => is_person_name(text).then(|| Value::PersonName(text.to_owned())),
+        // Decimal digits only: `u32`'s own parse would also take a leading `+`.
+        Kind::Capacity => (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| text.parse().ok().and_then(NonZeroU32::new))
+            .flatten()
+            .map(Value::Capacity),
+        Kind::Command => is_person_name(text).then(|| Value::Command(text.to_owned())),
     }
 }
 

@@ -193,13 +193,14 @@ mod tests {
     }
 
     /// The shipped front doors in manifest order, written out by hand.
-    const STUBS: [&str; 8] = [
+    const STUBS: [&str; 9] = [
         "bal-project",
         "bal-scope",
         "bal-phase",
         "bal-story",
         "bal-backlog",
         "bal-context",
+        "bal-plan",
         "bal-capture",
         "bal-help",
     ];

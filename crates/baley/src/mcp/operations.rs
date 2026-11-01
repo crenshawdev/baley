@@ -104,7 +104,7 @@ pub const QUERY_OPERATIONS: &[Operation] = &[
     retired("verification-audit", 5),
     retired("execution-history", 5),
     retired("evidence-read", 5),
-    retired("plan-read", 4),
+    with_project("plan-read"),
     with_project("context-intake"),
     with_project("route"),
     retired("config-entry", 2),
@@ -153,7 +153,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     retired("execution-admit", 5),
     retired("execution-extend", 5),
     retired("execution-authorize", 5),
-    retired("plan-submit", 4),
+    with_project("plan-submit"),
     with_project("context-submit"),
     retired("review-admit", 4),
     retired("review-observation", 4),
@@ -212,6 +212,8 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     with_project("questions-answer"),
     with_project("story-refine"),
     with_project("story-questions-submit"),
+    with_project("phase-plan"),
+    with_project("plan-replace"),
 ];
 
 /// A spelling served only from a project, which its call prepares.
@@ -387,6 +389,18 @@ enum RequestShape {
     // `story-questions-submit` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "story-questions-submit")]
     StoryQuestionsSubmit(#[allow(dead_code)] crate::mcp::refine::QuestionsShape),
+    // `phase-plan` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "phase-plan")]
+    PhasePlan(#[allow(dead_code)] crate::mcp::planning::PhasePlanShape),
+    // `plan-submit` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-submit")]
+    PlanSubmit(#[allow(dead_code)] crate::mcp::planning::PlanSubmitShape),
+    // `plan-replace` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-replace")]
+    PlanReplace(#[allow(dead_code)] crate::mcp::planning::PlanReplaceShape),
+    // `plan-read` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-read")]
+    PlanRead(#[allow(dead_code)] crate::mcp::planning::PlanReadShape),
     // `context-intake` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "context-intake")]
     ContextIntake(#[allow(dead_code)] crate::mcp::refine::IntakeShape),
@@ -674,6 +688,8 @@ pub(crate) mod expected {
         "questions-answer",
         "story-refine",
         "story-questions-submit",
+        "phase-plan",
+        "plan-replace",
     ];
 }
 
@@ -743,7 +759,11 @@ mod tests {
                     "questions-answer",
                     "story-refine",
                     "story-questions-submit",
+                    "phase-plan",
+                    "plan-submit",
+                    "plan-replace",
                     "context-submit",
+                    "plan-read",
                     "context-intake",
                     "route",
                 ]
@@ -761,7 +781,7 @@ mod tests {
                 needs_project: true
             }
         );
-        for name in ["document", "context-intake", "route"] {
+        for name in ["document", "plan-read", "context-intake", "route"] {
             assert_eq!(
                 lookup(Tool::Query, Some(name)),
                 Lookup::Available {
@@ -788,6 +808,9 @@ mod tests {
             "questions-answer",
             "story-refine",
             "story-questions-submit",
+            "phase-plan",
+            "plan-submit",
+            "plan-replace",
             "context-submit",
         ] {
             assert_eq!(
@@ -808,7 +831,6 @@ mod tests {
         };
         assert_eq!(build(Tool::Query, "config-entry"), 2);
         assert_eq!(build(Tool::Apply, "config-apply"), 2);
-        assert_eq!(build(Tool::Query, "plan-read"), 4);
         assert_eq!(build(Tool::Apply, "review-admit"), 4);
         assert_eq!(build(Tool::Apply, "risk-fire"), 4);
         assert_eq!(build(Tool::Query, "detect-surfaces"), 4);
@@ -1036,22 +1058,29 @@ mod tests {
     fn the_document_schema_does_not_omit_or_widen_the_capture_identity() {
         // Design 0012: a capture by its string id, a draft by its string
         // digest, the roadmap with no other field, a story by its integer id,
-        // a work order by its string id, a question set by its string set id
-        // and a refinement by its integer story id, each refusing any other
-        // field.
+        // a work order by its string id, a question set by its string set id,
+        // a refinement by its integer story id, a phase by its integer number
+        // and a plan by its integer phase and plan numbers, each refusing any
+        // other field.
         let schema = served_schema("document").unwrap();
         let identities = schema["properties"]["identity"]["oneOf"]
             .as_array()
             .unwrap();
-        assert_eq!(identities.len(), 7, "{identities:?}");
-        for (identity, kind, field) in [
-            (&identities[0], "capture", Some(("id", "string"))),
-            (&identities[1], "draft", Some(("digest", "string"))),
-            (&identities[2], "roadmap", None),
-            (&identities[3], "story", Some(("id", "integer"))),
-            (&identities[4], "work_order", Some(("id", "string"))),
-            (&identities[5], "questions", Some(("set", "string"))),
-            (&identities[6], "refinement", Some(("story", "integer"))),
+        assert_eq!(identities.len(), 9, "{identities:?}");
+        for (identity, kind, fields) in [
+            (&identities[0], "capture", &[("id", "string")][..]),
+            (&identities[1], "draft", &[("digest", "string")]),
+            (&identities[2], "roadmap", &[]),
+            (&identities[3], "story", &[("id", "integer")]),
+            (&identities[4], "work_order", &[("id", "string")]),
+            (&identities[5], "questions", &[("set", "string")]),
+            (&identities[6], "refinement", &[("story", "integer")]),
+            (&identities[7], "phase", &[("phase", "integer")]),
+            (
+                &identities[8],
+                "plan",
+                &[("phase", "integer"), ("plan", "integer")],
+            ),
         ] {
             assert_eq!(identity["type"], "object", "{identity}");
             assert_eq!(identity["properties"]["kind"]["const"], kind, "{identity}");
@@ -1064,19 +1093,14 @@ mod tests {
                 .collect();
             required.sort_unstable();
             let properties = identity["properties"].as_object().unwrap();
-            match field {
-                Some((name, kind)) => {
-                    assert_eq!(identity["properties"][name]["type"], kind, "{identity}");
-                    let mut expected = vec!["kind", name];
-                    expected.sort_unstable();
-                    assert_eq!(required, expected, "{identity}");
-                    assert_eq!(properties.len(), 2, "{identity}");
-                }
-                None => {
-                    assert_eq!(required, ["kind"], "{identity}");
-                    assert_eq!(properties.len(), 1, "{identity}");
-                }
+            for (name, kind) in fields {
+                assert_eq!(identity["properties"][name]["type"], *kind, "{identity}");
             }
+            let mut expected: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
+            expected.push("kind");
+            expected.sort_unstable();
+            assert_eq!(required, expected, "{identity}");
+            assert_eq!(properties.len(), fields.len() + 1, "{identity}");
         }
     }
 
@@ -1127,7 +1151,7 @@ mod tests {
 
     #[test]
     fn an_unavailable_instruction_is_refused_naming_its_build() {
-        let answer = instruction_call("bal-plan");
+        let answer = instruction_call("bal-review");
         assert_eq!(answer["code"], "instruction-unavailable");
         assert_eq!(answer["slot"], "identity");
         assert_eq!(answer["details"], json!({"build": 4}));
@@ -1312,12 +1336,15 @@ mod tests {
     fn the_work_order_operations_out_of_the_baseline_order_or_unserved_are_caught() {
         let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
         let served = ["project-start", "work-order-fail", "work-order-retry"];
-        // The three directly precede `questions-answer`, `story-refine` and
-        // `story-questions-submit`, appended after them.
-        assert_eq!(
-            names[names.len().saturating_sub(6)..names.len().saturating_sub(3)],
-            served
-        );
+        // The three follow `backlog-reorder` and directly precede
+        // `questions-answer`, appended after them.
+        let at = names
+            .iter()
+            .position(|name| *name == "project-start")
+            .expect("listed");
+        assert_eq!(names[at - 1], "backlog-reorder");
+        assert_eq!(names[at..at + 3], served);
+        assert_eq!(names[at + 3], "questions-answer");
         for name in served {
             assert_eq!(
                 lookup(Tool::Apply, Some(name)),
@@ -1348,10 +1375,12 @@ mod tests {
     #[test]
     fn a_questions_answer_spelling_left_unserved_or_out_of_the_baseline_order_is_caught() {
         let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
-        assert_eq!(
-            names[names.len() - 4..names.len() - 1],
-            ["work-order-retry", "questions-answer", "story-refine"]
-        );
+        let at = names
+            .iter()
+            .position(|name| *name == "questions-answer")
+            .expect("listed");
+        assert_eq!(names[at - 1], "work-order-retry");
+        assert_eq!(names[at + 1], "story-refine");
         assert_eq!(
             lookup(Tool::Apply, Some("questions-answer")),
             Lookup::Available {

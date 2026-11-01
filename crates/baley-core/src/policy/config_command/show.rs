@@ -159,6 +159,8 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::ReviewerList => "list of host, openai or deepseek",
         Kind::HttpsAddress => "https:// address",
         Kind::PersonName => "name",
+        Kind::Capacity => "whole number from 1 to 4294967295",
+        Kind::Command => "command line",
     }
 }
 

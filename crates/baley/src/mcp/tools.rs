@@ -349,15 +349,15 @@ mod tests {
         let schema = input_schema(Tool::Query);
         let identity = alternative_of_type(&schema["properties"]["identity"], "object");
         let objects = leaves(&identity);
-        assert_eq!(objects.len(), 7, "{identity}");
+        assert_eq!(objects.len(), 9, "{identity}");
         let object = &objects[0];
         assert_eq!(object["properties"]["kind"]["const"], "capture");
         assert_eq!(object["properties"]["id"]["type"], "string");
         assert_eq!(object["required"], json!(["kind", "id"]));
         assert_eq!(object["additionalProperties"], false);
-        // The scope, work-order, question-set and refinement kinds are objects
-        // with their own typed fields too, so no identity leaves room for loose
-        // text.
+        // The scope, work-order, question-set, refinement, phase and plan kinds
+        // are objects with their own typed fields too, so no identity leaves
+        // room for loose text.
         for (object, kind) in objects[1..].iter().zip([
             "draft",
             "roadmap",
@@ -365,6 +365,8 @@ mod tests {
             "work_order",
             "questions",
             "refinement",
+            "phase",
+            "plan",
         ]) {
             assert_eq!(object["type"], "object", "{object}");
             assert_eq!(object["properties"]["kind"]["const"], kind, "{object}");
@@ -374,6 +376,9 @@ mod tests {
         assert_eq!(objects[4]["properties"]["id"]["type"], "string");
         assert_eq!(objects[5]["properties"]["set"]["type"], "string");
         assert_eq!(objects[6]["properties"]["story"]["type"], "integer");
+        assert_eq!(objects[7]["properties"]["phase"]["type"], "integer");
+        assert_eq!(objects[8]["properties"]["phase"]["type"], "integer");
+        assert_eq!(objects[8]["properties"]["plan"]["type"], "integer");
         let parts = alternatives(&schema["properties"]["part"]);
         assert!(!parts.is_empty(), "no part in {schema}");
         for part in parts {
@@ -396,9 +401,11 @@ mod tests {
         // questions-answer takes request_id, set and items,
         // story-refine takes request_id, story and instruction,
         // story-questions-submit takes request_id, story, work_order and
-        // questions, context-submit takes request_id, work_order, story, set
-        // and truths,
-        // context-intake takes story and part,
+        // questions, phase-plan takes request_id, phase, stories and
+        // instruction, plan-submit takes request_id, work_order and plan,
+        // plan-replace takes those and replaces, context-submit takes
+        // request_id, work_order, story, set and truths,
+        // context-intake takes story and part, plan-read takes phase and part,
         // and route takes role or work_order.
         let names = |tool| {
             let schema = input_schema(tool);
@@ -419,6 +426,7 @@ mod tests {
                 "name",
                 "operation",
                 "part",
+                "phase",
                 "role",
                 "story",
                 "tool",
@@ -434,10 +442,13 @@ mod tests {
                 "kind",
                 "operation",
                 "phase",
+                "plan",
                 "questions",
                 "reason",
+                "replaces",
                 "request_id",
                 "set",
+                "stories",
                 "story",
                 "submission",
                 "text",
@@ -476,7 +487,7 @@ mod tests {
         assert!(
             parts
                 .iter()
-                .any(|d| d.ends_with("Taken by help and context-intake.")),
+                .any(|d| d.ends_with("Taken by help, plan-read and context-intake.")),
             "{parts:?}"
         );
         assert!(
@@ -529,7 +540,13 @@ mod tests {
             );
         }
         assert_eq!(submissions.len(), 11, "{submissions:?}");
-        assert!(description(&apply["properties"]["phase"]).ends_with("Taken by capture."));
+        let phases: Vec<String> = alternatives(&apply["properties"]["phase"])
+            .iter()
+            .map(description)
+            .collect();
+        for sentence in ["Taken by capture.", "Taken by phase-plan (required)."] {
+            assert!(phases.iter().any(|d| d.ends_with(sentence)), "{phases:?}");
+        }
     }
 
     #[test]
