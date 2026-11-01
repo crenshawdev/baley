@@ -20,7 +20,9 @@
 
 use std::collections::BTreeMap;
 
-use baley_core::plan::{CommitmentRefusal, PHASE_PLAN_VIEW, judge_readiness, phase_plan_key};
+use baley_core::plan::{
+    CommitmentRefusal, PHASE_PLAN_VIEW, PLAN_KIND, judge_readiness, phase_plan_key,
+};
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host};
 use baley_core::scope::{
     AcceptedScope, ApprovalFacts, ApprovalRefusal, ChangeApprovalFacts, ChangeApprovalRefusal,
@@ -156,7 +158,8 @@ struct CarriedDetail {
 /// draft; for a change, what `judge_change_draft` names. Then it judges the
 /// approval. A story's truth draft is refused `unknown-draft`, its reason
 /// naming `baley story truths approve <digest>`, which approves it (owner
-/// ruling R2). It runs outside any transaction, since a transaction has no
+/// ruling R2), and a plan draft the same way naming `baley plan approve
+/// <digest>` (D-05). It runs outside any transaction, since a transaction has no
 /// payload read (D-02). A refusal is the `refused` answer, slot `digest`; a
 /// body that is gone or no longer judges clean is a ledger fault, never
 /// approved. Nothing is recorded. A commitment, a `phase-edit` its phase's
@@ -169,6 +172,7 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
 ) -> Result<Judged, Value> {
     let target = match preview(store, project, digest) {
         Ok(read) if read.kind == STORY_TRUTHS => return Err(truth_draft(digest)),
+        Ok(read) if read.kind == PLAN_KIND => return Err(plan_draft(digest)),
         Ok(read) if read.kind != START_KIND => return judge_change_draft(store, project, &read),
         Ok(read) => Some(accept(&read)?),
         Err(PreviewError::UnknownDraft) => None,
@@ -1006,6 +1010,22 @@ fn truth_draft(digest: Hash) -> Value {
         ApprovalRefusal::UnknownDraft.code(),
         format!(
             "this digest is a story's truth draft, not a scope draft, so nothing was approved. Approve it with baley story truths approve {}",
+            digest.to_hex()
+        ),
+    )
+    .slot("digest")
+    .value()
+}
+
+/// The `refused` answer for a plan draft given to the scope approval:
+/// `unknown-draft`, since no scope draft has the digest, its reason naming
+/// the command that approves plans with this digest, so the owner is never
+/// told the ledger is damaged (D-05).
+fn plan_draft(digest: Hash) -> Value {
+    Refusal::new(
+        ApprovalRefusal::UnknownDraft.code(),
+        format!(
+            "this digest is a plan draft, not a scope draft, so nothing was approved. Approve it with baley plan approve {}",
             digest.to_hex()
         ),
     )
@@ -1899,6 +1919,30 @@ mod tests {
         let reason = refusal["reason"].as_str().unwrap();
         assert!(
             reason.contains(&format!("baley story truths approve {x}")),
+            "{reason}"
+        );
+        assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_plan_draft_approved_as_scope_or_reported_as_damage_is_caught() {
+        use crate::planning::fixtures::{pl1, store_c};
+        use crate::planning::order::tests::O;
+        use crate::planning::submit::tests::{order_o, plan_submitted};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = plan_submitted(&store, &pl1(), O, None, R2, T5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        let x = receipt["digest"].as_str().unwrap().to_owned();
+        let before = head(&store);
+        let refusal = judge(&store, &project(), Hash::from_hex(&x).unwrap()).unwrap_err();
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "unknown-draft", "{refusal}");
+        assert_eq!(refusal["slot"], "digest", "{refusal}");
+        let reason = refusal["reason"].as_str().unwrap();
+        assert!(
+            reason.contains(&format!("baley plan approve {x}")),
             "{reason}"
         );
         assert_eq!(head(&store), before);
