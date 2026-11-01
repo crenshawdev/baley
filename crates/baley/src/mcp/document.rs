@@ -982,13 +982,17 @@ mod tests {
     mod plans {
         //! Store C with order O over the real store: PL1 approved as plan 1,
         //! PL3 with E1 alone approved as plan 2, and PL2 submitted and never
-        //! approved. Expected answers are written out from design 0012's
+        //! approved; phase 2's plan 1, F1 alone under its own digest, is
+        //! appended by hand, since one phase active at a time keeps the
+        //! approval path from approving it beside phase 1's. Expected answers are written out from design 0012's
         //! `document` identities, D-07, D-17 and the plan's data, never from
         //! running this code.
 
         use serde_json::{Value, json};
 
         use super::super::*;
+        use baley_store::Hash;
+
         use crate::planning::approve::tests::{approved, digest_of};
         use crate::planning::fixtures::*;
         use crate::planning::order::tests::O;
@@ -1015,6 +1019,13 @@ mod tests {
             let x3 = digest_of(&second);
             assert_eq!(approved(&store, x3, &p0(), R5, T6)["status"], "ok");
             let x2 = digest_of(&plan_submitted(&store, &pl2(), O, None, R6, T7));
+            // Phase 2's plan 1 shares phase 1's plan numbers under another
+            // digest, so a read of the wrong phase answers a plan that differs.
+            let mut f1 = e1();
+            f1["id"] = json!("f1");
+            f1["story"] = json!(2);
+            let y = Hash([0x7e; 32]);
+            approve_by_hand(&store, R7, 2, 1, y, &[2], 1, &[f1.clone()], Vec::new());
             let before = head(&store);
 
             let phase = read(&store, &project(), &shape(Identity::Phase { phase: 1 }));
@@ -1067,6 +1078,41 @@ mod tests {
             let unknown: Value = read(&store, &project(), &shape(Identity::Phase { phase: 9 }));
             assert_eq!(unknown["status"], "refused", "{unknown}");
             assert_eq!(unknown["code"], "no-such-phase", "{unknown}");
+            assert_eq!(head(&store), before);
+
+            let first = read(
+                &store,
+                &project(),
+                &shape(Identity::Plan { phase: 1, plan: 1 }),
+            );
+            assert_eq!(first["status"], "ok", "{first}");
+            assert_eq!(first["phase"], 1, "{first}");
+            assert_eq!(first["plan"]["plan"], 1, "{first}");
+            assert_eq!(first["plan"]["digest"], x1.to_hex(), "{first}");
+            assert_eq!(first["plan"]["items"], json!([e1(), e2()]), "{first}");
+            let other = read(
+                &store,
+                &project(),
+                &shape(Identity::Plan { phase: 2, plan: 1 }),
+            );
+            assert_eq!(other["status"], "ok", "{other}");
+            assert_eq!(other["phase"], 2, "{other}");
+            assert_eq!(other["plan"]["plan"], 1, "{other}");
+            assert_eq!(
+                other["plan"]["digest"],
+                y.to_hex(),
+                "another phase's plan: {other}"
+            );
+            assert_eq!(other["plan"]["items"], json!([f1]), "{other}");
+            assert_eq!(head(&store), before);
+
+            let absent = read(
+                &store,
+                &project(),
+                &shape(Identity::Plan { phase: 9, plan: 1 }),
+            );
+            assert_eq!(absent["status"], "refused", "{absent}");
+            assert_eq!(absent["code"], "no-such-phase", "{absent}");
             assert_eq!(head(&store), before);
         }
     }
