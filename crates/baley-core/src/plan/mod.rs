@@ -12,7 +12,8 @@
 //! record, and the `evidence_map` view, each approved plan's map with its
 //! reading into the items the judge takes, all projected from those events
 //! alone; and the commitment judge, what a `phase-plan` call does with a
-//! selection and whether a plan may be submitted for its phase.
+//! selection and whether a plan may be submitted for its phase; and the
+//! plan checker's judgements, the findings a checker returns (PLN-R16).
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
@@ -20,6 +21,7 @@
 mod approval;
 mod binding;
 mod capacity;
+mod check;
 mod commitment;
 mod content;
 mod coverage;
@@ -41,6 +43,7 @@ mod task;
 pub use approval::{
     ANSWER_NOT_APPLIED, DraftRead, PlanApprovalFacts, PlanApprovalRefusal, judge_plan_approval,
 };
+pub use check::{CheckRefusal, FINDING_SHAPE, Findings, judge_findings};
 pub use commitment::{
     CommitmentFacts, CommitmentRefusal, Continuation, PHASE_ACTIVE, PHASE_NOT_ACTIVE,
     PLANNER_ORDER_PENDING, PhaseNotActive, PhasePlanPath, Readiness, STORY_IN_PHASE,
