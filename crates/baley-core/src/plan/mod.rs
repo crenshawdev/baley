@@ -4,9 +4,10 @@
 //! answers with, and the accepted plan only that judgement builds; a plan
 //! draft's body, digest and target, built from an accepted plan alone; the
 //! judgement of a plan approval and of a replacement, with the phase facts a
-//! replacement is judged under; and the four plan events on a phase's
-//! stream, `plan.approved`, `plan.replaced`, `plan.continuation` and
-//! `plan.continuation_followed`, with their payloads; and the `phase_plan`
+//! replacement is judged under; and the six plan events on a phase's
+//! stream, `plan.approved`, `plan.replaced`, `plan.continuation`,
+//! `plan.continuation_followed`, `plan.check_issued` and `plan.checked`,
+//! with their payloads; and the `phase_plan`
 //! view, a phase's planning state, the `plan` view, each approved plan's
 //! record, and the `evidence_map` view, each approved plan's map with its
 //! reading into the items the judge takes, all projected from those events
@@ -46,10 +47,12 @@ pub use commitment::{
     STORY_UNREFINED, SelectedStory, judge_commitment, judge_readiness, judge_submit_phase,
 };
 pub use event::{
-    PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED,
-    PLAN_CONTINUATION_FOLLOWED_VERSION, PLAN_CONTINUATION_VERSION, PLAN_REPLACED,
-    PLAN_REPLACED_VERSION, PlanApproval, continuation_followed_payload, continuation_payload,
-    phase_stream, register_plan_events, replaced_payload,
+    CheckIssue, CheckResult, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_CHECK_ISSUED,
+    PLAN_CHECK_ISSUED_VERSION, PLAN_CHECKED, PLAN_CHECKED_VERSION, PLAN_CONTINUATION,
+    PLAN_CONTINUATION_FOLLOWED, PLAN_CONTINUATION_FOLLOWED_VERSION, PLAN_CONTINUATION_VERSION,
+    PLAN_REPLACED, PLAN_REPLACED_VERSION, PlanApproval, PreviousCheck, TruthVersion,
+    continuation_followed_payload, continuation_payload, phase_stream, register_plan_events,
+    replaced_payload,
 };
 pub use evidence::{
     Artifact, Check, CheckTest, EvidenceItem, Expected, Level, Link, Observation, Spec,
