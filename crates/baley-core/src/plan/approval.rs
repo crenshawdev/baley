@@ -22,8 +22,8 @@ use crate::truth::QUESTION_OPEN;
 pub const ANSWER_NOT_APPLIED: &str = "answer-not-applied";
 
 // The members in the order the plan judge reads them, which is the order a
-// stale path is looked for in.
-const PLAN: [&str; 10] = [
+// stale path is looked for in and the order the delta lists changes in.
+pub(super) const PLAN: [&str; 10] = [
     "phase",
     "stories",
     "files",

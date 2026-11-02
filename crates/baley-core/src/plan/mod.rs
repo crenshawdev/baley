@@ -7,14 +7,15 @@
 //! replacement is judged under; and the six plan events on a phase's
 //! stream, `plan.approved`, `plan.replaced`, `plan.continuation`,
 //! `plan.continuation_followed`, `plan.check_issued` and `plan.checked`,
-//! with their payloads; and the `phase_plan`
-//! view, a phase's planning state, the `plan` view, each approved plan's
-//! record, and the `evidence_map` view, each approved plan's map with its
-//! reading into the items the judge takes, all projected from those events
-//! alone; and the commitment judge, what a `phase-plan` call does with a
+//! with their payloads; and the `phase_plan` view, a phase's planning
+//! state, the `plan` view, each approved plan's record, and the
+//! `evidence_map` view, each approved plan's map with its reading into the
+//! items the judge takes, all projected from those events alone; and the
+//! commitment judge, what a `phase-plan` call does with a
 //! selection and whether a plan may be submitted for its phase; and the
 //! plan checker's judgements, the findings a checker returns, a submit's
-//! round in its check lineage and a re-check's truths (PLN-R16).
+//! round in its check lineage and a re-check's truths, and the delta of a
+//! draft and its revision that the `diff` re-check reads (PLN-R16).
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
@@ -26,6 +27,7 @@ mod check;
 mod commitment;
 mod content;
 mod coverage;
+mod delta;
 mod event;
 mod evidence;
 #[cfg(test)]
@@ -54,6 +56,7 @@ pub use commitment::{
     PLANNER_ORDER_PENDING, PhaseNotActive, PhasePlanPath, Readiness, STORY_IN_PHASE,
     STORY_UNREFINED, SelectedStory, judge_commitment, judge_readiness, judge_submit_phase,
 };
+pub use delta::plan_delta;
 pub use event::{
     CheckIssue, CheckResult, PLAN_APPROVED, PLAN_APPROVED_VERSION, PLAN_CHECK_ISSUED,
     PLAN_CHECK_ISSUED_VERSION, PLAN_CHECKED, PLAN_CHECKED_VERSION, PLAN_CONTINUATION,
