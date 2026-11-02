@@ -13,7 +13,8 @@
 //! reading into the items the judge takes, all projected from those events
 //! alone; and the commitment judge, what a `phase-plan` call does with a
 //! selection and whether a plan may be submitted for its phase; and the
-//! plan checker's judgements, the findings a checker returns (PLN-R16).
+//! plan checker's judgements, the findings a checker returns, a submit's
+//! round in its check lineage and a re-check's truths (PLN-R16).
 //!
 //! Nothing here reads a store, a file or a clock: the binary supplies every
 //! value it judges.
@@ -43,7 +44,11 @@ mod task;
 pub use approval::{
     ANSWER_NOT_APPLIED, DraftRead, PlanApprovalFacts, PlanApprovalRefusal, judge_plan_approval,
 };
-pub use check::{CheckRefusal, FINDING_SHAPE, Findings, judge_findings};
+pub use check::{
+    CHECKER_ORDER_PENDING, CheckRefusal, CheckRound, FINDING_SHAPE, Findings, Lineage,
+    RECHECK_TRUTHS_CHANGED, THIRD_ROUND, TruthChange, judge_check_round, judge_findings,
+    judge_recheck_truths,
+};
 pub use commitment::{
     CommitmentFacts, CommitmentRefusal, Continuation, PHASE_ACTIVE, PHASE_NOT_ACTIVE,
     PLANNER_ORDER_PENDING, PhaseNotActive, PhasePlanPath, Readiness, STORY_IN_PHASE,
