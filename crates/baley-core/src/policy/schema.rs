@@ -126,6 +126,78 @@ impl OnProtected {
     }
 }
 
+/// What the plan trigger's findings do, the value of `review.triggers.plan.gate`
+/// (design 0008 settings table). Any value but `Off` also runs the plan checker
+/// (design 0005, PLN-R16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlanGate {
+    /// No review is raised and the checker does not run.
+    Off,
+    /// Work continues once the round is delivered and adjudicated.
+    Advisory,
+    /// The review is queued and work continues until landing.
+    Deferred,
+    /// The work is held until every finding of the round is ruled.
+    Blocking,
+    /// The work is held until every finding of the round is ruled.
+    Adjudicated,
+}
+impl PlanGate {
+    /// Every value, in the order the design lists them.
+    pub const ALL: [PlanGate; 5] = [
+        PlanGate::Off,
+        PlanGate::Advisory,
+        PlanGate::Deferred,
+        PlanGate::Blocking,
+        PlanGate::Adjudicated,
+    ];
+
+    /// The name a settings file writes.
+    pub fn name(self) -> &'static str {
+        match self {
+            PlanGate::Off => "off",
+            PlanGate::Advisory => "advisory",
+            PlanGate::Deferred => "deferred",
+            PlanGate::Blocking => "blocking",
+            PlanGate::Adjudicated => "adjudicated",
+        }
+    }
+
+    /// The value with exactly this name, if any; case is not folded.
+    pub fn parse(name: &str) -> Option<PlanGate> {
+        PlanGate::ALL.into_iter().find(|value| value.name() == name)
+    }
+}
+
+/// What round 2 of a plan check or plan review reads, the value of
+/// `review.triggers.plan.recheck` (design 0005 section 9, ADR 0037).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecheckScope {
+    /// The whole revised plan.
+    Full,
+    /// Every addition, modification and deletion since the checked draft.
+    Diff,
+}
+impl RecheckScope {
+    /// Every value, in the order the design lists them.
+    pub const ALL: [RecheckScope; 2] = [RecheckScope::Full, RecheckScope::Diff];
+
+    /// The name a settings file writes.
+    pub fn name(self) -> &'static str {
+        match self {
+            RecheckScope::Full => "full",
+            RecheckScope::Diff => "diff",
+        }
+    }
+
+    /// The value with exactly this name, if any; case is not folded.
+    pub fn parse(name: &str) -> Option<RecheckScope> {
+        RecheckScope::ALL
+            .into_iter()
+            .find(|value| value.name() == name)
+    }
+}
+
 /// A host whose section a settings file may hold (design 0012 section 6).
 ///
 /// The type stays generic on purpose. A host is added here, with its adapter,
@@ -177,6 +249,10 @@ pub enum Kind {
     RemoteName,
     /// One of `ask`, `refuse` or `allow`.
     OnProtected,
+    /// One of the [`PlanGate`] names.
+    PlanGate,
+    /// One of the [`RecheckScope`] names.
+    RecheckScope,
     /// A list of branch names, possibly empty. Each is a non-blank string.
     BranchList,
     /// A list of reviewer names, possibly empty. Each is exactly one of
@@ -229,6 +305,10 @@ pub enum Default {
     Rung(Rung),
     /// An `on_protected` value.
     OnProtected(OnProtected),
+    /// A plan gate.
+    PlanGate(PlanGate),
+    /// A re-check scope.
+    RecheckScope(RecheckScope),
     /// A static list of branch names.
     BranchList(&'static [&'static str]),
     /// A static list of reviewer names.
@@ -239,6 +319,8 @@ impl Default {
         matches!(
             (self, kind),
             (Default::Absent, _)
+                | (Default::PlanGate(_), Kind::PlanGate)
+                | (Default::RecheckScope(_), Kind::RecheckScope)
                 | (Default::Bool(_), Kind::Bool)
                 | (Default::Rung(_), Kind::Rung)
                 | (Default::OnProtected(_), Kind::OnProtected)
@@ -294,8 +376,9 @@ impl Schema {
 
     /// The schema: each role's model and effort, `escalate_on_failure`,
     /// `git.remote`, the guard's settings under `git`, the two `updates`
-    /// settings, `review.reviewers`, `owner.name`, `planning.phase_capacity`
-    /// and `workflow.test_command`.
+    /// settings, `review.reviewers`, `owner.name`, `planning.phase_capacity`,
+    /// `workflow.test_command`, and the plan trigger's gate and re-check scope,
+    /// `review.triggers.plan.gate` and `review.triggers.plan.recheck`.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -401,6 +484,22 @@ impl Schema {
                 default: Default::Absent,
                 scope: Scope::Project,
                 owner: "0006",
+            });
+            // The other triggers' gates and re-check targets enter with their
+            // readers in Build 5.
+            entries.push(Entry {
+                name: "review.triggers.plan.gate".into(),
+                kind: Kind::PlanGate,
+                default: Default::PlanGate(PlanGate::Advisory),
+                scope: Scope::Both,
+                owner: "0008",
+            });
+            entries.push(Entry {
+                name: "review.triggers.plan.recheck".into(),
+                kind: Kind::RecheckScope,
+                default: Default::RecheckScope(RecheckScope::Full),
+                scope: Scope::Both,
+                owner: "0005",
             });
             Schema::new(entries)
         })

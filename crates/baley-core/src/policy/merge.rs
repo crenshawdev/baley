@@ -154,6 +154,8 @@ pub fn merge(
                 schema::Default::Bool(value) => Some(Value::Bool(value)),
                 schema::Default::Rung(rung) => Some(Value::Rung(rung)),
                 schema::Default::OnProtected(on) => Some(Value::OnProtected(on)),
+                schema::Default::PlanGate(gate) => Some(Value::PlanGate(gate)),
+                schema::Default::RecheckScope(scope) => Some(Value::RecheckScope(scope)),
                 schema::Default::BranchList(names) => Some(Value::BranchList(
                     names.iter().map(|name| (*name).to_owned()).collect(),
                 )),

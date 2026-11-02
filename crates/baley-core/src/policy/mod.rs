@@ -30,5 +30,6 @@ pub use route::{
     resolve_route,
 };
 pub use schema::{
-    Default, Entry, Host, Kind, OnProtected, REVIEWER_NAMES, Role, Rung, Schema, Scope,
+    Default, Entry, Host, Kind, OnProtected, PlanGate, REVIEWER_NAMES, RecheckScope, Role, Rung,
+    Schema, Scope,
 };

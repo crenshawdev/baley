@@ -639,3 +639,29 @@ fn a_reviewer_list_left_out_of_the_recorded_policy_is_caught() {
         json!({"layer": "default"})
     );
 }
+
+#[test]
+fn a_recorded_policy_carrying_the_gate_or_recheck_off_their_names_is_caught() {
+    let project = file(
+        PROJECT,
+        "[review.triggers.plan]\ngate = \"adjudicated\"\nrecheck = \"diff\"\n",
+        "p1",
+    );
+    let merged = effective_policy(Schema::standard(), None, None, Some(&project)).unwrap();
+    let payload = payload(&merged, 0);
+    assert_eq!(
+        payload["values"]["review.triggers.plan.gate"],
+        json!("adjudicated")
+    );
+    assert_eq!(
+        payload["values"]["review.triggers.plan.recheck"],
+        json!("diff")
+    );
+    for name in ["review.triggers.plan.gate", "review.triggers.plan.recheck"] {
+        assert_eq!(
+            payload["sources"][name]["layer"],
+            json!("project"),
+            "{name}"
+        );
+    }
+}

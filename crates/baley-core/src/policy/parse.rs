@@ -12,8 +12,8 @@ use toml::de::{DeString, DeTable, DeValue};
 use super::merge::FileRef;
 use super::project::ProjectProblem;
 use super::schema::{
-    Entry, Host, Kind, OnProtected, REVIEWER_NAMES, Rung, Schema, Scope, is_https_address,
-    is_person_name,
+    Entry, Host, Kind, OnProtected, PlanGate, REVIEWER_NAMES, RecheckScope, Rung, Schema, Scope,
+    is_https_address, is_person_name,
 };
 
 /// The code of every refusal that leaves the policy unbuilt.
@@ -52,6 +52,10 @@ pub enum Value {
     RemoteName(String),
     /// What to do with a commit on a protected branch.
     OnProtected(OnProtected),
+    /// What the plan trigger's findings do, and whether the checker runs.
+    PlanGate(PlanGate),
+    /// What round 2 of a plan check or plan review reads.
+    RecheckScope(RecheckScope),
     /// Branch names as written, in file order. May be empty.
     BranchList(Vec<String>),
     /// Reviewer names as written, in file order, repeats included. May be
@@ -229,6 +233,10 @@ pub enum Expected {
     RemoteName,
     /// One of the `git.on_protected` names.
     OnProtected,
+    /// One of the plan gate names.
+    PlanGate,
+    /// One of the re-check scope names.
+    RecheckScope,
     /// A list of branch names.
     BranchList,
     /// A list of reviewer names.
@@ -250,6 +258,8 @@ impl From<Kind> for Expected {
             Kind::ModelName => Expected::ModelName,
             Kind::RemoteName => Expected::RemoteName,
             Kind::OnProtected => Expected::OnProtected,
+            Kind::PlanGate => Expected::PlanGate,
+            Kind::RecheckScope => Expected::RecheckScope,
             Kind::BranchList => Expected::BranchList,
             Kind::ReviewerList => Expected::ReviewerList,
             Kind::HttpsAddress => Expected::HttpsAddress,
@@ -320,6 +330,8 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::ModelName => "a model name".to_owned(),
                 Expected::RemoteName => "a remote name".to_owned(),
                 Expected::OnProtected => format!("one of {}", on_protected_names()),
+                Expected::PlanGate => format!("one of {}", plan_gate_names()),
+                Expected::RecheckScope => format!("one of {}", recheck_scope_names()),
                 Expected::BranchList => "a list of branch names".to_owned(),
                 Expected::ReviewerList => format!("a list of {}", reviewer_names()),
                 Expected::HttpsAddress => "an https:// address".to_owned(),
@@ -351,6 +363,16 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                     f,
                     "is \"{written}\", which is not one of {}",
                     on_protected_names()
+                ),
+                Kind::PlanGate => write!(
+                    f,
+                    "is \"{written}\", which is not one of {}",
+                    plan_gate_names()
+                ),
+                Kind::RecheckScope => write!(
+                    f,
+                    "is \"{written}\", which is not one of {}",
+                    recheck_scope_names()
                 ),
                 Kind::BranchList => {
                     f.write_str("holds an empty branch name; remove it or write a name")
@@ -476,6 +498,19 @@ fn on_protected_names() -> String {
     let names: Vec<&str> = OnProtected::ALL
         .into_iter()
         .map(OnProtected::name)
+        .collect();
+    names.join(", ")
+}
+
+fn plan_gate_names() -> String {
+    let names: Vec<&str> = PlanGate::ALL.into_iter().map(PlanGate::name).collect();
+    names.join(", ")
+}
+
+fn recheck_scope_names() -> String {
+    let names: Vec<&str> = RecheckScope::ALL
+        .into_iter()
+        .map(RecheckScope::name)
         .collect();
     names.join(", ")
 }
@@ -620,6 +655,18 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
             let written = value.as_str().ok_or_else(wrong)?;
             OnProtected::parse(written)
                 .map(Value::OnProtected)
+                .ok_or_else(|| Mismatch::Grammar(written.to_owned(), None))
+        }
+        Kind::PlanGate => {
+            let written = value.as_str().ok_or_else(wrong)?;
+            PlanGate::parse(written)
+                .map(Value::PlanGate)
+                .ok_or_else(|| Mismatch::Grammar(written.to_owned(), None))
+        }
+        Kind::RecheckScope => {
+            let written = value.as_str().ok_or_else(wrong)?;
+            RecheckScope::parse(written)
+                .map(Value::RecheckScope)
                 .ok_or_else(|| Mismatch::Grammar(written.to_owned(), None))
         }
         Kind::BranchList => {

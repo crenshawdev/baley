@@ -77,7 +77,7 @@ fn child<'t>(table: &'t mut Table, key: &str) -> &'t mut Table {
 /// The TOML type each kind reads back: a boolean, an integer for a capacity,
 /// an array of strings for a branch or reviewer list, or a string for a rung
 /// name, a model name, a remote name, an `https://` address, a person's name,
-/// a command line and an `on_protected` name.
+/// a command line, an `on_protected` name, a plan gate and a re-check scope.
 fn toml_value(value: &Value) -> TomlValue {
     match value {
         Value::Bool(value) => TomlValue::Boolean(*value),
@@ -85,6 +85,8 @@ fn toml_value(value: &Value) -> TomlValue {
         Value::ModelName(name) => TomlValue::String(name.clone()),
         Value::RemoteName(name) => TomlValue::String(name.clone()),
         Value::OnProtected(on) => TomlValue::String(on.name().to_owned()),
+        Value::PlanGate(gate) => TomlValue::String(gate.name().to_owned()),
+        Value::RecheckScope(scope) => TomlValue::String(scope.name().to_owned()),
         Value::HttpsAddress(address) => TomlValue::String(address.clone()),
         Value::PersonName(name) => TomlValue::String(name.clone()),
         Value::Capacity(capacity) => TomlValue::Integer(i64::from(capacity.get())),
@@ -126,6 +128,8 @@ pub(super) fn value_text(value: &Value) -> String {
         Value::Capacity(capacity) => capacity.to_string(),
         Value::Rung(rung) => format!("\"{}\"", rung.name()),
         Value::OnProtected(on) => format!("\"{}\"", on.name()),
+        Value::PlanGate(gate) => format!("\"{}\"", gate.name()),
+        Value::RecheckScope(scope) => format!("\"{}\"", scope.name()),
         Value::BranchList(names) | Value::ReviewerList(names) => {
             let items: Vec<String> = names.iter().map(|name| quoted(name)).collect();
             format!("[{}]", items.join(", "))

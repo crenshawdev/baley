@@ -110,6 +110,8 @@ fn value_json(value: Option<&Value>) -> Json {
         Some(Value::ModelName(name)) => name.clone().into(),
         Some(Value::RemoteName(name)) => name.clone().into(),
         Some(Value::OnProtected(on)) => on.name().into(),
+        Some(Value::PlanGate(gate)) => gate.name().into(),
+        Some(Value::RecheckScope(scope)) => scope.name().into(),
         Some(Value::BranchList(names) | Value::ReviewerList(names)) => names.clone().into(),
         Some(Value::HttpsAddress(address)) => address.clone().into(),
         Some(Value::PersonName(name)) => name.clone().into(),

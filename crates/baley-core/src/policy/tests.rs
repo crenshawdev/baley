@@ -131,7 +131,7 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 23);
+    assert_eq!(schema.entries().len(), 25);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -178,6 +178,29 @@ fn standard_schema_holds_every_entry_with_its_kind_default_scope_and_owner() {
         assert_eq!(
             (entry.kind, entry.default, entry.scope, entry.owner),
             (kind, default, Scope::Project, "0010"),
+            "{name}"
+        );
+    }
+    for (name, kind, default, owner) in [
+        (
+            "review.triggers.plan.gate",
+            Kind::PlanGate,
+            Builtin::PlanGate(PlanGate::Advisory),
+            "0008",
+        ),
+        (
+            "review.triggers.plan.recheck",
+            Kind::RecheckScope,
+            Builtin::RecheckScope(RecheckScope::Full),
+            "0005",
+        ),
+    ] {
+        let entry = schema
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} is missing"));
+        assert_eq!(
+            (entry.kind, entry.default, entry.scope, entry.owner),
+            (kind, default, Scope::Both, owner),
             "{name}"
         );
     }
@@ -697,7 +720,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 23);
+        assert_eq!(policy.settings.len(), 25);
         assert!(
             policy
                 .settings
@@ -1459,7 +1482,7 @@ fn an_update_setting_missing_or_open_to_project_files_is_caught() {
         (source.kind, source.default, source.scope, source.owner),
         (Kind::HttpsAddress, Builtin::Absent, Scope::Global, "0012")
     );
-    assert_eq!(schema.entries().len(), 23);
+    assert_eq!(schema.entries().len(), 25);
 }
 
 #[test]
@@ -1622,7 +1645,7 @@ fn an_owner_name_entry_with_another_kind_default_scope_or_owner_is_caught() {
         (owner.kind, owner.default, owner.scope, owner.owner),
         (Kind::PersonName, Builtin::Absent, Scope::Global, "0012")
     );
-    assert_eq!(schema.entries().len(), 23);
+    assert_eq!(schema.entries().len(), 25);
 }
 
 #[test]
@@ -1743,4 +1766,98 @@ fn a_test_command_blank_multiline_trimmed_or_set_globally_is_caught() {
             "/c/config.toml:2:1: workflow.test_command is a project setting and was ignored in the global file"
         ]
     );
+}
+
+#[test]
+fn a_plan_gate_outside_its_five_values_or_folded_in_case_is_caught() {
+    let gate = |text: &str| {
+        standard(
+            None,
+            None,
+            Some(&format!("[review.triggers.plan]\n{text}\n")),
+        )
+    };
+    let blocking = gate("gate = \"blocking\"").unwrap();
+    assert_eq!(
+        value_of(&blocking, "review.triggers.plan.gate").value,
+        Some(Value::PlanGate(PlanGate::Blocking))
+    );
+    for line in ["gate = \"Blocking\"", "gate = \"on\""] {
+        let refusal = gate(line).expect_err(line);
+        assert_eq!(refusal.code(), "config-unavailable", "{line}");
+        assert!(
+            matches!(
+                refusal.fault,
+                Fault::OutsideGrammar {
+                    kind: Kind::PlanGate,
+                    line: 2,
+                    column: 8,
+                    ..
+                }
+            ),
+            "{line}: {refusal:?}"
+        );
+    }
+    assert_eq!(
+        gate("gate = \"on\"").unwrap_err().to_string(),
+        "config-unavailable: /r/baley.toml:2:8: review.triggers.plan.gate is \"on\", which is not one of off, advisory, deferred, blocking, adjudicated"
+    );
+    let boolean = gate("gate = true").expect_err("a boolean");
+    assert!(
+        matches!(
+            boolean.fault,
+            Fault::WrongType {
+                expected: Expected::PlanGate,
+                found: "boolean",
+                line: 2,
+                ..
+            }
+        ),
+        "{boolean:?}"
+    );
+    // Both scopes: the global file's gate applies.
+    let global = standard(None, Some("[review.triggers.plan]\ngate = \"off\"\n"), None).unwrap();
+    let effective = value_of(&global, "review.triggers.plan.gate");
+    assert_eq!(effective.value, Some(Value::PlanGate(PlanGate::Off)));
+    assert_eq!(effective.source.layer, Layer::Global);
+    let unset = standard(None, None, None).unwrap();
+    let effective = value_of(&unset, "review.triggers.plan.gate");
+    assert_eq!(effective.value, Some(Value::PlanGate(PlanGate::Advisory)));
+    assert_eq!(effective.source, default_source());
+}
+
+#[test]
+fn a_recheck_scope_outside_full_and_diff_or_defaulting_to_diff_is_caught() {
+    let recheck = |text: &str| {
+        standard(
+            None,
+            None,
+            Some(&format!("[review.triggers.plan]\n{text}\n")),
+        )
+    };
+    let diff = recheck("recheck = \"diff\"").unwrap();
+    assert_eq!(
+        value_of(&diff, "review.triggers.plan.recheck").value,
+        Some(Value::RecheckScope(RecheckScope::Diff))
+    );
+    let refusal = recheck("recheck = \"partial\"").expect_err("partial");
+    assert_eq!(refusal.code(), "config-unavailable");
+    assert!(
+        matches!(
+            refusal.fault,
+            Fault::OutsideGrammar {
+                kind: Kind::RecheckScope,
+                line: 2,
+                ..
+            }
+        ),
+        "{refusal:?}"
+    );
+    let unset = standard(None, None, None).unwrap();
+    let effective = value_of(&unset, "review.triggers.plan.recheck");
+    assert_eq!(
+        effective.value,
+        Some(Value::RecheckScope(RecheckScope::Full))
+    );
+    assert_eq!(effective.source, default_source());
 }

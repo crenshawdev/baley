@@ -8,7 +8,8 @@ use std::num::NonZeroU32;
 use super::{INVALID_VALUE, LIST_NOT_SETTABLE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
 use crate::policy::schema::{is_https_address, is_person_name};
 use crate::policy::{
-    AcceptedNames, FileLayer, Host, Kind, OnProtected, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
+    AcceptedNames, FileLayer, Host, Kind, OnProtected, PlanGate, RecheckScope, Rung, Schema, Scope,
+    UNKNOWN_MODEL, Value,
 };
 
 /// One pair of a set after its name and value are judged.
@@ -134,6 +135,18 @@ impl fmt::Display for SetRefusal {
                             .collect();
                         format!("one of {}", names.join(", "))
                     }
+                    Kind::PlanGate => {
+                        let names: Vec<&str> =
+                            PlanGate::ALL.into_iter().map(PlanGate::name).collect();
+                        format!("one of {}", names.join(", "))
+                    }
+                    Kind::RecheckScope => {
+                        let names: Vec<&str> = RecheckScope::ALL
+                            .into_iter()
+                            .map(RecheckScope::name)
+                            .collect();
+                        format!("one of {}", names.join(", "))
+                    }
                     Kind::BranchList => "a list of branch names".to_owned(),
                     Kind::ReviewerList => "a list of host, openai or deepseek".to_owned(),
                     Kind::HttpsAddress => {
@@ -203,6 +216,8 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         Kind::ModelName => (!text.is_empty()).then(|| Value::ModelName(text.to_owned())),
         Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
         Kind::OnProtected => OnProtected::parse(text).map(Value::OnProtected),
+        Kind::PlanGate => PlanGate::parse(text).map(Value::PlanGate),
+        Kind::RecheckScope => RecheckScope::parse(text).map(Value::RecheckScope),
         // A list is edited in `baley.toml`, so no command-line text is one.
         Kind::BranchList | Kind::ReviewerList => None,
         Kind::HttpsAddress => is_https_address(text).then(|| Value::HttpsAddress(text.to_owned())),

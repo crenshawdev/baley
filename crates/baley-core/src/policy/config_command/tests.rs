@@ -2055,3 +2055,47 @@ fn config_set_writing_a_capacity_as_a_string_or_taking_zero_is_caught() {
         "[workflow]\ntest_command = \"cargo test\"\n"
     );
 }
+
+#[test]
+fn config_set_writing_a_gate_its_read_refuses_or_taking_an_unknown_value_is_caught() {
+    let set = |name: &str, value: &str| {
+        judge_pairs(
+            Schema::standard(),
+            FileLayer::Project,
+            true,
+            None,
+            &[(name, value)],
+        )
+    };
+    let read_back = |typed: &[TypedPair], name: &str| {
+        let bytes = render_file(Schema::standard(), FileLayer::Project, None, typed).unwrap();
+        let file = SettingsFile {
+            path: "/r/baley.toml".into(),
+            bytes,
+            digest: "p1".into(),
+        };
+        let layer = parse_layer(&file, FileLayer::Project, Schema::standard()).unwrap();
+        layer
+            .values
+            .into_iter()
+            .filter(|written| written.name == name)
+            .map(|written| written.value)
+            .collect::<Vec<_>>()
+    };
+    let blocking = set("review.triggers.plan.gate", "blocking").unwrap();
+    assert_eq!(
+        read_back(&blocking, "review.triggers.plan.gate"),
+        [Value::PlanGate(crate::policy::PlanGate::Blocking)]
+    );
+    let refusal = set("review.triggers.plan.gate", "sometimes").expect_err("sometimes");
+    assert_eq!(refusal.code(), "invalid-value");
+    assert_eq!(
+        refusal.to_string(),
+        "invalid-value: review.triggers.plan.gate is \"sometimes\", which is not one of off, advisory, deferred, blocking, adjudicated"
+    );
+    let diff = set("review.triggers.plan.recheck", "diff").unwrap();
+    assert_eq!(
+        read_back(&diff, "review.triggers.plan.recheck"),
+        [Value::RecheckScope(crate::policy::RecheckScope::Diff)]
+    );
+}
