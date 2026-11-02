@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use super::parse::{
     Diagnostic, FileLayer, ParsedLayer, SettingsFile, Unavailable, Value, parse_layer,
 };
-use super::schema::{self, Host, Role, Rung, Schema};
+use super::schema::{self, Host, PlanGate, Role, Rung, Schema};
 
 /// Where a setting's value came from (design 0003 section 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +132,28 @@ impl EffectivePolicy {
                 source,
             } => (*escalate, source),
             _ => panic!("escalate_on_failure holds no boolean"),
+        }
+    }
+
+    /// The effective plan gate, and whether a settings file set it: true for
+    /// any file layer, false for the schema's default (D-14).
+    ///
+    /// The plan checker reads it: only an effective `off` skips the checker
+    /// (ADR 0051). Build 4 T11 extends it with the risk raise recorded before
+    /// the checker's order is issued, against the submission's digest, which
+    /// judges an explicit `advisory` apart from the default one.
+    ///
+    /// # Panics
+    ///
+    /// When the policy was merged over a schema without a plan gate for
+    /// `review.triggers.plan.gate`.
+    pub fn plan_gate(&self) -> (PlanGate, bool) {
+        match self.setting("review.triggers.plan.gate") {
+            Effective {
+                value: Some(Value::PlanGate(gate)),
+                source,
+            } => (*gate, source.layer != Layer::Default),
+            _ => panic!("review.triggers.plan.gate holds no plan gate"),
         }
     }
 }

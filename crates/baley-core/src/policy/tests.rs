@@ -1861,3 +1861,31 @@ fn a_recheck_scope_outside_full_and_diff_or_defaulting_to_diff_is_caught() {
     );
     assert_eq!(effective.source, default_source());
 }
+
+#[test]
+fn a_plan_gate_set_in_a_file_read_as_default_or_the_default_read_as_set_is_caught() {
+    let claude = Some(Host::ClaudeCode);
+    let none = standard(claude, None, None).unwrap();
+    assert_eq!(none.plan_gate(), (PlanGate::Advisory, false));
+    let top = standard(
+        claude,
+        None,
+        Some("[review.triggers.plan]\ngate = \"advisory\"\n"),
+    )
+    .unwrap();
+    assert_eq!(top.plan_gate(), (PlanGate::Advisory, true));
+    let global_host = standard(
+        claude,
+        Some("[host.claude-code.review.triggers.plan]\ngate = \"off\"\n"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(global_host.plan_gate(), (PlanGate::Off, true));
+    let project_host = standard(
+        claude,
+        None,
+        Some("[host.claude-code.review.triggers.plan]\ngate = \"blocking\"\n"),
+    )
+    .unwrap();
+    assert_eq!(project_host.plan_gate(), (PlanGate::Blocking, true));
+}
