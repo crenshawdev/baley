@@ -18,8 +18,8 @@
 use std::num::NonZeroU32;
 
 use baley_core::plan::{
-    PHASE_PLAN_VIEW, PLAN_KIND, PhaseNotActive, Plan, PlanDraft, PlanFacts, PlanRefusal, Replaces,
-    judge_plan, judge_submit_phase, phase_plan_key,
+    PHASE_PLAN_VIEW, PLAN_KIND, PLANNER_ORDER_PENDING, PhaseNotActive, Plan, PlanDraft, PlanFacts,
+    PlanRefusal, Replaces, judge_plan, judge_submit_phase, phase_plan_key,
 };
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, PlanGate, Role};
 use baley_core::questions::{Cause, Subject, round_of};
@@ -43,6 +43,7 @@ use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::checker::{
     self, Refused, checker_absences, checker_order_pending, pending_checker,
 };
+use crate::planning::order::{pending_planner, planner_absences};
 use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
@@ -74,6 +75,12 @@ pub struct Checked {
     documents: Vec<ObservedDocument>,
     /// What a recording relies on being absent.
     absences: Vec<Absence>,
+    /// The planner order the plan answers.
+    work_order: String,
+    /// The phase's pending planner order at the check, or none, which the
+    /// gated recording judges, since the check it issues must be able to
+    /// give its revision as the phase's only live planner order (D-07).
+    planner: Option<String>,
 }
 
 impl Checked {
@@ -170,6 +177,7 @@ pub(crate) fn checked<S: Views + ?Sized>(
     if let Some(pending) = pending_checker(store, project, phase).map_err(busy)? {
         return Err(checker_order_pending(phase, &pending, Refused::Submit));
     }
+    let planner = pending_planner(store, project, phase).map_err(busy)?;
     let read = facts::read(store, project, phase, capacity)?;
     judge_submit_phase(phase, &read.active)
         .map_err(|refusal| phase_not_active(&refusal, "plan", NOT_RECORDED))?;
@@ -202,6 +210,8 @@ pub(crate) fn checked<S: Views + ?Sized>(
         replaces,
         documents,
         absences: read.absences().to_vec(),
+        work_order: work_order.into(),
+        planner,
     })
 }
 
@@ -282,14 +292,25 @@ pub fn record<L: Ledger + ?Sized>(
 /// as checker order `id` (`checker::prepare`) with the draft's digest. It
 /// opens no set and gives no preview: both wait for the last check.
 ///
+/// A gated submit answering a planner order other than the phase's pending
+/// planner order at the check, an answered order resubmitted after a later
+/// one was issued, is refused `planner-order-pending` at slot `operation`
+/// naming that pending order, recording nothing: a blocker's revision must
+/// be the phase's only live planner order (D-07).
+///
 /// The decision observes the check's documents and the checker inputs'
 /// and declares the check's absences and that no checker order of the
 /// phase is pending, so a checker order issued since the check makes the
-/// call `ledger-busy` with nothing recorded. The receipt holds `status`,
-/// `digest`, `kind`, `phase`, `stories`, `size`, `phase_size`, `reaching`,
-/// `capacity`, `recorded_at` and `check`, the checker order's members as
-/// its issue gives them. A retry of the same request is answered from the
-/// record before any decision runs, so a replay passes no `checked`.
+/// call `ledger-busy` with nothing recorded. When no planner order of the
+/// phase was pending at the check it also declares that none is, so one
+/// issued since does the same; a pending one is the order answered, whose
+/// observed document moves if it is settled since.
+///
+/// The receipt holds `status`, `digest`, `kind`, `phase`, `stories`,
+/// `size`, `phase_size`, `reaching`, `capacity`, `recorded_at` and `check`,
+/// the checker order's members as its issue gives them. A retry of the same
+/// request is answered from the record before any decision runs, so a
+/// replay passes no `checked`.
 pub fn record_gated<S: Ledger + Views + Payloads>(
     store: &S,
     command: &Command,
@@ -301,6 +322,14 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
 ) -> Value {
     if policy.plan_gate().0 == PlanGate::Off {
         return answer(record(store, command, checked), store);
+    }
+    if let Some(checked) = checked
+        && let Some(pending) = checked
+            .planner
+            .as_deref()
+            .filter(|pending| *pending != checked.work_order)
+    {
+        return other_planner_pending(checked.plan.phase(), pending);
     }
     let prepared = match checked {
         Some(checked) => {
@@ -336,6 +365,9 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
         documents.extend_from_slice(prepared.documents());
         let mut absences = checked.absences.clone();
         absences.extend(checker_absences(checked.plan.phase()));
+        if checked.planner.is_none() {
+            absences.extend(planner_absences(checked.plan.phase()));
+        }
         Ok(Decision {
             kind: OutcomeKind::Done,
             answer: Value::Object(receipt),
@@ -349,6 +381,20 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
         })
     });
     answer(result, store)
+}
+
+/// The refusal of a gated submit answering a planner order of phase `phase`
+/// other than its pending planner order `pending`.
+fn other_planner_pending(phase: u32, pending: &str) -> Value {
+    Refusal::new(
+        PLANNER_ORDER_PENDING,
+        format!(
+            "phase {phase}'s planner work order {pending} is still pending and this plan answers an earlier one, so no check was issued and nothing was recorded, since a check's revision must be the phase's only live planner order. Submit the plan answering that order, or fail it with `work-order-fail`, then submit again"
+        ),
+    )
+    .slot("operation")
+    .details(json!({"work_order": pending}))
+    .value()
 }
 
 /// The fault of a decision run without the check's read.
@@ -1015,6 +1061,69 @@ pub(crate) mod tests {
         let answer = record_gated(
             &store,
             &submit_command(O, &checked, R3, T6),
+            Some(&checked),
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            C1,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
+    }
+
+    /// Store C with O answered by PL2 under POFF, as `request_id` at T5, so
+    /// S2 is open and no planner order of phase 1 is pending.
+    fn o_answered(store: &SqliteStore, request_id: &str) {
+        use crate::planning::checker::tests::C9;
+
+        let answered = gated_submitted(store, &pl2(), &poff(), C9, request_id, T5);
+        assert_eq!(answered["status"], "ok", "{answered}");
+    }
+
+    /// Issues O2, a second planner order of phase 1 for `[1]`, under
+    /// `request_id` at T6.
+    fn order_o2(store: &SqliteStore, request_id: &str) {
+        use crate::planning::order::tests::O2;
+
+        let (command, o2) = prepared(store, &[1], O2, request_id, T6);
+        let issued = issue(store, &command, &o2);
+        assert_eq!(issued["status"], "ok", "{issued}");
+    }
+
+    #[test]
+    fn a_gated_submit_issuing_a_check_beside_another_pending_planner_order_is_caught() {
+        use crate::planning::checker::tests::C1;
+        use crate::planning::order::tests::O2;
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        o_answered(&store, R2);
+        order_o2(&store, R3);
+
+        let before = head(&store);
+        let refusal = gated_submitted(&store, &pl3(), &p0(), C1, R4, T7);
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "planner-order-pending", "{refusal}");
+        assert_eq!(refusal["slot"], "operation", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": O2}));
+        assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_gated_submit_landing_beside_a_planner_order_issued_since_its_check_is_caught() {
+        use crate::planning::checker::tests::C1;
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        o_answered(&store, R2);
+        let checked = check(&store, &project(), &pl3(), O, None).expect("PL3 is accepted");
+        order_o2(&store, R3);
+
+        let before = head(&store);
+        let answer = record_gated(
+            &store,
+            &submit_command(O, &checked, R4, T7),
             Some(&checked),
             &p0(),
             Host::ClaudeCode,
