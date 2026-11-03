@@ -1,7 +1,7 @@
 //! The planner's served text, pinned in source: what the planner reads once
 //! it holds a planning or revision order, to turn one phase into a typed
 //! plan (design 0005 sections 6 and 10, PLN-R5, PLN-R9 to PLN-R13,
-//! PLN-R17 to PLN-R19, PLN-R23, PLN-R27). It is no help row, so it gets no
+//! PLN-R16 to PLN-R19, PLN-R23, PLN-R27). It is no help row, so it gets no
 //! skill stub: a worker reaches it only through the order that lists it.
 //! Its identity follows `bal-start-planner` and cannot be read as one of
 //! the `bal-planner-<rung>` agent stubs.
@@ -34,6 +34,12 @@
 //!   action of the task that writes it; the human-verify row an
 //!   `observation`. The per-task tests table becomes "name every other test
 //!   in the task action", its negative-control and deviation rules kept.
+//!   Cadence's `## REVISION COMPLETE` marker, each checker issue with what
+//!   changed to address it or a rebuttal for an issue judged wrong, becomes
+//!   the revised plan as the final message, with the reason for each
+//!   finding judged wrong in `notes`: the typed plan has no other member for
+//!   it, and an unknown member is refused `typed-content`. The `notes`
+//!   member says so.
 //! - One typed plan per order (D-20). Cadence's several plan files, its
 //!   Plan shape directive and its file-independence test become further
 //!   plans, each from its own order, submitted on its own and numbered by
@@ -71,8 +77,10 @@
 //! - Decisions go to the owner as typed questions (ADR 0030): missing
 //!   information, and extra work that looks necessary, become a question in
 //!   `questions` where Cadence returns them to the human in its marker.
-//!   Cadence's revision mode becomes the revision order, carrying the draft
-//!   and every answer and deferral on its set (D-20).
+//!   Cadence's revision mode also gives the revision order, carrying the
+//!   draft and every answer and deferral on its set (D-20), beside the
+//!   checker revision order that keeps Cadence's purpose, carrying the
+//!   draft and the checker's findings (D-18).
 //! - It says owner where Cadence says user, the glossary's term (ADR 0031).
 //! - Cadence's own tools are dropped (ADR 0048): the excerpt tools'
 //!   paragraph, the `skim.mjs` paragraph and the `perl` boundary read of the
@@ -83,7 +91,6 @@
 //!
 //! - Gaps mode and its plans from unresolved acceptance items: Build 5's
 //!   gap plans.
-//! - The revision of the checker's issues: Build 4 T10, the checker.
 //! - The recalled memory block and its citing: Build 8,
 //!   `retired("recall", 8)` in `crate::mcp::operations`.
 //!
@@ -115,18 +122,22 @@
 pub const IDENTITY: &str = "bal-phase-planner";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "2";
+pub const VERSION: &str = "3";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the
 /// code so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "2cfbbeb4b7f766a275204f5ac3bbbad9ff286e7d209bb4d7cb2ddbc3f90210f9";
+pub const HASH: &str = "0ef8d20da30354d4071b7fc21310fb3de46a556d0a262e7debcceb33e4d460b7";
 
 /// What the planner reads once it holds a planning or revision order.
 /// Ported from Cadence tag `v3.9.0`: `skills/cad-planner-contract/SKILL.md`
 /// whole, the `<planning_context>` and `<test_method>` blocks of the
 /// `spawn_planner` step of `cadence-core/workflows/plan.md`, and
 /// `cadence-core/templates/PLAN.md`, with design 0005 section 10's Planner
-/// row, its test derivation rules and its Default test style row.
+/// row, its test derivation rules and its Default test style row. The
+/// checker revision, `<role>`'s revision mode for the checker's issues and
+/// the `## REVISION COMPLETE` marker of `<returns>`, is ported from tag
+/// `v3.9.4`'s `skills/cad-planner-contract/SKILL.md`, whose wording of
+/// both passages is that of `v3.9.0`.
 pub const TEXT: &str = r#"Baley's planner turns one phase into a typed plan an executor can implement without interpretation, and returns it for the owner to answer its questions and approve.
 
 <role>
@@ -135,6 +146,7 @@ You are Baley's planner. You turn one phase into a typed plan - a plan an execut
 Orders (your work order says which):
 - **planning** - plan the phase from its goal plus the committed stories' approved truths and the owner's recorded answers.
 - **revision** - your order carries a draft plan and every answer and deferral the owner recorded on its question set. Apply them with minimal edits to the draft; do not replan from scratch. An answer that rejects a recommended answer changes the plan to the owner's answer, and a deferral leaves the plan on that question's recommended answer.
+- **checker revision** - your order carries a draft plan and the checker's findings, each with its severity, location, claim and fix. Fix the checker's findings with minimal edits to the draft; do not replan from scratch. For a finding you judge wrong, give your reason in the plan's `notes`.
 </role>
 
 <input>
@@ -145,6 +157,7 @@ You already hold your work order: you read it with `baley_query` `document`, and
 - when the owner set a capacity, the phase's capacity in tasks and the size the phase's approved plans already hold.
 - the evidence items of the phase's approved plans, each with its plan's number: a truth one of them already checks has its one check.
 - in a revision order, the draft plan and its question set with every answer and deferral the owner recorded.
+- in a checker revision order, the draft plan and the checker's findings, each with its severity, location, claim and fix.
 
 Read before planning the actual source files your tasks will touch.
 </input>
@@ -214,7 +227,7 @@ The plan is one JSON object with exactly these members and no other:
 - `files` and `directories` - the lease. Every entry is a plain relative path: not empty, not starting with `/`, holding no `\`, and with no empty, `.` or `..` part, so no trailing separator and no `//`, on a directory as on a file. No entry appears twice across both lists. The lease holds at most 256 declarations, files and directories counted together. `files` is empty only when `directories` holds an entry. A task file is inside the lease when it equals a declared file or lies under a declared directory.
 - `goal` - the phase goal, outcome-shaped.
 - `context` - the locked decisions that bind this plan, the existing files and patterns to follow, anything explicitly out of scope.
-- `notes` - human-required setup (accounts, env vars you cannot obtain) and assumptions surfaced during planning; empty when there are none.
+- `notes` - human-required setup (accounts, env vars you cannot obtain) and assumptions surfaced during planning, and in a checker revision your reason for each finding you judge wrong; empty when there are none.
 - `tasks` - in order, each `{"id":"<an id>","title":"<an action-oriented name>","files":["<a path>"],"action":"<directive prose>","verify":["<a command>"]}`, as the task anatomy says. `verify` holds one or more commands, none blank.
 - `evidence_map` - the evidence items, as the evidence map says.
 - `questions` - the decisions the plan needs from the owner, `[]` when there are none.
@@ -285,6 +298,8 @@ As your final message, return exactly one JSON plan and nothing else.
 When the phase cannot be delivered well for context cost or a dependency, or a plan would take the phase over its capacity, return no plan. Return instead a proposed split for the owner, beginning with the words `Proposed split:`, naming which of those reasons applies and the stories or phases you propose, each with its goal. A split counts only when the owner approves it.
 
 A revision order's plan returns the same way, its `questions` only the decisions not yet made.
+
+A checker revision order's plan returns the same way: the revised plan as your final message, with your reason for each finding you judge wrong in its `notes`.
 </returns>
 
 <guardrails>

@@ -210,6 +210,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "1",
         "2e4b8aa8ed3095c9df0833f966d95c4e6b0b828840042472175d53cbcc5f27cc",
     ),
+    (
+        "bal-phase-planner",
+        "3",
+        "0ef8d20da30354d4071b7fc21310fb3de46a556d0a262e7debcceb33e4d460b7",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -943,7 +948,7 @@ fn a_planner_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "2");
+    assert_eq!(text.version, "3");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -978,7 +983,38 @@ fn a_planner_input_list_missing_the_approved_plans_items_is_caught() {
         list.contains("the phase's number, goal and detail"),
         "{list}"
     );
-    assert_eq!(text.version, "2");
+    assert_eq!(text.version, "3");
+}
+
+/// The part of `body` between `open` and `close`.
+fn section<'a>(body: &'a str, open: &str, close: &str) -> &'a str {
+    let start = body
+        .find(open)
+        .unwrap_or_else(|| panic!("the text has {open}"));
+    let end = body
+        .find(close)
+        .unwrap_or_else(|| panic!("the text has {close}"));
+    &body[start..end]
+}
+
+#[test]
+fn a_planner_text_without_the_checker_revision_or_its_findings_input_is_caught() {
+    let Lookup::Served { text, .. } = lookup("bal-phase-planner") else {
+        panic!("bal-phase-planner is served");
+    };
+    assert_eq!(text.version, "3");
+    // D-18: the checker revision order fixes the findings with minimal
+    // edits, and a finding judged wrong gets its reason in `notes`.
+    let role = section(text.body, "<role>", "</role>");
+    for needle in ["the checker's findings", "minimal edits", "notes"] {
+        assert!(role.contains(needle), "the role lacks {needle}: {role}");
+    }
+    let input = section(text.body, "<input>", "</input>");
+    assert!(
+        input.contains("the checker's findings"),
+        "the input list lacks the checker's findings: {input}"
+    );
+    assert!(!text.body.contains("REVISION COMPLETE"));
 }
 
 #[test]
