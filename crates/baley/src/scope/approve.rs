@@ -13,10 +13,10 @@
 //! A `phase-edit` draft whose phase's latest planning continuation names
 //! its digest is a commitment (owner ruling 9, D-01): its first step also
 //! rechecks the continuation's selection with the readiness `phase-plan`
-//! judges and refuses beside a pending planner order of the phase, and its
-//! second step, given the route, issues the continuation's planner order in
-//! the same transaction as the stories. Every other draft is approved as
-//! before, with no order.
+//! judges and refuses beside a pending planner or checker order of the
+//! phase, and its second step, given the route, issues the continuation's
+//! planner order in the same transaction as the stories. Every other draft
+//! is approved as before, with no order.
 
 use std::collections::BTreeMap;
 
@@ -46,6 +46,7 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, TEXT_PURGED, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::mcp::scope::change_kind;
+use crate::planning::checker::{Refused, checker_absences, checker_order_pending, pending_checker};
 use crate::planning::order::{self, PreparedOrder, pending_planner, planner_absences};
 use crate::planning::phase_plan::{latest_continuation, read_readiness, readiness_refused};
 use crate::scope::read::{
@@ -111,7 +112,8 @@ struct Commitment {
     /// The `phase_plan` document, then the readiness documents, each at the
     /// sequence that produced it.
     documents: Vec<ObservedDocument>,
-    /// The active-index absence when no phase was active.
+    /// The active-index absence when no phase was active, then the absence
+    /// of a pending checker order of the phase.
     absences: Vec<Absence>,
 }
 
@@ -337,9 +339,13 @@ fn continuation_naming<S: Views + ?Sized>(
 
 /// Rechecks a commitment's selection over facts read now, through the
 /// gathering `phase-plan` judges (D-01): a readiness refusal, then a pending
-/// planner order of the phase, each at slot `digest`, so an approval beside
+/// planner order of the phase, then a pending checker order of the phase
+/// (`checker-order-pending`), each at slot `digest`, so an approval beside
 /// a pending order says why rather than failing `ledger-busy` at its second
-/// step on every retry (D-11).
+/// step on every retry (D-11). A checker order is refused because the
+/// order this approval issues would sit beside the revision a blocker
+/// needs (D-03, D-07), and the decision declares that none is pending, so
+/// one issued since makes the call `ledger-busy`.
 fn recheck<S: Views + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -355,14 +361,23 @@ fn recheck<S: Views + ?Sized>(
         };
         return Err(readiness_refused(&refusal, "digest", NOT_DONE));
     }
+    if let Some(pending) = pending_checker(store, project, named.phase).map_err(busy)? {
+        return Err(checker_order_pending(
+            named.phase,
+            &pending,
+            Refused::Approval,
+        ));
+    }
     let mut documents = vec![named.document];
     documents.extend(readiness.documents().iter().cloned());
+    let mut absences = readiness.absences();
+    absences.extend(checker_absences(named.phase));
     Ok(Commitment {
         phase: named.phase,
         stories: named.stories,
         work_order: named.work_order,
         documents,
-        absences: readiness.absences(),
+        absences,
     })
 }
 
@@ -2128,6 +2143,43 @@ mod tests {
             assert_refused(&refusal, "planner-order-pending");
             assert_eq!(refusal["details"], json!({"work_order": O2}));
             assert_eq!(head(&store), before);
+        }
+
+        #[test]
+        fn a_commitment_approved_beside_a_pending_checker_order_is_caught() {
+            use crate::planning::checker::tests::{C9, issued_alone};
+
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let c9 = issued_alone(&store, C9, R2, T5);
+            assert_eq!(c9["status"], "ok", "{c9}");
+
+            let before = head(&store);
+            let refusal = judge(&store, &project(), e1).expect_err("C9 is pending");
+            assert_refused(&refusal, "checker-order-pending");
+            assert_eq!(refusal["details"], json!({"work_order": C9}));
+            let reason = refusal["reason"].as_str().unwrap();
+            assert!(
+                reason.ends_with("then run `baley scope approve` again"),
+                "{reason}"
+            );
+            assert_eq!(head(&store), before);
+        }
+
+        #[test]
+        fn a_commitment_landing_beside_a_checker_order_issued_since_its_first_step_is_caught() {
+            use crate::planning::checker::tests::{C9, issued_alone};
+
+            let (_dir, store) = store_c();
+            let e1 = edit(&store, &[1, 4], O, R1, T4);
+            let judged = judge(&store, &project(), e1).unwrap();
+            let c9 = issued_alone(&store, C9, R2, T5);
+            assert_eq!(c9["status"], "ok", "{c9}");
+
+            let before = head(&store);
+            assert_busy(&second_step(&store, &judged, R3, T6));
+            assert_eq!(head(&store), before);
+            assert_eq!(phase_1_stories(&store), [1]);
         }
 
         #[test]

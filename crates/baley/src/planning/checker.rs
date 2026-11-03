@@ -227,10 +227,14 @@ pub enum Refused {
     Submit,
     /// A `phase-plan`.
     PhasePlan,
+    /// The owner's approval of a phase edit whose continuation issues a
+    /// planner order.
+    Approval,
 }
 
 /// The refusal for phase `phase`'s pending checker order `pending`, worded
-/// for the `refused` operation (D-03).
+/// for the `refused` operation, at slot `digest` for an approval and
+/// `operation` otherwise (D-03).
 pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Value {
     let (not_done, cause, again) = match refused {
         Refused::Submit => (
@@ -243,6 +247,11 @@ pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Val
             "a check's revision must be the phase's only live planner order",
             "run `phase-plan` again",
         ),
+        Refused::Approval => (
+            "nothing was approved",
+            "a check's revision must be the phase's only live planner order",
+            "run `baley scope approve` again",
+        ),
     };
     Refusal::new(
         CHECKER_ORDER_PENDING,
@@ -250,7 +259,10 @@ pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Val
             "phase {phase}'s checker work order {pending} is still checking a plan draft, so {not_done}, since {cause}. Wait for that order's return, or fail it with `work-order-fail`, then {again}"
         ),
     )
-    .slot("operation")
+    .slot(match refused {
+        Refused::Approval => "digest",
+        Refused::Submit | Refused::PhasePlan => "operation",
+    })
     .details(json!({"work_order": pending}))
     .value()
 }
