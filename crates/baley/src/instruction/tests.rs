@@ -235,6 +235,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "5",
         "3f8c6ecadd03e992902d4268e520b8f12c974785afb896592e1d8b30ab0f7b98",
     ),
+    (
+        "bal-phase-checker",
+        "6",
+        "4a9f57bc22de3ae51a801e4ce2a1d572de20536b83acd555c4fcb80cb0dda17a",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1063,7 +1068,7 @@ fn a_checker_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "5");
+    assert_eq!(text.version, "6");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -1200,8 +1205,32 @@ fn a_checker_text_dropping_an_open_first_round_blocker_from_round_two_is_caught(
     let input = section(served_text("bal-phase-checker"), "<input>", "</input>");
     // PLN-R16: both scopes check every first-round blocker is closed, and a
     // finding has no member marking one open, so it must come back.
-    let rule = "Every first-round blocker the revision has not closed is returned again as a `blocker` finding, beside any new defects.";
+    let rule = "still stands: return it again as a `blocker` finding, beside any new defects.";
     assert!(input.contains(rule), "the round-2 rule lacks: {rule}");
+}
+
+#[test]
+fn a_checker_text_returning_a_first_round_blocker_the_planner_showed_wrong_is_caught() {
+    let input = section(served_text("bal-phase-checker"), "<input>", "</input>");
+    // The planner gives its reason for a finding it judges wrong in `notes`,
+    // so round 2 reads it and returns only a blocker that still stands.
+    let mut wrong: Vec<&str> = [
+        "read the planner's reason for it in the revised plan's `notes`",
+        "the revision has not closed and that reason has not shown wrong still stands",
+        "Drop every other first-round blocker.",
+    ]
+    .into_iter()
+    .filter(|rule| !input.contains(rule))
+    .collect();
+    wrong.extend(
+        ["Every first-round blocker the revision has not closed is returned again"]
+            .into_iter()
+            .filter(|rule| input.contains(rule)),
+    );
+    assert!(
+        wrong.is_empty(),
+        "the round-2 rule misjudges a rejected blocker: {wrong:?}"
+    );
 }
 
 #[test]

@@ -86,10 +86,15 @@
 //! - Section 10's Checker row rule, "For round 2, follow the work order's
 //!   scope, check every first-round blocker and report new defects in the
 //!   selected material", with what each scope selects (PLN-R16).
-//! - Every first-round blocker the revision has not closed returned again
-//!   as a `blocker` finding, beside any new defects: PLN-R16 has both scopes
-//!   check whether every first-round blocker is closed, and a finding has no
-//!   member that marks one open, so only a returned finding shows it.
+//! - The planner's reason in the revised plan's `notes` read for each
+//!   first-round blocker, and a first-round blocker that still stands,
+//!   closed neither by the revision nor shown wrong by that reason, returned
+//!   again as a `blocker` finding beside any new defects, every other one
+//!   dropped: PLN-R16 has both scopes check whether every first-round
+//!   blocker is closed, a finding has no member that marks one open, so only
+//!   a returned finding shows it, and the planner gives its reason for a
+//!   finding it judges wrong in `notes`
+//!   (`crates/baley/src/instruction/planner.rs`, `TEXT`).
 //! - Each finding holding exactly `severity`, `location`, `claim` and `fix`,
 //!   each non-blank, and no other, and the refusal `finding-shape` of a list
 //!   holding any other entry, design 0008's code for the same condition
@@ -104,11 +109,11 @@
 pub const IDENTITY: &str = "bal-phase-checker";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "5";
+pub const VERSION: &str = "6";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the
 /// code so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "3f8c6ecadd03e992902d4268e520b8f12c974785afb896592e1d8b30ab0f7b98";
+pub const HASH: &str = "4a9f57bc22de3ae51a801e4ce2a1d572de20536b83acd555c4fcb80cb0dda17a";
 
 /// What the plan checker reads once it holds a check order, in either round.
 /// Ported from Cadence tag `v3.9.4`:
@@ -127,7 +132,7 @@ You already hold your work order: you read it with `baley_query` `document`, and
 - A round-1 order holds `check`, the check's binding: round 1, the phase, the `full` scope, the plan's digest, the versions of the truths it reads the plan against and the version of the policy that chose the scope; `plan`, the plan as submitted; and `truths`, the stories it serves, each with its approved truths: each truth's id, its version and its sentence.
 - A round-2 order holds `original`, the plan the first check read; `plan`, the revised plan; `truths`, the same truths; `blockers`, every first-round blocker as returned; and, under the `diff` scope only, `delta`, the changes since the checked plan: every addition, modification and deletion, with its before and after values.
 
-Round 1 reads the whole plan. A round-2 order holding `delta` is the `diff` scope, and one without it is `full`. For round 2, follow the work order's scope, check every first-round blocker and report new defects in the selected material: under `full` the whole revised plan, under `diff` the changes. Every first-round blocker the revision has not closed is returned again as a `blocker` finding, beside any new defects.
+Round 1 reads the whole plan. A round-2 order holding `delta` is the `diff` scope, and one without it is `full`. For round 2, follow the work order's scope, check every first-round blocker and report new defects in the selected material: under `full` the whole revised plan, under `diff` the changes. For each first-round blocker, read the planner's reason for it in the revised plan's `notes`, where it gave one. A first-round blocker the revision has not closed and that reason has not shown wrong still stands: return it again as a `blocker` finding, beside any new defects. Drop every other first-round blocker.
 </input>
 
 <rung>
