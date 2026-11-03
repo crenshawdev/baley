@@ -3,9 +3,11 @@
 //! design 0012).
 //!
 //! An order is `pending` when issued, `failed` once `work_order.failed`
-//! names it and `answered` once a return names it: a submission naming it
-//! or, for an analyzer's questions order, the story question set naming
-//! it. The accepted result is the approved draft among an order's `drafts`:
+//! names it and `answered` once a return names it: a submission naming it,
+//! for an analyzer's questions order the story question set naming it, and
+//! for a checker order the `plan.checked` naming it, so the `live` index no
+//! longer finds a checker order whose result is recorded.
+//! The accepted result is the approved draft among an order's `drafts`:
 //! an approval names only a digest, so no projector can reach the order
 //! from it, and the binary reads it from the start approval when it reads
 //! the order.
@@ -17,6 +19,7 @@ use baley_store::{
 use serde_json::{Map, Value, json};
 
 use super::event::{WORK_ORDER_FAILED, WORK_ORDER_ISSUED};
+use crate::plan::PLAN_CHECKED;
 use crate::questions::QUESTIONS_OPENED;
 use crate::scope::SCOPE_SUBMITTED;
 
@@ -65,7 +68,7 @@ pub fn work_order_spec() -> ViewSpec {
     };
     ViewSpec {
         name: WORK_ORDER_VIEW.into(),
-        version: 2,
+        version: 3,
         key: vec![FieldSpec {
             name: ID_FIELD.into(),
             kind: FieldKind::Text,
@@ -93,7 +96,8 @@ pub fn work_order_key(id: &str) -> DocKey {
 }
 
 /// Keeps the `work_order` view current from `work_order.issued`,
-/// `work_order.failed`, `scope.submitted` and `questions.opened`.
+/// `work_order.failed`, `scope.submitted`, `questions.opened` and
+/// `plan.checked`.
 ///
 /// Issued: a new document holding the payload's members plus `state`
 /// `pending`, the event's `seq` and `recorded_at`, `failure` null, `drafts`
@@ -115,6 +119,12 @@ pub fn work_order_key(id: &str) -> DocKey {
 /// return, so its id is added to `drafts` once and a pending order becomes
 /// `answered`, as a submission does; a failed order stays failed. A set
 /// naming no order held, and a plan draft's set, change nothing.
+///
+/// Checked: the checker order a result names in its `work_order` gets the
+/// checked draft's digest added to its `drafts` once and becomes
+/// `answered` when pending, as a submission does; a failed order stays
+/// failed, so a late result never revives it. A result naming an order not
+/// held changes nothing.
 pub struct WorkOrderProjector {
     spec: ViewSpec,
 }
@@ -145,6 +155,7 @@ impl Projector for WorkOrderProjector {
             WORK_ORDER_FAILED,
             SCOPE_SUBMITTED,
             QUESTIONS_OPENED,
+            PLAN_CHECKED,
         ]
     }
 
@@ -161,6 +172,7 @@ impl Projector for WorkOrderProjector {
                 .into_iter()
                 .collect(),
             QUESTIONS_OPENED => story_set_order(event).into_iter().collect(),
+            PLAN_CHECKED => checked_order(event).into_iter().collect(),
             _ => caller_order(event).into_iter().collect(),
         };
         ids.dedup();
@@ -265,6 +277,18 @@ impl Projector for WorkOrderProjector {
                 };
                 answer(id, document, set).map_err(refuse)
             }
+            PLAN_CHECKED => {
+                // A result naming an order not held is its own record.
+                let Some((id, document)) =
+                    checked_order(event).and_then(|id| held(id).map(|document| (id, document)))
+                else {
+                    return Ok(Vec::new());
+                };
+                let Some(digest) = event.payload.get("plan_digest").and_then(Value::as_str) else {
+                    return Err(refuse("plan_digest is not text".into()));
+                };
+                answer(id, document, digest).map_err(refuse)
+            }
             _ => {
                 // A submission naming no order, or one not held, is its own record.
                 let Some((id, document)) =
@@ -311,6 +335,11 @@ fn story_set_order(event: &Event) -> Option<&str> {
     payload.get("work_order").and_then(Value::as_str)
 }
 
+/// The checker order a `plan.checked` answers.
+fn checked_order(event: &Event) -> Option<&str> {
+    event.payload.get("work_order").and_then(Value::as_str)
+}
+
 /// The work order a submission's caller carries, in either form.
 fn caller_order(event: &Event) -> Option<&str> {
     match event.caller.as_ref()? {
@@ -336,6 +365,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::plan::CheckResult;
+    use crate::policy::RecheckScope;
 
     const I0: &str = "5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
     const I1: &str = "6e2d3c4b-5f60-4b7c-9d8e-0f1a2b3c4d5e";
@@ -489,7 +520,7 @@ mod tests {
     fn a_work_order_view_declared_without_its_live_index_is_caught() {
         let spec = work_order_spec();
         assert_eq!(spec.name, "work_order");
-        assert_eq!(spec.version, 2);
+        assert_eq!(spec.version, 3);
         assert_eq!(spec.page_bound, 100);
         assert_eq!(
             spec.key,
@@ -524,7 +555,8 @@ mod tests {
                 "work_order.issued",
                 "work_order.failed",
                 "scope.submitted",
-                "questions.opened"
+                "questions.opened",
+                "plan.checked"
             ]
         );
     }
@@ -681,5 +713,52 @@ mod tests {
         fold(&mut view, &story_set(7, I0, I1)).unwrap();
         assert_eq!(doc(&view, I1)["state"], "failed");
         assert_eq!(doc(&view, I1)["drafts"], json!([I0]));
+    }
+
+    /// O1 as the checker's order `id` for phase 1.
+    fn checker(id: &str) -> Value {
+        let mut payload = o1();
+        payload["id"] = json!(id);
+        payload["request"] = json!(id);
+        payload["role"] = json!("checker");
+        payload["subject"] = json!("phase/1");
+        payload
+    }
+
+    /// A round-1 `plan.checked` of phase 1 answering `order` for the draft
+    /// whose digest is `byte` repeated.
+    fn checked(seq: u64, order: &str, byte: u8) -> Event {
+        let result = CheckResult {
+            phase: 1,
+            plan_digest: Hash([byte; 32]),
+            findings: &[],
+            work_order: order,
+            scope: RecheckScope::Full,
+            previous_check: None,
+            truth_versions: &[],
+            material: &[],
+            scope_policy_version: 3,
+            revision: None,
+        };
+        event(seq, "phase/1", "plan.checked", result.payload())
+    }
+
+    #[test]
+    fn a_checker_order_left_pending_after_its_result_or_a_failed_one_revived_is_caught() {
+        let mut view = View::new();
+        fold(&mut view, &issued(5, checker(I1))).unwrap();
+        fold(&mut view, &checked(6, I1, 0x5c)).unwrap();
+        assert_eq!(doc(&view, I1)["state"], "answered");
+        assert_eq!(doc(&view, I1)["drafts"], json!([digest(0x5c)]));
+
+        fold(&mut view, &issued(7, checker(I2))).unwrap();
+        fold(&mut view, &failed(8, I2, "no return")).unwrap();
+        fold(&mut view, &checked(9, I2, 0x6d)).unwrap();
+        assert_eq!(doc(&view, I2)["state"], "failed");
+        assert_eq!(doc(&view, I2)["drafts"], json!([digest(0x6d)]));
+
+        let before = view.clone();
+        fold(&mut view, &checked(10, I3, 0x5c)).unwrap();
+        assert_eq!(view, before);
     }
 }
