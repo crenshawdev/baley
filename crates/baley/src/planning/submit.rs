@@ -44,6 +44,7 @@ use crate::planning::checker::{
     self, Refused, checker_absences, checker_order_pending, pending_checker,
 };
 use crate::planning::order::{pending_planner, planner_absences};
+use crate::planning::recheck::Recheck;
 use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
@@ -81,6 +82,14 @@ pub struct Checked {
     /// gated recording judges, since the check it issues must be able to
     /// give its revision as the phase's only live planner order (D-07).
     planner: Option<String>,
+    /// The first order of the answered order's chain, its `request`, which
+    /// the lineage step compares (D-02).
+    pub(super) chain: Option<String>,
+    /// The phase's `phase_plan` document as the facts read it, whose
+    /// `checks` the lineage step reads; it is among `documents`.
+    pub(super) phase_plan: Option<Value>,
+    /// The round-2 binding the lineage step attached, or none for round 1.
+    pub(super) recheck: Option<Recheck>,
 }
 
 impl Checked {
@@ -212,6 +221,13 @@ pub(crate) fn checked<S: Views + ?Sized>(
         absences: read.absences().to_vec(),
         work_order: work_order.into(),
         planner,
+        chain: order
+            .body
+            .get("request")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        phase_plan: read.phase_plan,
+        recheck: None,
     })
 }
 

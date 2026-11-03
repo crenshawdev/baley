@@ -9,7 +9,9 @@
 //! views, and records it as the phase's one draft, with its question set or,
 //! when the plan gate is not `off`, with the plan checker's round-1 order;
 //! the checker's return, whose round-1 result buys a blocker one planner
-//! revision and otherwise opens the draft's set and previews it;
+//! revision and otherwise opens the draft's set and previews it; the
+//! re-check at submit, which finds a revision's first check and binds its
+//! round 2;
 //! `plan replace`, recorded as a submit is and approved into a new number;
 //! and the owner's approval of that draft, in two steps, at the terminal
 //! through `baley plan approve`; and a phase's approved plans read back with
@@ -45,6 +47,10 @@ pub mod phase_plan;
 
 /// A phase's approved plans with their evidence maps, read back.
 pub mod read;
+
+/// The re-check at submit: a submit's place in its check lineage and the
+/// round-2 binding it carries.
+pub mod recheck;
 
 /// `plan replace`: the check of a replacement, recorded as a submit is.
 pub mod replace;
@@ -205,9 +211,15 @@ pub(crate) mod fixtures {
     /// P0 with a project file `/r/baley.toml` setting the plan gate to
     /// `gate`.
     fn gated(gate: &str) -> EffectivePolicy {
+        plan_trigger("gate", gate)
+    }
+
+    /// P0 with a project file `/r/baley.toml` setting the plan trigger's
+    /// `name` to `value`.
+    fn plan_trigger(name: &str, value: &str) -> EffectivePolicy {
         let file = crate::settings::file(
             Path::new("/r/baley.toml"),
-            format!("[review.triggers.plan]\ngate = \"{gate}\"\n").into_bytes(),
+            format!("[review.triggers.plan]\n{name} = \"{value}\"\n").into_bytes(),
         );
         effective_policy(
             Schema::standard(),
@@ -277,6 +289,13 @@ pub(crate) mod fixtures {
         let mut plan = pl1();
         plan["goal"] = json!("Record again");
         plan["tasks"][0]["id"] = json!("k2");
+        plan
+    }
+
+    /// PL2r: PL2 with goal `Record every step, revised`.
+    pub(crate) fn pl2r() -> Value {
+        let mut plan = pl2();
+        plan["goal"] = json!("Record every step, revised");
         plan
     }
 
