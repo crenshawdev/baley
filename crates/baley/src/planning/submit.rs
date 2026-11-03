@@ -9,7 +9,9 @@
 //! the plan gate `off` the same transaction opens the new draft's set and
 //! the receipt previews the draft; under any other gate it issues round 1
 //! of the plan checker's order instead (PLN-R16, D-01, D-14), and the set
-//! and the preview wait for the last check.
+//! and the preview wait for the last check. A submit under a check
+//! lineage's revision order, once the lineage step (`recheck::judge`) bound
+//! it, records that lineage's round 2 the same way (D-09).
 //!
 //! Build 4 T11's risk raise at plan submit still sits between the check and
 //! the recording, before the checker's order is issued (design 0005 Figure
@@ -21,7 +23,7 @@ use baley_core::plan::{
     PHASE_PLAN_VIEW, PLAN_KIND, PLANNER_ORDER_PENDING, PhaseNotActive, Plan, PlanDraft, PlanFacts,
     PlanRefusal, Replaces, TruthVersion, judge_plan, judge_submit_phase, phase_plan_key,
 };
-use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, PlanGate, Role};
+use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, PlanGate, RecheckScope, Role};
 use baley_core::questions::{Cause, Subject, round_of};
 use baley_core::scope::{
     PROJECT_STREAM, SCOPE_SUBMITTED, SCOPE_SUBMITTED_VERSION, submitted_payload,
@@ -41,10 +43,11 @@ use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::checker::{
-    self, Refused, checker_absences, checker_order_pending, pending_checker,
+    self, PreparedCheck, PreparedRecheck, Refused, checker_absences, checker_order_pending,
+    pending_checker,
 };
 use crate::planning::order::{pending_planner, planner_absences};
-use crate::planning::recheck::Recheck;
+use crate::planning::recheck::{self, Recheck};
 use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
@@ -327,14 +330,27 @@ pub fn record<L: Ledger + ?Sized>(
 /// as checker order `id` (`checker::prepare`) with the draft's digest. It
 /// opens no set and gives no preview: both wait for the last check.
 ///
+/// A `checked` carrying the round-2 binding the lineage step attached
+/// (`recheck::judge`) records round 2 instead, in the same transaction
+/// after the draft (D-09): the scope `review.triggers.plan.recheck` selects
+/// under `policy`, whose version, the command's `policy_version`, is the
+/// scope policy version; the delta of the original and the revision under
+/// `diff` and the round-1 blockers stored as `record` payloads;
+/// `plan.check_issued` binding them with the first check, both digests and
+/// round 1's truth versions; and checker order `id`
+/// (`checker::prepare_recheck`) whose inputs are exactly that material. The
+/// binding is recorded before the receipt returns.
+///
 /// A gated submit answering a planner order other than the phase's pending
 /// planner order at the check, an answered order resubmitted after a later
 /// one was issued, is refused `planner-order-pending` at slot `operation`
 /// naming that pending order, recording nothing: a blocker's revision must
 /// be the phase's only live planner order (D-07).
 ///
-/// The decision observes the check's documents and the checker inputs'
-/// and declares the check's absences and that no checker order of the
+/// The decision observes the check's documents, which include the order's
+/// and the `phase_plan` document the lineage step read, and round 1's
+/// checker inputs', and declares the check's absences and that no checker
+/// order of the
 /// phase is pending, so a checker order issued since the check makes the
 /// call `ledger-busy` with nothing recorded. When no planner order of the
 /// phase was pending at the check it also declares that none is, so one
@@ -367,22 +383,10 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
         return other_planner_pending(checked.plan.phase(), pending);
     }
     let prepared = match checked {
-        Some(checked) => {
-            let draft = checked.draft();
-            match checker::prepare(
-                store,
-                command,
-                &checked.plan,
-                &draft,
-                policy,
-                host,
-                names,
-                id,
-            ) {
-                Ok(prepared) => Some(prepared),
-                Err(answer) => return answer,
-            }
-        }
+        Some(checked) => match prepare_round(store, command, checked, policy, host, names, id) {
+            Ok(prepared) => Some(prepared),
+            Err(answer) => return answer,
+        },
         None => None,
     };
     let at = command.recorded_at.as_str();
@@ -392,12 +396,24 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
         };
         let draft = record_draft(tx, checked, at)?;
         let mut receipt = draft_receipt(checked, &draft, at);
-        receipt.insert(
-            "check".into(),
-            Value::Object(prepared.issue_within(tx, at)?),
-        );
         let mut documents = checked.documents.clone();
-        documents.extend_from_slice(prepared.documents());
+        let members = match (prepared, checked.recheck.as_ref()) {
+            (Round::One(order), _) => {
+                documents.extend_from_slice(order.documents());
+                order.issue_within(tx, at)?
+            }
+            (Round::Two { order, scope }, Some(recheck)) => recheck.record_within(
+                tx,
+                checked.plan.phase(),
+                &draft,
+                *scope,
+                command.policy_version,
+                order,
+                at,
+            )?,
+            (Round::Two { .. }, None) => return Err(unread()),
+        };
+        receipt.insert("check".into(), Value::Object(members));
         let mut absences = checked.absences.clone();
         absences.extend(checker_absences(checked.plan.phase()));
         if checked.planner.is_none() {
@@ -416,6 +432,53 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
         })
     });
     answer(result, store)
+}
+
+/// The checker round a gated recording issues, prepared outside its
+/// transaction.
+enum Round {
+    /// Round 1, whose inputs are read and bound now.
+    One(PreparedCheck),
+    /// Round 2, under the scope the command's policy selects, its material
+    /// stored in the recording's transaction.
+    Two {
+        order: PreparedRecheck,
+        scope: RecheckScope,
+    },
+}
+
+/// The round `checked` gets as order `id` under `command` and `policy`:
+/// round 2 when the lineage step attached a binding, otherwise round 1 of
+/// the draft's check. A fault is the answer to give.
+fn prepare_round<S: Views + ?Sized>(
+    store: &S,
+    command: &Command,
+    checked: &Checked,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Result<Round, Value> {
+    if checked.recheck.is_some() {
+        let phase = checked.plan.phase();
+        let order = checker::prepare_recheck(command, phase, policy, host, names, id)?;
+        return Ok(Round::Two {
+            order,
+            scope: recheck::scope(policy),
+        });
+    }
+    let draft = checked.draft();
+    checker::prepare(
+        store,
+        command,
+        &checked.plan,
+        &draft,
+        policy,
+        host,
+        names,
+        id,
+    )
+    .map(Round::One)
 }
 
 /// The refusal of a gated submit answering a planner order of phase `phase`

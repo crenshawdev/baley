@@ -208,6 +208,11 @@ pub(crate) mod fixtures {
         gated("adjudicated")
     }
 
+    /// PD: P0 with a project file setting the re-check scope `diff`.
+    pub(crate) fn pd() -> EffectivePolicy {
+        plan_trigger("recheck", "diff")
+    }
+
     /// P0 with a project file `/r/baley.toml` setting the plan gate to
     /// `gate`.
     fn gated(gate: &str) -> EffectivePolicy {
@@ -296,6 +301,13 @@ pub(crate) mod fixtures {
     pub(crate) fn pl2r() -> Value {
         let mut plan = pl2();
         plan["goal"] = json!("Record every step, revised");
+        plan
+    }
+
+    /// PL2v: PL2 with E2 naming its truth at version 2.
+    pub(crate) fn pl2v() -> Value {
+        let mut plan = pl2();
+        plan["evidence_map"][1]["truth_version"] = json!(2);
         plan
     }
 

@@ -7,31 +7,39 @@
 //!
 //! The step records nothing. It takes the check's result and gives it back,
 //! with the round-2 binding attached for a re-check, so the gated recording
-//! records round 2 from what the step found.
+//! records round 2 from what the step found: in one transaction with the
+//! revised draft, `plan.check_issued` binding the first check, both
+//! digests, round 1's truth versions, the scope the command's own policy
+//! selects with that policy's version, and the material, then the round-2
+//! checker order whose inputs are exactly that material (D-09).
 
 use std::io::Read;
 
 use baley_core::plan::{
-    CheckRefusal, CheckRound, Lineage, PLAN_CHECKED, PreviousCheck, TruthVersion,
-    judge_check_round, judge_recheck_truths, phase_stream, read_plan_draft,
+    CheckIssue, CheckRefusal, CheckRound, Lineage, PLAN_CHECK_ISSUED, PLAN_CHECK_ISSUED_VERSION,
+    PLAN_CHECKED, PlanDraft, PreviousCheck, RecordedPlan, TruthVersion, judge_check_round,
+    judge_findings, judge_recheck_truths, phase_stream, plan_delta, read_plan_draft,
 };
-use baley_core::policy::{EffectivePolicy, PlanGate};
-use baley_core::work_order::MATERIAL_UNAVAILABLE;
+use baley_core::policy::{EffectivePolicy, PlanGate, RecheckScope, Value as Setting};
+use baley_core::work_order::{MATERIAL_UNAVAILABLE, OrderInput};
 use baley_store::{
-    Hash, HistoryFilter, Ledger, PageRequest, PayloadBody, PayloadRef, PayloadStatus, Payloads,
-    ProjectId, StoreError, request_digest,
+    Hash, HistoryFilter, Ledger, NewEvent, PageRequest, PayloadBody, PayloadRef, PayloadStatus,
+    Payloads, ProjectId, RetentionClass, StoreError, StreamName, Transaction, canonical_json,
+    request_digest,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::planning::checker::{PLAN_INPUT, TRUTHS_INPUT};
+use crate::planning::checker::{
+    BLOCKERS_INPUT, DELTA_INPUT, ORIGINAL_INPUT, PLAN_INPUT, PreparedRecheck, TRUTHS_INPUT,
+};
 use crate::planning::submit::Checked;
 use crate::scope::submit::NOT_RECORDED_BUSY;
 
-/// The material name of round 1's draft, as round 2 binds it.
-const ORIGINAL: &str = "original";
+/// The setting the re-check scope is read from.
+const SCOPE_SETTING: &str = "review.triggers.plan.recheck";
 
 /// The round-2 binding a submit's check carries once the lineage step
 /// finds the submit is a re-check.
@@ -39,10 +47,114 @@ const ORIGINAL: &str = "original";
 pub struct Recheck {
     /// The lineage's planner revision order, the head of the submit's chain.
     revision: String,
-    /// The lineage's round-1 result.
+    /// The lineage's round-1 result, whose draft is the original.
     first: PreviousCheck,
+    /// The reference of the original draft's body as round 1 held it.
+    original: PayloadRef,
+    /// The original draft's body read back.
+    original_plan: RecordedPlan,
+    /// The reference of round 1's truths snapshot.
+    truths: PayloadRef,
     /// The truths round 1 was bound to, which round 2 binds unchanged.
     truth_versions: Vec<TruthVersion>,
+    /// Every round-1 blocker as the checker returned it.
+    blockers: Vec<Value>,
+}
+
+impl Recheck {
+    /// Records round 2 of phase `phase`'s check inside `tx` at `at`, after
+    /// `draft`, the revision, was recorded in it: the revision's body, the
+    /// delta under `diff` and the blockers as `record` payloads, then
+    /// `plan.check_issued` on `phase/<n>` binding the first check, both
+    /// digests, round 1's truth versions, `scope`, `scope_policy_version`
+    /// and the material, then `order` issued with that material as its
+    /// inputs. The material is, in order, `original`, `plan`, `truths`,
+    /// `delta` only under `diff`, and `blockers`, each body canonical JSON.
+    /// Gives the order's receipt members.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_within(
+        &self,
+        tx: &mut dyn Transaction,
+        phase: u32,
+        draft: &PlanDraft,
+        scope: RecheckScope,
+        scope_policy_version: u64,
+        order: &PreparedRecheck,
+        at: &str,
+    ) -> Result<Map<String, Value>, StoreError> {
+        let input = |name: &str, body: PayloadRef| OrderInput {
+            name: name.into(),
+            body,
+        };
+        let mut material = vec![
+            input(ORIGINAL_INPUT, self.original.clone()),
+            input(
+                PLAN_INPUT,
+                tx.put_payload(draft.body(), RetentionClass::Record)?,
+            ),
+            input(TRUTHS_INPUT, self.truths.clone()),
+        ];
+        if scope == RecheckScope::Diff {
+            let revision = serde_json::from_slice(draft.body())
+                .ok()
+                .as_ref()
+                .and_then(read_plan_draft)
+                .ok_or_else(|| unrecordable("the revised draft"))?;
+            let delta = canonical(&Value::Array(plan_delta(&self.original_plan, &revision)))?;
+            material.push(input(
+                DELTA_INPUT,
+                tx.put_payload(&delta, RetentionClass::Record)?,
+            ));
+        }
+        let blockers = canonical(&Value::Array(self.blockers.clone()))?;
+        material.push(input(
+            BLOCKERS_INPUT,
+            tx.put_payload(&blockers, RetentionClass::Record)?,
+        ));
+        let issue = CheckIssue {
+            phase,
+            work_order: order.id(),
+            previous_check: self.first,
+            original_plan_digest: self.first.plan_digest,
+            plan_digest: draft.digest(),
+            truth_versions: &self.truth_versions,
+            scope,
+            scope_policy_version,
+            material: &material,
+        };
+        tx.append(NewEvent {
+            stream: StreamName(phase_stream(phase)),
+            type_name: PLAN_CHECK_ISSUED.into(),
+            type_version: PLAN_CHECK_ISSUED_VERSION,
+            git: None,
+            payload: issue.payload(),
+            attachments: material.iter().map(|input| input.body.clone()).collect(),
+        })?;
+        order.issue_within(tx, at, &material)
+    }
+}
+
+/// The re-check scope `policy` selects, `review.triggers.plan.recheck`,
+/// `full` when it holds none.
+pub fn scope(policy: &EffectivePolicy) -> RecheckScope {
+    match policy
+        .settings
+        .get(SCOPE_SETTING)
+        .and_then(|effective| effective.value.as_ref())
+    {
+        Some(Setting::RecheckScope(scope)) => *scope,
+        _ => RecheckScope::Full,
+    }
+}
+
+/// `value` as canonical JSON, the form every material body takes.
+fn canonical(value: &Value) -> Result<Vec<u8>, StoreError> {
+    canonical_json(value).map_err(|_| unrecordable("a re-check's material"))
+}
+
+/// The fault of round-2 material that has no canonical form.
+fn unrecordable(what: &str) -> StoreError {
+    StoreError::Unavailable(format!("{what} cannot be recorded as canonical JSON"))
 }
 
 /// One lineage `phase_plan` holds.
@@ -112,16 +224,20 @@ pub fn judge<S: Ledger + Payloads + ?Sized>(
         .ok_or_else(|| unreadable("the phase's check lineage cannot be read"))?;
     let round_one = round_one(store, project, checked.plan.phase(), first)?;
     let unavailable = |input: &str| material_unavailable(input, revision);
-    if !original_held(store, &round_one.plan, first.plan_digest)? {
-        return Err(unavailable(ORIGINAL));
-    }
+    let Some(original_plan) = original_held(store, &round_one.plan, first.plan_digest)? else {
+        return Err(unavailable(ORIGINAL_INPUT));
+    };
     if !held_whole(store, &round_one.truths)? {
         return Err(unavailable(TRUTHS_INPUT));
     }
     let recheck = Recheck {
         revision: revision.to_owned(),
         first,
+        original: round_one.plan,
+        original_plan,
+        truths: round_one.truths,
         truth_versions: round_one.truth_versions,
+        blockers: round_one.blockers,
     };
     judge_recheck_truths(&recheck.truth_versions, &checked.truths)
         .map_err(|refusal| truths_changed(&refusal, revision))?;
@@ -160,6 +276,8 @@ struct RoundOne {
     truths: PayloadRef,
     /// The truths round 1 was bound to.
     truth_versions: Vec<TruthVersion>,
+    /// Round 1's blockers as returned.
+    blockers: Vec<Value>,
 }
 
 /// The round-1 `plan.checked` at `first`'s sequence on phase `phase`'s
@@ -219,11 +337,24 @@ fn round_one<L: Ledger + ?Sized>(
                 })
                 .collect::<Option<Vec<_>>>()
         });
-    match (material(PLAN_INPUT), material(TRUTHS_INPUT), truth_versions) {
-        (Some(plan), Some(truths), Some(truth_versions)) => Ok(RoundOne {
+    // Recorded findings were judged at the return, so they judge again.
+    let blockers = event
+        .payload
+        .get("findings")
+        .and_then(Value::as_array)
+        .and_then(|findings| judge_findings(findings.clone()).ok())
+        .map(|findings| findings.blockers().into_iter().cloned().collect());
+    match (
+        material(PLAN_INPUT),
+        material(TRUTHS_INPUT),
+        truth_versions,
+        blockers,
+    ) {
+        (Some(plan), Some(truths), Some(truth_versions), Some(blockers)) => Ok(RoundOne {
             plan,
             truths,
             truth_versions,
+            blockers,
         }),
         _ => Err(unreadable("the lineage's first check cannot be read")),
     }
@@ -238,35 +369,39 @@ fn held_whole<P: Payloads + ?Sized>(store: &P, reference: &PayloadRef) -> Result
     })
 }
 
-/// Whether round 1's draft body `reference` is held whole and reads back as
-/// a plan draft at `digest`.
+/// Round 1's draft body `reference` read back as a plan draft, or none when
+/// it is not held whole, does not read back as one, or is at a digest other
+/// than `digest`.
 fn original_held<P: Payloads + ?Sized>(
     store: &P,
     reference: &PayloadRef,
     digest: Hash,
-) -> Result<bool, Value> {
+) -> Result<Option<RecordedPlan>, Value> {
     if !held_whole(store, reference)? {
-        return Ok(false);
+        return Ok(None);
     }
     let mut reader = match store.open(&reference.hash).map_err(busy)? {
         PayloadBody::Present(reader) => reader,
-        PayloadBody::Gone(_) => return Ok(false),
+        PayloadBody::Gone(_) => return Ok(None),
     };
     let mut bytes = Vec::new();
     if reader.read_to_end(&mut bytes).is_err() {
-        return Ok(false);
+        return Ok(None);
     }
     let Ok(body) = serde_json::from_slice::<Value>(&bytes) else {
-        return Ok(false);
+        return Ok(None);
     };
-    Ok(request_digest(&body).is_ok_and(|read| read == digest) && read_plan_draft(&body).is_some())
+    if !request_digest(&body).is_ok_and(|read| read == digest) {
+        return Ok(None);
+    }
+    Ok(read_plan_draft(&body))
 }
 
 /// The refusal for a re-check of the lineage of revision order `revision`
 /// whose retained `input` is gone.
 fn material_unavailable(input: &str, revision: &str) -> Value {
     let what = match input {
-        ORIGINAL => "the draft round 1 checked",
+        ORIGINAL_INPUT => "the draft round 1 checked",
         _ => "the truths round 1 was bound to",
     };
     Refusal::new(
@@ -518,5 +653,216 @@ mod tests {
 
         let round_two = binding(&store, &pl2r(), V, &p0()).expect("round 2");
         assert_eq!(round_two.truth_versions, tv());
+    }
+
+    /// C2, the round-2 checker order.
+    const C2: &str = "c2c2c2c2-2a2b-4c2d-8e2f-303132333435";
+    /// C3 and C4, the round-1 checker orders of fresh lineages.
+    const C3: &str = "c3c3c3c3-3a3b-4c3d-9e3f-404142434445";
+    const C4: &str = "c4c4c4c4-4a4b-4c4d-8e4f-505152535455";
+    /// O3 and O4, fresh planner orders of phase 1.
+    const O3: &str = "3f4e5d6c-7b8a-4990-8a1b-2c3d4e5f6071";
+    const O4: &str = "4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d";
+
+    /// `plan` answering `order` through the check, the lineage step under
+    /// `policy` and the gated recording under the same policy for Claude
+    /// Code with N0, its checker order as `id`, under a command at policy
+    /// version `version` whose caller carries the order and its
+    /// instructions, under `request_id` at `at`. Gives the answer.
+    #[allow(clippy::too_many_arguments)]
+    fn through(
+        store: &SqliteStore,
+        plan: &Value,
+        order: &str,
+        policy: &EffectivePolicy,
+        id: &str,
+        request_id: &str,
+        at: &str,
+        version: u64,
+    ) -> Value {
+        let checked = match judged(store, plan, order, policy) {
+            Ok(checked) => checked,
+            Err(refusal) => return refusal,
+        };
+        let mut command = command("plan.submit", request_id, 8, at);
+        command.policy_version = version;
+        let on = caller()
+            .with_work_order(order)
+            .unwrap()
+            .with_instructions(checked.evidence.clone())
+            .unwrap();
+        command.caller = Some(baley_store::Caller::Server(on));
+        crate::planning::submit::record_gated(
+            store,
+            &command,
+            Some(&checked),
+            policy,
+            baley_core::policy::Host::ClaudeCode,
+            &n0(),
+            id,
+        )
+    }
+
+    /// The issue of order `id`.
+    fn issue_of(store: &SqliteStore, id: &str) -> baley_store::Event {
+        crate::refine::order::tests::issued(store)
+            .into_iter()
+            .find(|event| event.payload["id"] == id)
+            .expect("the order is issued")
+    }
+
+    #[test]
+    fn a_changed_truth_rechecked_a_third_round_bought_or_the_lineage_left_stuck_is_caught() {
+        use crate::planning::phase_plan::tests::planned;
+        use crate::refine::order::tests::{input_body, input_names};
+        use crate::refine::submit::tests::{t1, t2};
+
+        // Truths: t2 changed since round 1.
+        let (_dir, store, _, _) = lineage_v(vec![fb()]);
+        let mut t2_again = versioned(t2());
+        t2_again["outcome"] = json!("the same round, whatever the order");
+        t2_again["version"] = json!(2);
+        append(
+            &store,
+            R4,
+            T7,
+            vec![refined(
+                1,
+                "1b1b1b1b-1b1b-4b1b-8b1b-1b1b1b1b1b1b",
+                vec![versioned(t1()), t2_again],
+            )],
+        );
+        let before = head(&store);
+        let refusal = judged(&store, &pl2v(), V, &p0()).expect_err("the re-check is refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "recheck-truths-changed", "{refusal}");
+        assert_eq!(refusal["slot"], "plan", "{refusal}");
+        assert_eq!(
+            refusal["details"],
+            json!({"truths": [{"story": 1, "truth": "t2", "bound": 1, "current": 2}]})
+        );
+        assert_eq!(head(&store), before);
+        assert_eq!(state(&store, V), "pending");
+        crate::mcp::work_order::tests::fail_order(&store, &project(), V, R5, T8);
+        let o3 = planned(&store, &[1], R6, T8, O3);
+        assert_eq!(o3["work_order"], O3, "{o3}");
+        let fresh = through(&store, &pl2v(), O3, &p0(), C3, R7, T9, 5);
+        assert_eq!(fresh["check"]["work_order"], C3, "{fresh}");
+        let check = input_body(&store, &issue_of(&store, C3), "check");
+        assert_eq!(check["round"], 1, "{check}");
+        assert_eq!(check["scope"], "full", "{check}");
+        assert_eq!(
+            check["truth_versions"],
+            json!([{"story": 1, "truth": "t1", "version": 1},
+                {"story": 1, "truth": "t2", "version": 2}])
+        );
+
+        // Third round: round 2 issued and failed, then V resubmitted.
+        let (_dir, store, _, _) = lineage_v(vec![fb()]);
+        let round_two = through(&store, &pl2r(), V, &p0(), C2, R4, T7, 5);
+        assert_eq!(round_two["check"]["work_order"], C2, "{round_two}");
+        assert_eq!(
+            input_names(&issue_of(&store, C2)),
+            ["original", "plan", "truths", "blockers"]
+        );
+        fail_by_hand(&store, C2, R5);
+        let before = head(&store);
+        let refusal = judged(&store, &pl2r(), V, &p0()).expect_err("a third round is refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "third-round", "{refusal}");
+        assert_eq!(refusal["slot"], "work_order", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": V}));
+        assert_eq!(head(&store), before);
+        let answered = crate::mcp::work_order::fail_check(&store, &project(), V)
+            .expect_err("V is answered by its round-2 draft");
+        assert_eq!(answered["code"], "work-order-not-pending", "{answered}");
+        assert_eq!(answered["details"], json!({"state": "answered"}));
+        let o4 = planned(&store, &[1], R6, T8, O4);
+        assert_eq!(o4["work_order"], O4, "{o4}");
+        let fresh = through(&store, &pl3(), O4, &p0(), C4, R7, T9, 5);
+        assert_eq!(fresh["check"]["work_order"], C4, "{fresh}");
+        let check = input_body(&store, &issue_of(&store, C4), "check");
+        assert_eq!(check["round"], 1, "{check}");
+    }
+
+    /// The names of `material`, a list of `{name, body}`, in order.
+    fn names(material: &Value) -> Vec<&str> {
+        material
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|input| input["name"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_round_two_binding_recorded_after_its_order_or_reselected_from_current_files_is_caught() {
+        use crate::planning::check_return::tests::c1_material;
+        use crate::refine::order::tests::input_body;
+
+        // Under PD at policy version 6: the `diff` scope.
+        let (_dir, store, x2, k) = lineage_v(vec![fb(), fw()]);
+        let receipt = through(&store, &pl2r(), V, &pd(), C2, R4, T7, 6);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["check"]["work_order"], C2, "{receipt}");
+        let x2r = receipt["digest"].clone();
+
+        let events = history(&store);
+        // The store's own `command.completed` closes every transaction.
+        let mine: Vec<_> = events
+            .iter()
+            .filter(|e| e.request_id.0 == R4 && e.type_name != "command.completed")
+            .collect();
+        let types: Vec<&str> = mine.iter().map(|e| e.type_name.as_str()).collect();
+        assert_eq!(
+            types,
+            ["scope.submitted", "plan.check_issued", "work_order.issued"]
+        );
+        let (draft, issue, order) = (mine[0], mine[1], mine[2]);
+        assert_eq!(draft.payload["digest"], x2r);
+        assert_eq!(issue.stream, "phase/1");
+        let mut binding = issue.payload.clone();
+        let material = binding.as_object_mut().unwrap().remove("material").unwrap();
+        assert_eq!(
+            binding,
+            json!({"phase": 1, "work_order": C2, "round": 2,
+                "previous_check": {"seq": k, "plan_digest": x2.to_hex()},
+                "original_plan_digest": x2.to_hex(), "plan_digest": x2r,
+                "truth_versions": [{"story": 1, "truth": "t1", "version": 1},
+                    {"story": 1, "truth": "t2", "version": 1}],
+                "scope": "diff", "scope_policy_version": 6})
+        );
+        assert_eq!(
+            names(&material),
+            ["original", "plan", "truths", "delta", "blockers"]
+        );
+        let c1 = c1_material(&store);
+        assert_eq!(material[0]["body"], c1[0].body.to_value());
+        assert_eq!(material[1]["body"], draft.payload["body"]);
+        assert_eq!(material[2]["body"], c1[1].body.to_value());
+        assert_eq!(order.payload["id"], C2);
+        assert_eq!(order.payload["inputs"], material);
+        assert_eq!(
+            input_body(&store, order, "delta"),
+            json!([{"change": "modified", "member": "goal", "before": "Record every step",
+                "after": "Record every step, revised"}])
+        );
+        assert_eq!(input_body(&store, order, "blockers"), json!([fb()]));
+
+        // Under P0: the `full` scope, no delta.
+        let (_dir, store, _, _) = lineage_v(vec![fb(), fw()]);
+        let receipt = through(&store, &pl2r(), V, &p0(), C2, R4, T7, 5);
+        assert_eq!(receipt["check"]["work_order"], C2, "{receipt}");
+        let events = history(&store);
+        let issue = of_type(&events, "plan.check_issued")[0];
+        assert_eq!(issue.payload["scope"], "full");
+        assert_eq!(
+            names(&issue.payload["material"]),
+            ["original", "plan", "truths", "blockers"]
+        );
+        assert_eq!(
+            issue_of(&store, C2).payload["inputs"],
+            issue.payload["material"]
+        );
     }
 }

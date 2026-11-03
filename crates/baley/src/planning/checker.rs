@@ -1,14 +1,17 @@
 //! The plan checker's work order (design 0005 PLN-R16, sections 4 and 6,
-//! D-01, D-03, D-16): round 1 of a submitted plan's check, prepared outside
-//! any transaction and issued on the phase's stream, `phase/<n>`, with
-//! subject `phase/<n>`, inside the transaction that records the draft it
-//! checks.
+//! D-01, D-03, D-09, D-16): each round of a submitted plan's check,
+//! prepared outside any transaction and issued on the phase's stream,
+//! `phase/<n>`, with subject `phase/<n>`, inside the transaction that
+//! records the draft it checks.
 //!
 //! The order runs the `checker` role at attempt 1 of a new chain and lists
-//! `bal-phase-checker`. Its inputs bind what the check judges: `check`, the
-//! round's binding, which the result copies; `plan`, the draft's own
-//! recorded body; and `truths`, the plan's stories with the truths it was
-//! judged under. A phase has one live checker order: an issue declares that
+//! `bal-phase-checker`. Round 1's inputs bind what the check judges:
+//! `check`, the round's binding, which the result copies; `plan`, the
+//! draft's own recorded body; and `truths`, the plan's stories with the
+//! truths it was judged under. Round 2's inputs are exactly the material
+//! `plan.check_issued` binds, held as recorded: `original`, `plan`,
+//! `truths`, `delta` only under the `diff` scope, and `blockers`. A phase
+//! has one live checker order: an issue declares that
 //! no checker order of the phase is pending, so a second one recorded since
 //! the caller looked makes the call `ledger-busy` with nothing recorded.
 
@@ -16,7 +19,9 @@ use std::num::NonZeroU32;
 
 use baley_core::plan::{CHECKER_ORDER_PENDING, Plan, PlanDraft};
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, RecheckScope, Role};
-use baley_core::work_order::{PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_VIEW, phase_subject};
+use baley_core::work_order::{
+    OrderInput, PENDING, WORK_ORDER_LIVE_INDEX, WORK_ORDER_VIEW, phase_subject,
+};
 use baley_store::{
     Absence, Command, IndexQuery, InstructionEvidence, KeyValue, ObservedDocument, PageRequest,
     ProjectId, StoreError, Transaction, Views,
@@ -37,6 +42,13 @@ pub const CHECK_INPUT: &str = "check";
 pub const PLAN_INPUT: &str = "plan";
 /// The input holding the plan's stories with their truths.
 pub const TRUTHS_INPUT: &str = "truths";
+/// Round 2's input holding the draft round 1 checked.
+pub const ORIGINAL_INPUT: &str = "original";
+/// Round 2's input holding the delta of the original and the revision,
+/// only under the `diff` scope.
+pub const DELTA_INPUT: &str = "delta";
+/// Round 2's input holding every round-1 blocker as returned.
+pub const BLOCKERS_INPUT: &str = "blockers";
 
 /// A round-1 checker order prepared outside any transaction: everything it
 /// is issued with.
@@ -124,16 +136,7 @@ pub fn prepare<S: Views + ?Sized>(
     names: &AcceptedNames,
     id: &str,
 ) -> Result<PreparedCheck, Value> {
-    let instructions = vec![crate::instruction::evidence(IDENTITY)?];
-    let route = compose(
-        policy,
-        command.policy_version,
-        host,
-        Role::Checker,
-        NonZeroU32::MIN,
-        names,
-    )
-    .map_err(|refusal| Refusal::new(refusal.code(), refusal.to_string()).value())?;
+    let (route, instructions) = route_and_evidence(command, policy, host, names)?;
     let StoriesRead {
         entries, documents, ..
     } = read_stories(store, &command.project, plan.stories())?;
@@ -158,6 +161,99 @@ pub fn prepare<S: Views + ?Sized>(
         ],
         documents,
     })
+}
+
+/// A round-2 checker order prepared outside any transaction: everything it
+/// is issued with but its material, which the recording stores in the same
+/// transaction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedRecheck {
+    /// The order's id, also its request.
+    id: String,
+    /// The phase of the plan it checks.
+    phase: u32,
+    /// The route it runs under.
+    route: IssuedRoute,
+    /// The evidence of the checker's text.
+    instructions: Vec<InstructionEvidence>,
+}
+
+impl PreparedRecheck {
+    /// The order's id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Issues the order inside `tx` at `recorded_at` with `material` as its
+    /// inputs, each held as it is and never read again (D-09). The caller
+    /// declares [`checker_absences`] in its own decision. The answer is the
+    /// receipt's members other than `status`.
+    pub fn issue_within(
+        &self,
+        tx: &mut dyn Transaction,
+        recorded_at: &str,
+        material: &[OrderInput],
+    ) -> Result<Map<String, Value>, StoreError> {
+        let inputs: Vec<Input<'_>> = material.iter().map(Input::Held).collect();
+        let subject = phase_subject(self.phase);
+        let issue = Issue {
+            id: &self.id,
+            request: &self.id,
+            parent: None,
+            subject: &subject,
+            route: &self.route,
+            instructions: &self.instructions,
+            inputs: &inputs,
+            absences: &[],
+            streams: &[],
+            documents: &[],
+            further: &Map::new(),
+        };
+        issue::issue_within(tx, &issue, recorded_at)
+    }
+}
+
+/// Prepares round 2 of phase `phase`'s check as order `id` for `command`:
+/// the route for `checker` at attempt 1 of a new chain under `policy`, the
+/// host's effective policy, at the command's policy version, with the
+/// catalog `names`, and the evidence of `bal-phase-checker`, as round 1's.
+/// Nothing is recorded. A fault is the answer to give.
+pub fn prepare_recheck(
+    command: &Command,
+    phase: u32,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Result<PreparedRecheck, Value> {
+    let (route, instructions) = route_and_evidence(command, policy, host, names)?;
+    Ok(PreparedRecheck {
+        id: id.into(),
+        phase,
+        route,
+        instructions,
+    })
+}
+
+/// The checker's route at attempt 1 under `policy` at `command`'s policy
+/// version, and the evidence of its text.
+fn route_and_evidence(
+    command: &Command,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+) -> Result<(IssuedRoute, Vec<InstructionEvidence>), Value> {
+    let instructions = vec![crate::instruction::evidence(IDENTITY)?];
+    let route = compose(
+        policy,
+        command.policy_version,
+        host,
+        Role::Checker,
+        NonZeroU32::MIN,
+        names,
+    )
+    .map_err(|refusal| Refusal::new(refusal.code(), refusal.to_string()).value())?;
+    Ok((route, instructions))
 }
 
 /// Each truth `entries` hold, `{story, truth, version}`, in the entries'
