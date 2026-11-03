@@ -207,6 +207,53 @@ pub fn prepare_revision<S: Views + Payloads + ?Sized>(
     })
 }
 
+/// Prepares the revision order a round-1 blocker of plan draft `draft`'s
+/// check issues, as `id` for `command`'s project (D-07): as
+/// [`prepare_revision`] prepares a set close's, for phase `phase`'s
+/// committed stories in their order, but binding `findings`, every round-1
+/// finding exactly as returned, where a set close binds the set, since no
+/// set was opened. It has no parent and its id is also its request, so it
+/// starts a new chain. Its documents hold the readiness read's and the
+/// inputs', so a commitment, a truth or a plan changed between the reads
+/// makes the issue `ledger-busy`. The caller issues it inside its own
+/// transaction with [`PreparedOrder::issue_within`]. Nothing is recorded. A
+/// fault is the answer to give.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_check_revision<S: Views + Payloads + ?Sized>(
+    store: &S,
+    command: &Command,
+    phase: u32,
+    draft: Hash,
+    findings: &[Value],
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Result<PreparedOrder, Value> {
+    let readiness = read_readiness(store, &command.project, phase, &[])?;
+    let instructions = vec![crate::instruction::evidence(IDENTITY)?];
+    let route = route(command, policy, host, names)?;
+    let read = inputs::read_checked(
+        store,
+        &command.project,
+        phase,
+        readiness.committed(),
+        policy,
+        draft,
+        findings,
+    )?;
+    let mut documents = readiness.documents().to_vec();
+    documents.extend(read.documents);
+    Ok(PreparedOrder {
+        id: id.into(),
+        phase,
+        route,
+        instructions,
+        inputs: read.inputs,
+        documents,
+    })
+}
+
 /// The planner's route at attempt 1 under `policy` at `command`'s policy
 /// version, for `host` with the catalog `names`.
 fn route(
@@ -865,5 +912,60 @@ pub(crate) mod tests {
         assert_eq!(busy["status"], "failed", "{busy}");
         assert_eq!(busy["code"], "ledger-busy", "{busy}");
         assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_checker_revision_bound_without_its_findings_or_with_a_question_set_is_caught() {
+        use crate::planning::check_return::tests::{V, fb, fw};
+        use crate::planning::checker::tests::{C1, drafted_with_check};
+        use crate::planning::submit::tests::{as_drafted, order_o};
+        use crate::refine::order::tests::{input_body, input_names};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x2 = drafted_with_check(&store, &pl2(), C1, R2, T5);
+        let command = command("plan.check_return", R3, 8, T6);
+        let prepared = prepare_check_revision(
+            &store,
+            &command,
+            1,
+            Hash::from_hex(&x2).unwrap(),
+            &[fb(), fw()],
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            V,
+        )
+        .expect("the revision is prepared");
+        let receipt = issue(&store, &command, &prepared);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+
+        let orders: Vec<_> = issued(&store)
+            .into_iter()
+            .filter(|event| event.payload["id"] == V)
+            .collect();
+        assert_eq!(orders.len(), 1);
+        let payload = &orders[0].payload;
+        assert_eq!(payload["role"], "planner");
+        assert_eq!(payload["subject"], "phase/1");
+        assert_eq!(payload["attempt"], 1);
+        assert_eq!(payload["parent"], Value::Null);
+        assert_eq!(payload["request"], V);
+        assert_eq!(
+            input_names(&orders[0]),
+            [
+                "phase",
+                "stories",
+                "description",
+                "approved_items",
+                "draft",
+                "findings"
+            ]
+        );
+        assert_eq!(
+            input_body(&store, &orders[0], "findings"),
+            json!([fb(), fw()])
+        );
+        assert_eq!(input_body(&store, &orders[0], "draft"), as_drafted(pl2()));
     }
 }

@@ -4,7 +4,9 @@
 //! description; the capacity and the phase's size when a capacity is set;
 //! and the evidence items of the phase's plans in force. A revision order
 //! also binds the draft it revises and its question set with every answer
-//! and deferral. Each input is canonical JSON a `record` payload holds.
+//! and deferral; the revision a checker's round-1 blocker issues binds the
+//! draft and the round's findings instead (D-07). Each input is canonical
+//! JSON a `record` payload holds.
 //!
 //! Nothing here records anything. The selection is the caller's, never read
 //! from the phase, so an approval binds the stories it is committing. A
@@ -50,6 +52,9 @@ pub const DRAFT_INPUT: &str = "draft";
 /// The input holding a revision order's question set with every answer and
 /// deferral.
 pub const QUESTIONS_INPUT: &str = "questions";
+/// The input holding a checker revision order's round-1 findings, exactly as
+/// the checker returned them.
+pub const FINDINGS_INPUT: &str = "findings";
 
 /// The setting the capacity is read from.
 const CAPACITY_SETTING: &str = "planning.phase_capacity";
@@ -74,13 +79,15 @@ pub struct Revision<'a> {
 pub struct PlannerInputs {
     /// Each input's name and canonical JSON bytes, in order: `phase`,
     /// `stories`, `description`, `capacity` when one is set,
-    /// `approved_items`, then for a revision `draft` and `questions`.
+    /// `approved_items`, then for a revision `draft` and `questions`, or for
+    /// a checker's revision `draft` and `findings`.
     pub inputs: Vec<(&'static str, Vec<u8>)>,
     /// The documents the inputs were read from, each at the sequence that
     /// produced it and read before its content, so the issue can confirm
     /// none moved: `roadmap`, each story's `truths`, `phase`, the phase's
     /// `phase_detail`, `phase_plan`, and for a revision the draft's `draft`
-    /// and the set's `questions`.
+    /// and the set's `questions`, or for a checker's revision the draft's
+    /// `draft`.
     pub documents: Vec<ObservedDocument>,
 }
 
@@ -123,6 +130,29 @@ pub fn read_closing<S: Views + Payloads + ?Sized>(
         Some(revision),
         Some(closed),
     )
+}
+
+/// Reads what the revision order a round-1 blocker of plan draft `draft`'s
+/// check issues binds (D-07): the planning inputs for `stories` as [`read`]
+/// reads them, then `draft`, the draft read back as a revision's is, and
+/// `findings`, every round-1 finding exactly as the checker returned it. No
+/// `questions` input is bound, since the draft's set was never opened.
+pub fn read_checked<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    phase: u32,
+    stories: &[u32],
+    policy: &EffectivePolicy,
+    draft: Hash,
+    findings: &[Value],
+) -> Result<PlannerInputs, Value> {
+    let mut read = read_with(store, project, phase, stories, policy, None, None)?;
+    let (body, seq) = draft_read(store, project, draft)?;
+    read.inputs.push((DRAFT_INPUT, encoded(&body)?));
+    read.inputs.push((FINDINGS_INPUT, encoded(findings)?));
+    read.documents
+        .push(observed(DRAFT_VIEW, draft_key(draft), Some(seq)));
+    Ok(read)
 }
 
 /// [`read`], with a revision's set facts taken from `closed` when given.
@@ -364,15 +394,7 @@ fn revised<S: Views + Payloads + ?Sized>(
     revision: Revision<'_>,
     closed: Option<&SetFacts>,
 ) -> Result<(Value, u64, Value, Option<u64>), Value> {
-    let draft_seq = produced(store, project, DRAFT_VIEW, draft_key(revision.draft))?
-        .ok_or_else(|| unreadable(DRAFT_VIEW))?;
-    let draft = match read::preview(store, project, revision.draft) {
-        Ok(preview) if preview.kind == PLAN_KIND => preview.submission,
-        Ok(_) | Err(PreviewError::UnknownDraft | PreviewError::Unreadable(_)) => {
-            return Err(unreadable(DRAFT_VIEW));
-        }
-        Err(PreviewError::Store(error)) => return Err(busy(error)),
-    };
+    let (draft, draft_seq) = draft_read(store, project, revision.draft)?;
     if let Some(closed) = closed {
         return Ok((draft, draft_seq, questions_body(revision.set, closed), None));
     }
@@ -382,6 +404,24 @@ fn revised<S: Views + Payloads + ?Sized>(
     };
     let set = questions_body(revision.set, &held.facts);
     Ok((draft, draft_seq, set, Some(held.produced_seq)))
+}
+
+/// Plan draft `digest`'s body as recorded, with the sequence that produced
+/// its `draft` document, read before its content.
+fn draft_read<S: Views + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    digest: Hash,
+) -> Result<(Value, u64), Value> {
+    let seq = produced(store, project, DRAFT_VIEW, draft_key(digest))?
+        .ok_or_else(|| unreadable(DRAFT_VIEW))?;
+    match read::preview(store, project, digest) {
+        Ok(preview) if preview.kind == PLAN_KIND => Ok((preview.submission, seq)),
+        Ok(_) | Err(PreviewError::UnknownDraft | PreviewError::Unreadable(_)) => {
+            Err(unreadable(DRAFT_VIEW))
+        }
+        Err(PreviewError::Store(error)) => Err(busy(error)),
+    }
 }
 
 /// The sequence that produced the document `key` of `view`, or none.

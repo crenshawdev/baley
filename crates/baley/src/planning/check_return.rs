@@ -301,6 +301,16 @@ pub(crate) mod tests {
     use crate::refine::order::tests::issued;
     use crate::scope::fixtures::*;
 
+    /// V, the planner revision order a round-1 blocker issues.
+    pub(crate) const V: &str = "2d3e4f50-6172-4c83-9d94-aea5f6071823";
+
+    /// FB, a blocker.
+    pub(crate) fn fb() -> Value {
+        json!({"severity": "blocker", "location": "tasks[0]",
+            "claim": "No task makes truth t2 of story 1 true",
+            "fix": "Add a task that records the round"})
+    }
+
     /// FW, a warning.
     pub(crate) fn fw() -> Value {
         json!({"severity": "warning", "location": "tasks[0].verify[0]",
