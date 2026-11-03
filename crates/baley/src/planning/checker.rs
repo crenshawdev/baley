@@ -230,6 +230,8 @@ pub enum Refused {
     /// The owner's approval of a phase edit whose continuation issues a
     /// planner order.
     Approval,
+    /// A `work-order-retry` of one of the phase's planner orders.
+    Retry,
 }
 
 /// The refusal for phase `phase`'s pending checker order `pending`, worded
@@ -256,6 +258,12 @@ pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Val
             "or for a session to fail it with `work-order-fail`",
             "run `baley scope approve` again",
         ),
+        Refused::Retry => (
+            "no order was issued and nothing was recorded",
+            "a check's revision must be the phase's only live planner order",
+            "or fail it with `work-order-fail`",
+            "retry the order again",
+        ),
     };
     Refusal::new(
         CHECKER_ORDER_PENDING,
@@ -265,7 +273,8 @@ pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Val
     )
     .slot(match refused {
         Refused::Approval => "digest",
-        Refused::Submit | Refused::PhasePlan => "operation",
+        // Every other operation's arguments name no draft.
+        Refused::Submit | Refused::PhasePlan | Refused::Retry => "operation",
     })
     .details(json!({"work_order": pending}))
     .value()
@@ -298,7 +307,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::planning::fixtures::*;
-    use crate::planning::order::tests::O;
+    use crate::planning::order::tests::{O, fail_by_hand, prepared};
     use crate::planning::submit::check;
     use crate::planning::submit::tests::order_o;
     use crate::refine::order::tests::{input_body, input_names, issued};
@@ -523,5 +532,57 @@ pub(crate) mod tests {
             ),
             "{reason}"
         );
+    }
+
+    /// Store C with phase 1's planner order O issued under P0 and failed by
+    /// hand, so a retry of O passes every check of its own.
+    fn failed_o() -> (tempfile::TempDir, SqliteStore) {
+        let (dir, store) = store_c();
+        let (command_o, o) = prepared(&store, &[1], O, R1, T4);
+        let receipt = crate::planning::order::issue(&store, &command_o, &o);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        fail_by_hand(&store, O, R2);
+        (dir, store)
+    }
+
+    #[test]
+    fn a_planner_retry_issued_beside_a_pending_checker_order_is_caught() {
+        let (_dir, store) = failed_o();
+        let checker = issued_alone(&store, C1, R3, T7);
+        assert_eq!(checker["status"], "ok", "{checker}");
+
+        let before = head(&store);
+        let refusal = crate::mcp::work_order::retry_check(&store, &project(), O)
+            .expect_err("the retry is refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "checker-order-pending", "{refusal}");
+        assert_eq!(refusal["slot"], "operation", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": C1}));
+        let reason = refusal["reason"].as_str().unwrap();
+        assert!(reason.ends_with("then retry the order again"), "{reason}");
+        assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_retry_refusal_telling_the_session_to_submit_or_run_phase_plan_is_caught() {
+        let refusal = checker_order_pending(1, C1, Refused::Retry);
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "checker-order-pending", "{refusal}");
+        assert_eq!(refusal["slot"], "operation", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": C1}));
+        let reason = refusal["reason"].as_str().unwrap();
+        assert!(reason.contains(C1), "{reason}");
+        assert!(
+            reason.contains("so no order was issued and nothing was recorded"),
+            "{reason}"
+        );
+        assert!(
+            reason.ends_with(
+                "Wait for that order's return, or fail it with `work-order-fail`, then retry the order again"
+            ),
+            "{reason}"
+        );
+        assert!(!reason.contains("submit"), "{reason}");
+        assert!(!reason.contains("phase-plan"), "{reason}");
     }
 }

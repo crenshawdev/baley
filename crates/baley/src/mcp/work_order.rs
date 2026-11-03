@@ -43,6 +43,7 @@ use crate::mcp::prepare::{
     CHECKOUT_FACTS_UNAVAILABLE, LEDGER_UNAVAILABLE, Prepared, Stepped, WriteRequest,
     prepare_checked, prepare_settings_read,
 };
+use crate::planning::checker::{Refused, checker_order_pending, pending_checker};
 use crate::planning::order::{pending_planner, planner_absences, planner_order_pending};
 use crate::process::Process;
 use crate::refine::order::{
@@ -697,7 +698,9 @@ pub struct CheckedRetry {
 /// neither drafts before the owner decided nor returns questions that would
 /// abandon an open set. A phase's planner order is refused
 /// `planner-order-pending` while another planner order of the phase is
-/// pending, so a phase keeps one live planner order (D-11).
+/// pending, so a phase keeps one live planner order (D-11), and then
+/// `checker-order-pending` while the phase's checker order is pending, since
+/// a blocker it returns issues the phase's revision order (D-07).
 pub fn retry_check<S: Ledger + Views + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -762,6 +765,13 @@ pub fn retry_check<S: Ledger + Views + ?Sized>(
                 &order,
                 &format!("so no retry of {id} was issued"),
             ));
+        }
+        // A blocker's revision must find no other live planner order of the
+        // phase when the checker returns (D-07).
+        let checking = pending_checker(store, project, phase)
+            .map_err(|error| store_failed(&error, NOT_RECORDED_BUSY))?;
+        if let Some(order) = checking {
+            return Err(checker_order_pending(phase, &order, Refused::Retry));
         }
     }
     let instructions = match parent.body.get("instructions") {
