@@ -1466,9 +1466,8 @@ pub(crate) mod tests {
         }
     }
 
-    // Catches a check event the store would refuse at append, a changed
-    // projector left at its old version, or the set left at 14, which an
-    // older binary would misread.
+    // Catches a check event the store would refuse at append, or the set
+    // left at 14, which an older binary would misread.
     #[test]
     fn a_check_event_left_unregistered_or_the_set_left_at_14_is_caught() {
         use baley_core::plan::{CheckResult, phase_plan_key, phase_stream};
