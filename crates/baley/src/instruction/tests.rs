@@ -215,6 +215,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "3",
         "0ef8d20da30354d4071b7fc21310fb3de46a556d0a262e7debcceb33e4d460b7",
     ),
+    (
+        "bal-phase-checker",
+        "2",
+        "3fbb8c3337ae015099939ee1aeefbdb3482827ac1edb82e213d916010068766a",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1043,7 +1048,7 @@ fn a_checker_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "1");
+    assert_eq!(text.version, "2");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -1114,6 +1119,32 @@ fn a_checker_text_missing_a_dimension_its_findings_shape_or_the_round_two_rule_i
     ] {
         assert!(body.contains(needle), "the checker text lacks {needle}");
     }
+}
+
+#[test]
+fn a_checker_text_judging_by_a_phase_goal_or_another_plans_truths_is_caught() {
+    let body = served_text("bal-phase-checker");
+    // The order carries the plan and its stories' truths, never a phase goal
+    // or recorded answers, and the plan judge counts the approved plans'
+    // items toward a served truth (PLN-R13, PLN-R16).
+    let mut wrong: Vec<&str> = ["goal", "recorded answer", "locked decision"]
+        .into_iter()
+        .filter(|name| body.contains(name))
+        .collect();
+    wrong.extend(
+        [
+            "Derive what must be true from the stories the plan serves and their approved truths",
+            "derive what must be true from those stories and truths, before opening the plan",
+            "a served truth this plan's evidence map does not name is delivered by an approved plan of the phase",
+            "so it is not a finding",
+        ]
+        .into_iter()
+        .filter(|rule| !body.contains(rule)),
+    );
+    assert!(
+        wrong.is_empty(),
+        "the checker text misjudges one plan's scope: {wrong:?}"
+    );
 }
 
 #[test]
