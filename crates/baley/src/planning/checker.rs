@@ -236,27 +236,31 @@ pub enum Refused {
 /// for the `refused` operation, at slot `digest` for an approval and
 /// `operation` otherwise (D-03).
 pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Value {
-    let (not_done, cause, again) = match refused {
+    let (not_done, cause, fail, again) = match refused {
         Refused::Submit => (
             "nothing was recorded",
             "a phase has one live checker order and its return must find the draft it checks",
+            "or fail it with `work-order-fail`",
             "submit again",
         ),
         Refused::PhasePlan => (
             "no planner order was issued and nothing was recorded",
             "a check's revision must be the phase's only live planner order",
+            "or fail it with `work-order-fail`",
             "run `phase-plan` again",
         ),
         Refused::Approval => (
             "nothing was approved",
             "a check's revision must be the phase's only live planner order",
+            // The owner's terminal has no work-order command, so name the session.
+            "or for a session to fail it with `work-order-fail`",
             "run `baley scope approve` again",
         ),
     };
     Refusal::new(
         CHECKER_ORDER_PENDING,
         format!(
-            "phase {phase}'s checker work order {pending} is still checking a plan draft, so {not_done}, since {cause}. Wait for that order's return, or fail it with `work-order-fail`, then {again}"
+            "phase {phase}'s checker work order {pending} is still checking a plan draft, so {not_done}, since {cause}. Wait for that order's return, {fail}, then {again}"
         ),
     )
     .slot(match refused {
@@ -503,5 +507,21 @@ pub(crate) mod tests {
         assert!(submit.contains(C1), "{submit}");
         assert!(submit.ends_with("then submit again"), "{submit}");
         assert!(!submit.contains("phase-plan"), "{submit}");
+    }
+
+    #[test]
+    fn an_approval_refusal_sending_the_owner_to_a_work_order_fail_command_is_caught() {
+        let refusal = checker_order_pending(1, C1, Refused::Approval);
+        assert_eq!(refusal["code"], "checker-order-pending", "{refusal}");
+        assert_eq!(refusal["slot"], "digest", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": C1}));
+        let reason = refusal["reason"].as_str().unwrap();
+        assert!(reason.contains(C1), "{reason}");
+        assert!(
+            reason.ends_with(
+                "Wait for that order's return, or for a session to fail it with `work-order-fail`, then run `baley scope approve` again"
+            ),
+            "{reason}"
+        );
     }
 }
