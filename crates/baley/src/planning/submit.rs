@@ -40,7 +40,9 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::planning::checker::{self, checker_absences, checker_order_pending, pending_checker};
+use crate::planning::checker::{
+    self, Refused, checker_absences, checker_order_pending, pending_checker,
+};
 use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
@@ -166,7 +168,7 @@ pub(crate) fn checked<S: Views + ?Sized>(
     // Refused whatever the gate, since the gate is read at the recording
     // and a late return must still find the draft its order checks.
     if let Some(pending) = pending_checker(store, project, phase).map_err(busy)? {
-        return Err(checker_order_pending(phase, &pending, NOT_RECORDED));
+        return Err(checker_order_pending(phase, &pending, Refused::Submit));
     }
     let read = facts::read(store, project, phase, capacity)?;
     judge_submit_phase(phase, &read.active)

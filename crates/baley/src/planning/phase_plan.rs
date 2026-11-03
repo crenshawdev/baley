@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::planning::checker::{checker_absences, checker_order_pending, pending_checker};
+use crate::planning::checker::{Refused, checker_absences, checker_order_pending, pending_checker};
 use crate::planning::inputs::Revision;
 use crate::planning::order::{
     self, HandOver, pending_planner, planner_absences, planner_order_pending, read_hand_over,
@@ -314,11 +314,7 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
     // A blocker's revision is issued only once the phase's checker returns,
     // so no path runs beside a pending checker order (D-03, D-07).
     if let Some(pending) = pending_checker(store, project, phase).map_err(busy)? {
-        return Err(checker_order_pending(
-            phase,
-            &pending,
-            "no planner order was issued and nothing was recorded",
-        ));
+        return Err(checker_order_pending(phase, &pending, Refused::PhasePlan));
     }
     let mut absences = readiness.absences();
     absences.extend(checker_absences(phase));

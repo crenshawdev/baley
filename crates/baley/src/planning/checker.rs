@@ -219,13 +219,35 @@ pub fn pending_checker<S: Views + ?Sized>(
         }))
 }
 
-/// The refusal for phase `phase`'s pending checker order `pending`, with
-/// `not_done` saying what was not done (D-03).
-pub fn checker_order_pending(phase: u32, pending: &str, not_done: &str) -> Value {
+/// The operation a pending checker order refused, which words the refusal,
+/// so its caller is told to repeat what it was doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// A `plan-submit` or `plan-replace`.
+    Submit,
+    /// A `phase-plan`.
+    PhasePlan,
+}
+
+/// The refusal for phase `phase`'s pending checker order `pending`, worded
+/// for the `refused` operation (D-03).
+pub fn checker_order_pending(phase: u32, pending: &str, refused: Refused) -> Value {
+    let (not_done, cause, again) = match refused {
+        Refused::Submit => (
+            "nothing was recorded",
+            "a phase has one live checker order and its return must find the draft it checks",
+            "submit again",
+        ),
+        Refused::PhasePlan => (
+            "no planner order was issued and nothing was recorded",
+            "a check's revision must be the phase's only live planner order",
+            "run `phase-plan` again",
+        ),
+    };
     Refusal::new(
         CHECKER_ORDER_PENDING,
         format!(
-            "phase {phase}'s checker work order {pending} is still checking a plan draft, so {not_done}, since a phase has one live checker order. Wait for that order's return, or fail it with `work-order-fail` and submit again"
+            "phase {phase}'s checker work order {pending} is still checking a plan draft, so {not_done}, since {cause}. Wait for that order's return, or fail it with `work-order-fail`, then {again}"
         ),
     )
     .slot("operation")
@@ -445,5 +467,29 @@ pub(crate) mod tests {
         assert_eq!(busy["status"], "failed", "{busy}");
         assert_eq!(busy["code"], "ledger-busy", "{busy}");
         assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_checker_pending_refusal_telling_a_phase_plan_to_submit_is_caught() {
+        let reason = |refused: Refused| {
+            let refusal = checker_order_pending(1, C1, refused);
+            assert_eq!(refusal["code"], "checker-order-pending", "{refusal}");
+            assert_eq!(refusal["slot"], "operation", "{refusal}");
+            assert_eq!(refusal["details"], json!({"work_order": C1}));
+            refusal["reason"].as_str().unwrap().to_owned()
+        };
+
+        let phase_plan = reason(Refused::PhasePlan);
+        assert!(phase_plan.contains(C1), "{phase_plan}");
+        assert!(
+            phase_plan.ends_with("then run `phase-plan` again"),
+            "{phase_plan}"
+        );
+        assert!(!phase_plan.contains("submit"), "{phase_plan}");
+
+        let submit = reason(Refused::Submit);
+        assert!(submit.contains(C1), "{submit}");
+        assert!(submit.ends_with("then submit again"), "{submit}");
+        assert!(!submit.contains("phase-plan"), "{submit}");
     }
 }
