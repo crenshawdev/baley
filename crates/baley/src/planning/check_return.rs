@@ -36,6 +36,7 @@ use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::checker::{CHECK_INPUT, PLAN_INPUT, TRUTHS_INPUT};
 use crate::planning::facts::{self, PhaseFacts};
 use crate::planning::order::{PreparedOrder, planner_absences, prepare_check_revision};
+use crate::planning::replace::facts_without;
 use crate::planning::submit::{draft_members, with_preview};
 use crate::questions::answer::with_now;
 use crate::questions::record::open;
@@ -158,12 +159,14 @@ enum Outcome {
     /// A blocker buys the planner this revision order.
     Revise(PreparedOrder),
     /// No blocker: the draft's set opens with these questions, and the
-    /// receipt previews the draft with the phase's facts read now.
+    /// receipt previews the draft with the phase's facts read now and its
+    /// size before the draft, a replacement's without the plan it replaces.
     Open {
         set: QuestionSet,
         stories: Vec<u32>,
         size: usize,
         facts: PhaseFacts,
+        phase_size: u32,
     },
 }
 
@@ -186,7 +189,9 @@ enum Outcome {
 /// the one a recorded draft gives (`submit::draft_members`, its preview by
 /// `submit::with_preview`), with its `phase_size`, `reaching` and
 /// `capacity` from the phase's facts read now under the policy's capacity,
-/// and `set`, `now`, `round` and `findings`. A warning never buys a round.
+/// a replacement's size without the plan it replaces
+/// (`replace::facts_without`) as the gate-off receipt counts it, and `set`,
+/// `now`, `round` and `findings`. A warning never buys a round.
 ///
 /// Every decision observes the order's `work_order` document, so a second
 /// return or a failure since the check makes the call `ledger-busy` with
@@ -263,6 +268,7 @@ pub fn record<S: Ledger + Views + Payloads>(
                 stories,
                 size,
                 facts,
+                phase_size,
             } => {
                 let subject = Subject::Plan {
                     phase: checked.phase,
@@ -275,7 +281,7 @@ pub fn record<S: Ledger + Views + Payloads>(
                     checked.phase,
                     stories,
                     *size,
-                    facts.facts.size,
+                    *phase_size,
                     facts.facts.capacity,
                     at,
                 );
@@ -300,8 +306,11 @@ pub fn record<S: Ledger + Views + Payloads>(
 /// What the round-1 recording of `checked` does, prepared outside its
 /// transaction: the revision order as `id` for a blocker, otherwise the
 /// draft's set read back from its questions with `judge_set` and the
-/// phase's facts read now. A draft whose questions or stories cannot be
-/// read is a ledger fault; a fault is the answer to give.
+/// phase's facts read now. A replacement draft's phase size is judged
+/// without the plan it replaces, a replacement the phase no longer allows
+/// refused at slot `replaces` with nothing recorded. A draft whose
+/// questions or stories cannot be read is a ledger fault; a fault is the
+/// answer to give.
 fn outcome<S: Views + Payloads + ?Sized>(
     store: &S,
     command: &Command,
@@ -351,11 +360,27 @@ fn outcome<S: Views + Payloads + ?Sized>(
         checked.phase,
         facts::capacity(policy),
     )?;
+    // The gate-off receipt takes the replaced plan's tasks off the same way.
+    let phase_size = match checked.draft.replaces {
+        None => facts.facts.size,
+        Some(replaces) => {
+            facts_without(
+                store,
+                &command.project,
+                checked.phase,
+                replaces,
+                &facts,
+                "nothing was recorded",
+            )?
+            .size
+        }
+    };
     Ok(Outcome::Open {
         set,
         stories,
         size,
         facts,
+        phase_size,
     })
 }
 
@@ -557,7 +582,23 @@ pub(crate) mod tests {
         request_id: &str,
         at: &str,
     ) -> Value {
-        let checked = match submit::check(store, &project(), plan, order, None) {
+        gated_replacing(store, plan, None, order, policy, id, request_id, at)
+    }
+
+    /// As [`gated`], the plan replacing `replaces` when one is named, as
+    /// `plan-replace` runs its check below the session.
+    #[allow(clippy::too_many_arguments)]
+    fn gated_replacing(
+        store: &SqliteStore,
+        plan: &Value,
+        replaces: Option<baley_core::plan::Replaces>,
+        order: &str,
+        policy: &EffectivePolicy,
+        id: &str,
+        request_id: &str,
+        at: &str,
+    ) -> Value {
+        let checked = match submit::checked(store, &project(), plan, order, replaces, None) {
             Ok(checked) => checked,
             Err(refusal) => return refusal,
         };
@@ -1000,5 +1041,31 @@ pub(crate) mod tests {
                 .all(|e| { e.type_name != "work_order.issued" || e.payload["role"] != "planner" })
         );
         approval_refused(&store, x2, "question-open");
+    }
+
+    #[test]
+    fn a_replacement_previewed_with_the_replaced_plan_still_counted_is_caught() {
+        use crate::planning::approve::tests::{approved, digest_of};
+        use crate::planning::submit::tests::plan_submitted;
+
+        // Plan 1, PL1 with its one task, in force.
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x1 = digest_of(&plan_submitted(&store, &pl1(), O, None, R2, T5));
+        let approval = approved(&store, x1, &p0(), R3, T5);
+        assert_eq!(approval["plan"], 1, "{approval}");
+
+        // PL2, also one task, replacing plan 1 under P0, then a warning back.
+        let replaces = baley_core::plan::Replaces {
+            plan: 1,
+            digest: x1,
+        };
+        let submitted = gated_replacing(&store, &pl2(), Some(replaces), O, &p0(), C1, R4, T6);
+        assert_eq!(submitted["check"]["work_order"], C1, "{submitted}");
+        let receipt = returned(&store, C1, vec![fw()], &p0(), V, R5, T7, 5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        // Plan 1's task leaves with it, as the gate-off receipt counts it.
+        assert_eq!(receipt["phase_size"], 0, "{receipt}");
+        assert_eq!(receipt["reaching"], 1, "{receipt}");
     }
 }
