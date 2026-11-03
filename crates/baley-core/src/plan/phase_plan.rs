@@ -13,7 +13,10 @@ use baley_store::{
 };
 use serde_json::{Map, Value, json};
 
-use super::event::{PLAN_APPROVED, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED, PLAN_REPLACED};
+use super::event::{
+    PLAN_APPROVED, PLAN_CHECK_ISSUED, PLAN_CHECKED, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED,
+    PLAN_REPLACED,
+};
 use crate::questions::QUESTIONS_OPENED;
 use crate::scope::PHASE_WITHDRAWN;
 
@@ -41,7 +44,7 @@ const STATUS_FIELD: &str = "status";
 pub fn phase_plan_spec() -> ViewSpec {
     ViewSpec {
         name: PHASE_PLAN_VIEW.into(),
-        version: 1,
+        version: 2,
         key: vec![FieldSpec {
             name: PHASE_FIELD.into(),
             kind: FieldKind::Integer,
@@ -72,7 +75,8 @@ pub fn phase_plan_key(phase: u32) -> DocKey {
 
 /// Keeps the `phase_plan` view current from `plan.approved`,
 /// `plan.replaced`, `phase.withdrawn`, a plan draft's `questions.opened`,
-/// `plan.continuation` and `plan.continuation_followed`.
+/// `plan.continuation`, `plan.continuation_followed`, `plan.checked` and
+/// `plan.check_issued`.
 ///
 /// A document holds these members:
 /// - `phase`: the phase's number.
@@ -90,6 +94,11 @@ pub fn phase_plan_key(phase: u32) -> DocKey {
 ///   the latest plan draft's set, or null; its approval clears it (D-03).
 /// - `continuation`: the phase's latest planning continuation, `{stories,
 ///   edit, work_order, followed}`, or null (D-09, D-11).
+/// - `checks`: the phase's check lineages that bought a revision, in the
+///   order their round 1 returned, each `{revision, first: {seq,
+///   plan_digest}, recheck}`: the planner revision order round 1 issued,
+///   that result's sequence and draft, and `{work_order, seq}` of the
+///   round-2 issue or null (PLN-R16, D-02). Every lineage is kept.
 ///
 /// An approval whose number is not above `highest` is refused, so no
 /// number is projected twice (PLN-R14, D-07), and so is one whose size would
@@ -100,6 +109,15 @@ pub fn phase_plan_key(phase: u32) -> DocKey {
 /// question set changes nothing. A followed marker naming another edit or
 /// order than the latest continuation's, or one already followed, is
 /// refused.
+///
+/// A round-1 `plan.checked` with a revision order appends a lineage, and
+/// one with none adds nothing. A `plan.check_issued` sets `recheck` on the
+/// lineage whose `first` its `previous_check` names, and is refused when
+/// none does or that lineage's round 2 was already issued, so no third
+/// round is projected. A round-2 `plan.checked` changes nothing and is
+/// refused unless its lineage holds a round 2; a round other than 1 or 2
+/// is refused. A check never changes `draft`, which only a plan draft's
+/// set sets.
 pub struct PhasePlanProjector {
     spec: ViewSpec,
 }
@@ -132,6 +150,8 @@ impl Projector for PhasePlanProjector {
             QUESTIONS_OPENED,
             PLAN_CONTINUATION,
             PLAN_CONTINUATION_FOLLOWED,
+            PLAN_CHECKED,
+            PLAN_CHECK_ISSUED,
         ]
     }
 
@@ -172,6 +192,8 @@ impl Projector for PhasePlanProjector {
             QUESTIONS_OPENED => open_draft(&mut document, payload),
             PLAN_CONTINUATION => continuation(&mut document, payload),
             PLAN_CONTINUATION_FOLLOWED => follow(&mut document, payload),
+            PLAN_CHECKED => checked(&mut document, payload, event.seq),
+            PLAN_CHECK_ISSUED => check_issued(&mut document, payload, event.seq),
             _ => Err("the view does not handle this event".into()),
         }
         .and_then(|()| settle(&mut document))
@@ -194,6 +216,7 @@ fn fresh(phase: u32) -> Map<String, Value> {
         STATUS_FIELD: INACTIVE,
         "draft": null,
         "continuation": null,
+        "checks": [],
     }) else {
         unreachable!("a JSON object literal is an object")
     };
@@ -278,6 +301,77 @@ fn follow(document: &mut Map<String, Value>, payload: &Value) -> Result<(), Stri
     Ok(())
 }
 
+/// Starts a lineage for a round-1 result that bought a revision, after
+/// every earlier one, so a revision order's submit still finds its own
+/// lineage once a later one starts (D-02). A round-1 result with no
+/// revision has no round 2 to find, so it adds nothing. A round-2 result
+/// changes nothing, but one whose round 2 was never issued is refused.
+fn checked(document: &mut Map<String, Value>, payload: &Value, seq: u64) -> Result<(), String> {
+    let digest = text(payload, "plan_digest")?;
+    match whole(payload, "round")? {
+        1 => match payload.get("revision") {
+            Some(Value::Null) => Ok(()),
+            Some(Value::String(revision)) => {
+                let lineage = json!({
+                    "revision": revision,
+                    "first": {"seq": seq, "plan_digest": digest},
+                    "recheck": null,
+                });
+                checks(document)?.push(lineage);
+                Ok(())
+            }
+            _ => Err("revision is not text or null".into()),
+        },
+        2 => {
+            let first = previous_check(payload)?;
+            let issued = checks(document)?
+                .iter()
+                .any(|lineage| lineage["first"] == first && !lineage["recheck"].is_null());
+            if issued {
+                Ok(())
+            } else {
+                Err(format!("no round 2 was issued against the check {first}"))
+            }
+        }
+        round => Err(format!("round {round} is not 1 or 2")),
+    }
+}
+
+/// Binds round 2 to the lineage whose first check it names. One naming no
+/// lineage, or a lineage whose round 2 was already issued, is refused, so
+/// no third round is ever projected (D-02, D-09).
+fn check_issued(
+    document: &mut Map<String, Value>,
+    payload: &Value,
+    seq: u64,
+) -> Result<(), String> {
+    let work_order = text(payload, "work_order")?;
+    let first = previous_check(payload)?;
+    let lineage = checks(document)?
+        .iter_mut()
+        .find(|lineage| lineage["first"] == first)
+        .ok_or_else(|| format!("no lineage starts at the check {first}"))?;
+    if !lineage["recheck"].is_null() {
+        return Err(format!("round 2 of the check {first} was already issued"));
+    }
+    lineage["recheck"] = json!({"work_order": work_order, "seq": seq});
+    Ok(())
+}
+
+/// The `previous_check` a round-2 event names, rebuilt from its two
+/// members so it compares equal to a lineage's `first`.
+fn previous_check(payload: &Value) -> Result<Value, String> {
+    let previous = payload
+        .get("previous_check")
+        .ok_or("previous_check is missing")?;
+    let seq = previous
+        .get("seq")
+        .and_then(Value::as_u64)
+        .ok_or("previous_check's seq is not a whole number")?;
+    let digest = text(previous, "plan_digest")?;
+    Ok(json!({"seq": seq, "plan_digest": digest}))
+}
+
 /// Marks the plan in force at `old_digest` replaced by `new_digest`.
 fn replace(document: &mut Map<String, Value>, payload: &Value) -> Result<(), String> {
     let plan = whole(payload, "plan")?;
@@ -330,6 +424,13 @@ fn plans(document: &mut Map<String, Value>) -> Result<&mut Vec<Value>, String> {
     match document.get_mut("plans") {
         Some(Value::Array(plans)) => Ok(plans),
         _ => Err("the document's plans are not a list".into()),
+    }
+}
+
+fn checks(document: &mut Map<String, Value>) -> Result<&mut Vec<Value>, String> {
+    match document.get_mut("checks") {
+        Some(Value::Array(checks)) => Ok(checks),
+        _ => Err("the document's checks are not a list".into()),
     }
 }
 
@@ -392,9 +493,11 @@ mod tests {
 
     use super::*;
     use crate::plan::event::{
-        PlanApproval, continuation_followed_payload, continuation_payload, replaced_payload,
+        CheckIssue, CheckResult, PlanApproval, PreviousCheck, continuation_followed_payload,
+        continuation_payload, replaced_payload,
     };
     use crate::plan::fixtures::{c1, c2, o1};
+    use crate::policy::RecheckScope;
     use crate::scope::phase_withdrawn_payload;
 
     const S: &str = "5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -536,7 +639,7 @@ mod tests {
         assert_eq!(
             view[&one()],
             json!({"phase": 1, "highest": 3, "size": 4, "withdrawn": false,
-                "status": "active", "draft": null, "continuation": null,
+                "status": "active", "draft": null, "continuation": null, "checks": [],
                 "plans": [held(1, x(), &[1, 2], 2, Some(z())), held(2, y(), &[1], 1, None),
                     held(3, z(), &[2], 3, None)]})
         );
@@ -563,7 +666,7 @@ mod tests {
         assert_eq!(
             view[&DocKey(vec![KeyValue::Integer(3)])],
             json!({"phase": 3, "plans": [], "highest": 0, "size": 0, "withdrawn": true,
-                "status": "inactive", "draft": null, "continuation": null})
+                "status": "inactive", "draft": null, "continuation": null, "checks": []})
         );
     }
 
@@ -611,6 +714,8 @@ mod tests {
                 "questions.opened",
                 "plan.continuation",
                 "plan.continuation_followed",
+                "plan.checked",
+                "plan.check_issued",
             ]
         );
     }
@@ -696,5 +801,105 @@ mod tests {
         let before = view.clone();
         assert!(step(&mut view, &followed(5, y(), "O2")).is_err());
         assert_eq!(view, before);
+    }
+
+    const V: &str = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    const V2: &str = "1b2c3d4e-5f60-4b7c-8d9e-0f1a2b3c4d5e";
+    const W2: &str = "2c3d4e5f-6071-4c8d-9eaf-1a2b3c4d5e6f";
+    const W3: &str = "3d4e5f60-7182-4d9e-8fb0-2b3c4d5e6f70";
+
+    /// The round-1 result `seq`, `{seq, plan_digest}`, as a re-check names it.
+    fn first(seq: u64, plan_digest: Hash) -> PreviousCheck {
+        PreviousCheck { seq, plan_digest }
+    }
+
+    /// K: a `plan.checked` of phase 1 at `seq` for the draft at `digest`
+    /// with `revision`; round 2 exactly when it names `previous`.
+    fn k(seq: u64, digest: Hash, revision: Option<&str>, previous: Option<PreviousCheck>) -> Event {
+        let result = CheckResult {
+            phase: 1,
+            plan_digest: digest,
+            findings: &[],
+            work_order: "4e5f6071-8293-4eaf-9fc1-3c4d5e6f7081",
+            scope: RecheckScope::Full,
+            previous_check: previous,
+            truth_versions: &[],
+            material: &[],
+            scope_policy_version: 3,
+            revision,
+        };
+        event(seq, "plan.checked", result.payload())
+    }
+
+    /// I: a `plan.check_issued` of phase 1 at `seq` for `order`, naming
+    /// `previous` as its first check.
+    fn i(seq: u64, order: &str, previous: PreviousCheck) -> Event {
+        let issue = CheckIssue {
+            phase: 1,
+            work_order: order,
+            previous_check: previous,
+            original_plan_digest: previous.plan_digest,
+            plan_digest: y(),
+            truth_versions: &[],
+            scope: RecheckScope::Full,
+            scope_policy_version: 3,
+            material: &[],
+        };
+        event(seq, "plan.check_issued", issue.payload())
+    }
+
+    fn lineage(revision: &str, seq: u64, digest: Hash, recheck: Value) -> Value {
+        json!({"revision": revision, "first": {"seq": seq, "plan_digest": digest.to_hex()},
+            "recheck": recheck})
+    }
+
+    #[test]
+    fn a_round_two_projected_without_its_lineage_or_a_second_time_is_caught() {
+        let refused = |view: &mut View, event: &Event| {
+            let before = view.clone();
+            assert!(step(view, event).is_err(), "{}", event.payload);
+            assert_eq!(*view, before);
+        };
+        let mut view = fold(&[k(5, x(), Some(V), None)]);
+        assert_eq!(
+            view[&one()]["checks"],
+            json!([lineage(V, 5, x(), Value::Null)])
+        );
+        step(&mut view, &i(7, W2, first(5, x()))).unwrap();
+        assert_eq!(
+            view[&one()]["checks"][0]["recheck"],
+            json!({"work_order": W2, "seq": 7})
+        );
+        refused(&mut view, &i(9, W3, first(5, x())));
+
+        let mut view = fold(&[k(5, x(), Some(V), None)]);
+        refused(&mut view, &i(7, W2, first(4, x())));
+
+        let mut view = fold(&[k(5, x(), None, None)]);
+        assert_eq!(view[&one()]["checks"], json!([]));
+        refused(&mut view, &i(7, W2, first(5, x())));
+
+        let mut view = fold(&[k(5, x(), Some(V), None)]);
+        refused(&mut view, &k(8, y(), None, Some(first(5, x()))));
+    }
+
+    #[test]
+    fn a_new_lineage_dropping_an_earlier_ones_revision_is_caught() {
+        let mut view = fold(&[k(5, x(), Some(V), None), k(11, y(), Some(V2), None)]);
+        assert_eq!(
+            view[&one()]["checks"],
+            json!([
+                lineage(V, 5, x(), Value::Null),
+                lineage(V2, 11, y(), Value::Null)
+            ])
+        );
+        step(&mut view, &i(13, W2, first(5, x()))).unwrap();
+        assert_eq!(
+            view[&one()]["checks"],
+            json!([
+                lineage(V, 5, x(), json!({"work_order": W2, "seq": 13})),
+                lineage(V2, 11, y(), Value::Null)
+            ])
+        );
     }
 }
