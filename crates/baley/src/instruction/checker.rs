@@ -90,9 +90,12 @@
 //!   as a `blocker` finding, beside any new defects: PLN-R16 has both scopes
 //!   check whether every first-round blocker is closed, and a finding has no
 //!   member that marks one open, so only a returned finding shows it.
-//! - Each finding's `severity`, `location`, `claim` and `fix`, and the
-//!   refusal of a finding without a severity (PLN-R16), under design 0008's
-//!   code for the same condition, `finding-shape` (REV-R6).
+//! - Each finding holding exactly `severity`, `location`, `claim` and `fix`,
+//!   each non-blank, and no other, and the refusal `finding-shape` of a list
+//!   holding any other entry, design 0008's code for the same condition
+//!   (REV-R6). PLN-R16 refuses a finding without a severity, and the return
+//!   judge refuses a blank or an extra member too
+//!   (`crates/baley-core/src/plan/check.rs`, `is_finding`).
 //! - "Call no `baley_apply` operation: the host session returns what you
 //!   return" (design 0005 section 8, Figure 5, where the host session returns
 //!   the checker's findings).
@@ -101,11 +104,11 @@
 pub const IDENTITY: &str = "bal-phase-checker";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "4";
+pub const VERSION: &str = "5";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the
 /// code so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "98c324fcdacf597e225bcfccc9231c76165f7271b59cb93441347a7c8e0f6cbe";
+pub const HASH: &str = "3f8c6ecadd03e992902d4268e520b8f12c974785afb896592e1d8b30ab0f7b98";
 
 /// What the plan checker reads once it holds a check order, in either round.
 /// Ported from Cadence tag `v3.9.4`:
@@ -169,10 +172,12 @@ As your final message, return exactly one JSON list of findings and nothing else
 
 {"severity":"blocker"|"warning","location":"<where in the plan>","claim":"<what is missing or wrong>","fix":"<a concrete fix the planner can apply>"}
 
-- `severity` - `blocker` or `warning`. A finding without a severity is refused `finding-shape`.
+- `severity` - `blocker` or `warning`.
 - `location` - where in the plan: the task or member.
 - `claim` - what is missing or wrong.
 - `fix` - a concrete suggested fix the planner can apply.
+
+A finding holds exactly these four members, each non-blank, and no other: a list holding a finding without a severity, with a blank member or with any other member is refused `finding-shape`.
 
 You get one pass; Baley owns the one revision. Report everything you find now - there is no second look.
 </returns>

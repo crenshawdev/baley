@@ -230,6 +230,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "4",
         "98c324fcdacf597e225bcfccc9231c76165f7271b59cb93441347a7c8e0f6cbe",
     ),
+    (
+        "bal-phase-checker",
+        "5",
+        "3f8c6ecadd03e992902d4268e520b8f12c974785afb896592e1d8b30ab0f7b98",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1058,7 +1063,7 @@ fn a_checker_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "4");
+    assert_eq!(text.version, "5");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -1197,6 +1202,15 @@ fn a_checker_text_dropping_an_open_first_round_blocker_from_round_two_is_caught(
     // finding has no member marking one open, so it must come back.
     let rule = "Every first-round blocker the revision has not closed is returned again as a `blocker` finding, beside any new defects.";
     assert!(input.contains(rule), "the round-2 rule lacks: {rule}");
+}
+
+#[test]
+fn a_checker_return_allowing_an_extra_or_a_blank_finding_member_is_caught() {
+    let returns = section(served_text("bal-phase-checker"), "<returns>", "</returns>");
+    // `is_finding` refuses anything but exactly the four members, each
+    // non-blank (PLN-R16, REV-R6).
+    let rule = "A finding holds exactly these four members, each non-blank, and no other";
+    assert!(returns.contains(rule), "the returns block lacks: {rule}");
 }
 
 #[test]
