@@ -902,4 +902,10 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn a_phase_plan_projector_changed_but_left_at_its_old_version_is_caught() {
+        // Version 2 added the check lineages, so stored documents need a rebuild.
+        assert_eq!(phase_plan_spec().version, 2);
+    }
 }
