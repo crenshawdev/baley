@@ -9,15 +9,29 @@
 //! with the round-2 binding attached for a re-check, so the gated recording
 //! records round 2 from what the step found.
 
-use baley_core::plan::{CheckRefusal, CheckRound, Lineage, PreviousCheck, judge_check_round};
+use std::io::Read;
+
+use baley_core::plan::{
+    CheckRefusal, CheckRound, Lineage, PLAN_CHECKED, PreviousCheck, judge_check_round,
+    phase_stream, read_plan_draft,
+};
 use baley_core::policy::{EffectivePolicy, PlanGate};
-use baley_store::Hash;
-use serde_json::Value;
+use baley_core::work_order::MATERIAL_UNAVAILABLE;
+use baley_store::{
+    Hash, HistoryFilter, Ledger, PageRequest, PayloadBody, PayloadRef, PayloadStatus, Payloads,
+    ProjectId, StoreError, request_digest,
+};
+use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
-use crate::mcp::capture::{PLACE_LEDGER, failed};
+use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
+use crate::planning::checker::{PLAN_INPUT, TRUTHS_INPUT};
 use crate::planning::submit::Checked;
+use crate::scope::submit::NOT_RECORDED_BUSY;
+
+/// The material name of round 1's draft, as round 2 binds it.
+const ORIGINAL: &str = "original";
 
 /// The round-2 binding a submit's check carries once the lineage step
 /// finds the submit is a re-check.
@@ -37,17 +51,33 @@ struct Held {
 }
 
 /// Judges the place of `checked`, a submit's or a replacement's accepted
-/// check, in its check lineage under `policy`, recording nothing, and gives
-/// `checked` back (D-01, D-02). With the plan gate `off` nothing is judged.
-/// Otherwise the phase's lineages, `phase_plan`'s `checks` as the check
-/// read them, and the head of the answered order's chain, its `request`,
-/// go to `judge_check_round`: a fresh lineage gives `checked` back as it
-/// came; round 2 attaches the lineage's revision order and first check; a
-/// lineage whose round 2 was issued is refused `third-round` at slot
-/// `work_order` naming its revision order. The documents the check read are
-/// the ones the recording observes, so a lineage moved since makes the call
-/// `ledger-busy`. A lineage or chain that cannot be read is a ledger fault.
-pub fn judge(mut checked: Checked, policy: &EffectivePolicy) -> Result<Checked, Value> {
+/// check of `project`, in its check lineage under `policy`, recording
+/// nothing, and gives `checked` back (D-01, D-02). With the plan gate `off`
+/// nothing is judged. Otherwise the phase's lineages, `phase_plan`'s
+/// `checks` as the check read them, and the head of the answered order's
+/// chain, its `request`, go to `judge_check_round`: a fresh lineage gives
+/// `checked` back as it came; round 2 attaches the lineage's revision order
+/// and first check; a lineage whose round 2 was issued is refused
+/// `third-round` at slot `work_order` naming its revision order.
+///
+/// For round 2 the lineage's round-1 `plan.checked` is read by its sequence
+/// on `phase/<n>`, its draft the lineage's first, and each body it bound
+/// must be held whole as recorded: an original draft purged, reduced, not
+/// read back as a plan draft or at another digest is refused
+/// `material-unavailable` at slot `work_order` with `{"input": "original"}`,
+/// and a purged or reduced truths snapshot the same with `{"input":
+/// "truths"}`, since a re-check never substitutes the current draft or
+/// truths (ADR 0037).
+///
+/// The documents the check read are the ones the recording observes, so a
+/// lineage moved since makes the call `ledger-busy`. A lineage, chain or
+/// round-1 result that cannot be read is a ledger fault.
+pub fn judge<S: Ledger + Payloads + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    mut checked: Checked,
+    policy: &EffectivePolicy,
+) -> Result<Checked, Value> {
     if policy.plan_gate().0 == PlanGate::Off {
         return Ok(checked);
     }
@@ -73,6 +103,14 @@ pub fn judge(mut checked: Checked, policy: &EffectivePolicy) -> Result<Checked, 
         .find(|lineage| lineage.revision == revision)
         .map(|lineage| lineage.first)
         .ok_or_else(|| unreadable("the phase's check lineage cannot be read"))?;
+    let round_one = round_one(store, project, checked.plan.phase(), first)?;
+    let unavailable = |input: &str| material_unavailable(input, revision);
+    if !original_held(store, &round_one.plan, first.plan_digest)? {
+        return Err(unavailable(ORIGINAL));
+    }
+    if !held_whole(store, &round_one.truths)? {
+        return Err(unavailable(TRUTHS_INPUT));
+    }
     checked.recheck = Some(Recheck {
         revision: revision.to_owned(),
         first,
@@ -103,6 +141,108 @@ fn lineages(phase_plan: Option<&Value>) -> Result<Vec<Held>, Value> {
         .ok_or_else(|| unreadable("the phase's check lineages cannot be read"))
 }
 
+/// What a lineage's round-1 result bound that round 2 reads again.
+struct RoundOne {
+    /// The reference of round 1's draft body, its `plan` material.
+    plan: PayloadRef,
+    /// The reference of round 1's truths snapshot.
+    truths: PayloadRef,
+}
+
+/// The round-1 `plan.checked` at `first`'s sequence on phase `phase`'s
+/// stream, checked against `first`'s draft. A result not there, at another
+/// draft, or whose material cannot be read is a ledger fault.
+fn round_one<L: Ledger + ?Sized>(
+    store: &L,
+    project: &ProjectId,
+    phase: u32,
+    first: PreviousCheck,
+) -> Result<RoundOne, Value> {
+    let filter = HistoryFilter {
+        types: vec![PLAN_CHECKED.into()],
+        git_commit: None,
+    };
+    let page = PageRequest {
+        limit: 1,
+        after: None,
+    };
+    let digest = json!(first.plan_digest.to_hex());
+    let stream = phase_stream(phase);
+    let event = store
+        .history(project, first.seq..=first.seq, &filter, page)
+        .map_err(busy)?
+        .items
+        .into_iter()
+        .find(|event| event.stream == stream && event.payload.get("plan_digest") == Some(&digest))
+        .ok_or_else(|| unreadable("the lineage's first check cannot be read"))?;
+    let material = |name: &str| {
+        event
+            .payload
+            .get("material")?
+            .as_array()?
+            .iter()
+            .find(|input| input.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|input| PayloadRef::from_value(input.get("body")?))
+    };
+    match (material(PLAN_INPUT), material(TRUTHS_INPUT)) {
+        (Some(plan), Some(truths)) => Ok(RoundOne { plan, truths }),
+        _ => Err(unreadable(
+            "the lineage's first check's material cannot be read",
+        )),
+    }
+}
+
+/// Whether the body `reference` names is held whole, at the length it was
+/// recorded with.
+fn held_whole<P: Payloads + ?Sized>(store: &P, reference: &PayloadRef) -> Result<bool, Value> {
+    Ok(match store.status(&reference.hash).map_err(busy)? {
+        PayloadStatus::Present { bytes } => bytes == reference.bytes,
+        PayloadStatus::Reduced { .. } | PayloadStatus::Purged { .. } => false,
+    })
+}
+
+/// Whether round 1's draft body `reference` is held whole and reads back as
+/// a plan draft at `digest`.
+fn original_held<P: Payloads + ?Sized>(
+    store: &P,
+    reference: &PayloadRef,
+    digest: Hash,
+) -> Result<bool, Value> {
+    if !held_whole(store, reference)? {
+        return Ok(false);
+    }
+    let mut reader = match store.open(&reference.hash).map_err(busy)? {
+        PayloadBody::Present(reader) => reader,
+        PayloadBody::Gone(_) => return Ok(false),
+    };
+    let mut bytes = Vec::new();
+    if reader.read_to_end(&mut bytes).is_err() {
+        return Ok(false);
+    }
+    let Ok(body) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(false);
+    };
+    Ok(request_digest(&body).is_ok_and(|read| read == digest) && read_plan_draft(&body).is_some())
+}
+
+/// The refusal for a re-check of the lineage of revision order `revision`
+/// whose retained `input` is gone.
+fn material_unavailable(input: &str, revision: &str) -> Value {
+    let what = match input {
+        ORIGINAL => "the draft round 1 checked",
+        _ => "the truths round 1 was bound to",
+    };
+    Refusal::new(
+        MATERIAL_UNAVAILABLE,
+        format!(
+            "the retained copy of {what} is no longer held as recorded, so no re-check can run and nothing was recorded, since a re-check reads the retained copies and never the current draft or truths. Fail revision work order {revision} with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check"
+        ),
+    )
+    .slot("work_order")
+    .details(json!({"input": input}))
+    .value()
+}
+
 /// The refusal for a submit under a revision order whose round 2 was
 /// already issued.
 fn third_round(refusal: &CheckRefusal) -> Value {
@@ -120,6 +260,10 @@ fn third_round(refusal: &CheckRefusal) -> Value {
     .slot("work_order")
     .details(refusal.details())
     .value()
+}
+
+fn busy(error: StoreError) -> Value {
+    store_failed(&error, NOT_RECORDED_BUSY)
 }
 
 fn unreadable(reason: &str) -> Value {
@@ -183,7 +327,7 @@ mod tests {
         policy: &EffectivePolicy,
     ) -> Result<Checked, Value> {
         let checked = check(store, &project(), plan, order, None)?;
-        judge(checked, policy)
+        judge(store, &project(), checked, policy)
     }
 
     /// The round-2 binding `plan` under `order` gets under `policy`.
@@ -274,5 +418,33 @@ mod tests {
         assert_eq!(refusal["slot"], "work_order", "{refusal}");
         assert_eq!(refusal["details"], json!({"work_order": V}));
         assert_eq!(head(&store), before);
+    }
+
+    /// The state of work order `id` as the `work_order` view holds it.
+    fn state(store: &SqliteStore, id: &str) -> Value {
+        crate::work_order::read::order(store, &project(), id)
+            .unwrap()
+            .unwrap()["state"]
+            .clone()
+    }
+
+    #[test]
+    fn a_recheck_over_a_purged_original_substituting_the_current_draft_is_caught() {
+        use crate::planning::check_return::tests::c1_material;
+
+        for (input, name) in [(0, "original"), (1, "truths")] {
+            let (_dir, store, _, _) = lineage_v(vec![fb(), fw()]);
+            let gone = c1_material(&store)[input].body.hash;
+            crate::scope::fixtures::purge_in(&store, &project(), gone, "the owner purged it");
+
+            let before = head(&store);
+            let refusal = judged(&store, &pl2r(), V, &p0()).expect_err("the re-check is refused");
+            assert_eq!(refusal["status"], "refused", "{refusal}");
+            assert_eq!(refusal["code"], "material-unavailable", "{refusal}");
+            assert_eq!(refusal["slot"], "work_order", "{refusal}");
+            assert_eq!(refusal["details"], json!({"input": name}));
+            assert_eq!(head(&store), before);
+            assert_eq!(state(&store, V), "pending");
+        }
     }
 }
