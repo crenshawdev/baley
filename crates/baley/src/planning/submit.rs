@@ -19,7 +19,7 @@ use std::num::NonZeroU32;
 
 use baley_core::plan::{
     PHASE_PLAN_VIEW, PLAN_KIND, PLANNER_ORDER_PENDING, PhaseNotActive, Plan, PlanDraft, PlanFacts,
-    PlanRefusal, Replaces, judge_plan, judge_submit_phase, phase_plan_key,
+    PlanRefusal, Replaces, TruthVersion, judge_plan, judge_submit_phase, phase_plan_key,
 };
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, PlanGate, Role};
 use baley_core::questions::{Cause, Subject, round_of};
@@ -90,6 +90,10 @@ pub struct Checked {
     pub(super) phase_plan: Option<Value>,
     /// The round-2 binding the lineage step attached, or none for round 1.
     pub(super) recheck: Option<Recheck>,
+    /// The truths of the plan's stories the plan was judged under, in its
+    /// story order and each story's truth order, which a re-check compares
+    /// with round 1's (D-11).
+    pub(super) truths: Vec<TruthVersion>,
 }
 
 impl Checked {
@@ -198,6 +202,18 @@ pub(crate) fn checked<S: Views + ?Sized>(
     };
     let plan = judge_plan(submitted, &facts)
         .map_err(|refusal| plan_refused(&refusal, "plan", NOT_RECORDED))?;
+    let truths = plan
+        .stories()
+        .iter()
+        .filter_map(|id| facts.stories.iter().find(|story| story.id == *id))
+        .flat_map(|story| {
+            story.truths.iter().map(|truth| TruthVersion {
+                story: story.id,
+                truth: truth.id.clone(),
+                version: truth.version,
+            })
+        })
+        .collect();
     let evidence = order_evidence(&order.body).ok_or_else(|| {
         failed(
             LEDGER_UNAVAILABLE,
@@ -228,6 +244,7 @@ pub(crate) fn checked<S: Views + ?Sized>(
             .map(str::to_owned),
         phase_plan: read.phase_plan,
         recheck: None,
+        truths,
     })
 }
 

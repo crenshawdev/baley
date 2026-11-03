@@ -12,8 +12,8 @@
 use std::io::Read;
 
 use baley_core::plan::{
-    CheckRefusal, CheckRound, Lineage, PLAN_CHECKED, PreviousCheck, judge_check_round,
-    phase_stream, read_plan_draft,
+    CheckRefusal, CheckRound, Lineage, PLAN_CHECKED, PreviousCheck, TruthVersion,
+    judge_check_round, judge_recheck_truths, phase_stream, read_plan_draft,
 };
 use baley_core::policy::{EffectivePolicy, PlanGate};
 use baley_core::work_order::MATERIAL_UNAVAILABLE;
@@ -41,6 +41,8 @@ pub struct Recheck {
     revision: String,
     /// The lineage's round-1 result.
     first: PreviousCheck,
+    /// The truths round 1 was bound to, which round 2 binds unchanged.
+    truth_versions: Vec<TruthVersion>,
 }
 
 /// One lineage `phase_plan` holds.
@@ -67,7 +69,12 @@ struct Held {
 /// `material-unavailable` at slot `work_order` with `{"input": "original"}`,
 /// and a purged or reduced truths snapshot the same with `{"input":
 /// "truths"}`, since a re-check never substitutes the current draft or
-/// truths (ADR 0037).
+/// truths (ADR 0037). Then the truths the check judged the plan's stories
+/// under go with round 1's versions to `judge_recheck_truths`: a truth
+/// added, removed or re-versioned since is refused `recheck-truths-changed`
+/// at slot `plan` naming each, while an approval that left a truth's text
+/// alone keeps its version and passes (D-11). Round 2 attaches round 1's
+/// truth versions with the lineage.
 ///
 /// The documents the check read are the ones the recording observes, so a
 /// lineage moved since makes the call `ledger-busy`. A lineage, chain or
@@ -111,10 +118,14 @@ pub fn judge<S: Ledger + Payloads + ?Sized>(
     if !held_whole(store, &round_one.truths)? {
         return Err(unavailable(TRUTHS_INPUT));
     }
-    checked.recheck = Some(Recheck {
+    let recheck = Recheck {
         revision: revision.to_owned(),
         first,
-    });
+        truth_versions: round_one.truth_versions,
+    };
+    judge_recheck_truths(&recheck.truth_versions, &checked.truths)
+        .map_err(|refusal| truths_changed(&refusal, revision))?;
+    checked.recheck = Some(recheck);
     Ok(checked)
 }
 
@@ -147,6 +158,8 @@ struct RoundOne {
     plan: PayloadRef,
     /// The reference of round 1's truths snapshot.
     truths: PayloadRef,
+    /// The truths round 1 was bound to.
+    truth_versions: Vec<TruthVersion>,
 }
 
 /// The round-1 `plan.checked` at `first`'s sequence on phase `phase`'s
@@ -184,11 +197,35 @@ fn round_one<L: Ledger + ?Sized>(
             .find(|input| input.get("name").and_then(Value::as_str) == Some(name))
             .and_then(|input| PayloadRef::from_value(input.get("body")?))
     };
-    match (material(PLAN_INPUT), material(TRUTHS_INPUT)) {
-        (Some(plan), Some(truths)) => Ok(RoundOne { plan, truths }),
-        _ => Err(unreadable(
-            "the lineage's first check's material cannot be read",
-        )),
+    let small = |value: &Value, name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    let truth_versions = event
+        .payload
+        .get("truth_versions")
+        .and_then(Value::as_array)
+        .and_then(|truths| {
+            truths
+                .iter()
+                .map(|truth| {
+                    Some(TruthVersion {
+                        story: small(truth, "story")?,
+                        truth: truth.get("truth")?.as_str()?.to_owned(),
+                        version: small(truth, "version")?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+        });
+    match (material(PLAN_INPUT), material(TRUTHS_INPUT), truth_versions) {
+        (Some(plan), Some(truths), Some(truth_versions)) => Ok(RoundOne {
+            plan,
+            truths,
+            truth_versions,
+        }),
+        _ => Err(unreadable("the lineage's first check cannot be read")),
     }
 }
 
@@ -240,6 +277,20 @@ fn material_unavailable(input: &str, revision: &str) -> Value {
     )
     .slot("work_order")
     .details(json!({"input": input}))
+    .value()
+}
+
+/// The refusal for a re-check of the lineage of revision order `revision`
+/// whose truths differ from round 1's.
+fn truths_changed(refusal: &CheckRefusal, revision: &str) -> Value {
+    Refusal::new(
+        refusal.code(),
+        format!(
+            "the truths of the plan's stories are not the ones round 1 was bound to, as the details list, so no re-check can run and nothing was recorded, since changed truths need a new plan submission and a full first check. Fail revision work order {revision} with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check"
+        ),
+    )
+    .slot("plan")
+    .details(refusal.details())
     .value()
 }
 
@@ -446,5 +497,26 @@ mod tests {
             assert_eq!(head(&store), before);
             assert_eq!(state(&store, V), "pending");
         }
+    }
+
+    #[test]
+    fn a_truth_approved_unchanged_refusing_the_recheck_is_caught() {
+        use crate::planning::check_return::tests::tv;
+        use crate::refine::submit::tests::{t1, t2};
+
+        let (_dir, store, _, _) = lineage_v(vec![fb(), fw()]);
+        append(
+            &store,
+            R4,
+            T7,
+            vec![refined(
+                1,
+                "1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c",
+                vec![versioned(t1()), versioned(t2())],
+            )],
+        );
+
+        let round_two = binding(&store, &pl2r(), V, &p0()).expect("round 2");
+        assert_eq!(round_two.truth_versions, tv());
     }
 }
