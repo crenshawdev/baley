@@ -30,7 +30,7 @@ use crate::mcp::capture::{PLACE_LEDGER, TEXT_PURGED, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::questions::read::{SetRead, read as read_set};
 use crate::refine::inputs::{bytes, questions_body};
-use crate::scope::read::{self, Detail, PreviewError};
+use crate::scope::read::{self, Detail, PreviewError, Roadmap};
 use crate::scope::submit::{NOT_RECORDED_BUSY, scope_unread};
 
 /// The input holding the phase's number, goal and detail.
@@ -78,9 +78,9 @@ pub struct PlannerInputs {
     pub inputs: Vec<(&'static str, Vec<u8>)>,
     /// The documents the inputs were read from, each at the sequence that
     /// produced it and read before its content, so the issue can confirm
-    /// none moved: `roadmap`, `phase`, the phase's `phase_detail`, each
-    /// story's `truths`, `phase_plan`, and for a revision the draft's
-    /// `draft` and the set's `questions`.
+    /// none moved: `roadmap`, each story's `truths`, `phase`, the phase's
+    /// `phase_detail`, `phase_plan`, and for a revision the draft's `draft`
+    /// and the set's `questions`.
     pub documents: Vec<ObservedDocument>,
 }
 
@@ -137,28 +137,17 @@ fn read_with<S: Views + Payloads + ?Sized>(
 ) -> Result<PlannerInputs, Value> {
     // Every sequence is read before the content it covers, so a document
     // that moves before its content is read shows as moved at the issue.
-    let roadmap_seq = produced(store, project, ROADMAP_VIEW, roadmap_key())?;
+    let StoriesRead {
+        entries: committed,
+        roadmap: accepted,
+        mut documents,
+    } = read_stories(store, project, stories)?;
     let phase_seq = produced(store, project, PHASE_VIEW, phase_key(phase))?;
     let detail =
         read::detail_document(store, project, phase).map_err(|error| scope_unread(&error))?;
-    let mut documents = vec![
-        observed(ROADMAP_VIEW, roadmap_key(), roadmap_seq),
-        observed(PHASE_VIEW, phase_key(phase), phase_seq),
-    ];
+    documents.push(observed(PHASE_VIEW, phase_key(phase), phase_seq));
     if let Some((key, seq)) = detail {
         documents.push(observed(PHASE_DETAIL_VIEW, key, Some(seq)));
-    }
-    let mut truths = Vec::with_capacity(stories.len());
-    for story in stories {
-        let document = store
-            .get(project, TRUTHS_VIEW, &truths_key(*story))
-            .map_err(busy)?;
-        documents.push(observed(
-            TRUTHS_VIEW,
-            truths_key(*story),
-            document.as_ref().map(|document| document.produced_seq),
-        ));
-        truths.push(document.map(|document| document.body));
     }
     let phase_plan = store
         .get(project, PHASE_PLAN_VIEW, &phase_plan_key(phase))
@@ -175,26 +164,10 @@ fn read_with<S: Views + Payloads + ?Sized>(
         Detail::Text(text) => text,
         Detail::Purged(_) => return Err(detail_purged(phase)),
     };
-    let accepted = read::roadmap(store, project).map_err(|error| scope_unread(&error))?;
     let description = accepted
         .description
         .as_ref()
         .ok_or_else(|| unreadable(ROADMAP_VIEW))?;
-    let mut committed = Vec::with_capacity(stories.len());
-    for (story, truths) in stories.iter().zip(&truths) {
-        // The caller judged the selection on this roadmap, so a story it
-        // no longer holds means the roadmap moved since.
-        let entry = accepted
-            .stories
-            .iter()
-            .find(|entry| entry.id == *story)
-            .ok_or_else(moved)?;
-        committed.push(json!({
-            "id": entry.id,
-            "sentence": entry.sentence,
-            "truths": current_truths(truths.as_ref())?,
-        }));
-    }
 
     let mut inputs = vec![
         (
@@ -238,6 +211,65 @@ fn read_with<S: Views + Payloads + ?Sized>(
         }
     }
     Ok(PlannerInputs { inputs, documents })
+}
+
+/// The `stories` input's entries for a selection, read with the roadmap
+/// and the documents they came from.
+pub(crate) struct StoriesRead {
+    /// Each story in the selection's order, `{id, sentence, truths}`, its
+    /// truths its current ones with the members a planner reads.
+    pub entries: Vec<Value>,
+    /// The roadmap the sentences came from.
+    pub roadmap: Roadmap,
+    /// The `roadmap` document, then each story's `truths` document, each at
+    /// the sequence that produced it.
+    pub documents: Vec<ObservedDocument>,
+}
+
+/// Reads the `stories` input's entries for `stories` of `project`, in that
+/// order: each story's sentence from the roadmap and its current truths.
+/// The planner's `stories` input and the checker's `truths` input both take
+/// their entries from here, so a checker reads a story as the planner did.
+/// A story the roadmap no longer holds means it moved since the caller
+/// judged the selection. A fault is the `failed` answer to give.
+pub(crate) fn read_stories<S: Views + ?Sized>(
+    store: &S,
+    project: &ProjectId,
+    stories: &[u32],
+) -> Result<StoriesRead, Value> {
+    let roadmap_seq = produced(store, project, ROADMAP_VIEW, roadmap_key())?;
+    let mut documents = vec![observed(ROADMAP_VIEW, roadmap_key(), roadmap_seq)];
+    let mut truths = Vec::with_capacity(stories.len());
+    for story in stories {
+        let document = store
+            .get(project, TRUTHS_VIEW, &truths_key(*story))
+            .map_err(busy)?;
+        documents.push(observed(
+            TRUTHS_VIEW,
+            truths_key(*story),
+            document.as_ref().map(|document| document.produced_seq),
+        ));
+        truths.push(document.map(|document| document.body));
+    }
+    let roadmap = read::roadmap(store, project).map_err(|error| scope_unread(&error))?;
+    let mut entries = Vec::with_capacity(stories.len());
+    for (story, truths) in stories.iter().zip(&truths) {
+        let entry = roadmap
+            .stories
+            .iter()
+            .find(|entry| entry.id == *story)
+            .ok_or_else(moved)?;
+        entries.push(json!({
+            "id": entry.id,
+            "sentence": entry.sentence,
+            "truths": current_truths(truths.as_ref())?,
+        }));
+    }
+    Ok(StoriesRead {
+        entries,
+        roadmap,
+        documents,
+    })
 }
 
 /// The capacity `policy` sets, or none.

@@ -14,6 +14,10 @@
 /// The owner's approval of a plan draft: the first step and the recording.
 pub mod approve;
 
+/// The plan checker's work order: its round-1 preparation and issue on
+/// `phase/<n>`, and the pending lookup and refusal.
+pub mod checker;
+
 /// `baley plan approve`: the owner's approval of a plan draft at the
 /// terminal.
 pub mod command;
