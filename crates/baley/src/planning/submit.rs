@@ -222,7 +222,10 @@ pub(crate) fn checked<S: Views + ?Sized>(
 /// The decision observes the order's and the facts' documents, so a phase
 /// made active, a plan approved or a truth revised since the check makes the
 /// call `ledger-busy` with nothing recorded; with no phase active at the
-/// check it declares that the active index still holds none. A decision run
+/// check it declares that the active index still holds none. It declares
+/// that no checker order of the phase is pending, as the gated recording
+/// does, so one issued since the check, whose issue moves none of those
+/// documents, makes the call `ledger-busy` too (D-03). A decision run
 /// without the check's read records nothing.
 ///
 /// The receipt: `status`, `digest`, `kind`, `phase`, `stories`, `size` (the
@@ -252,13 +255,15 @@ pub fn record<L: Ledger + ?Sized>(
         let mut receipt = draft_receipt(checked, &draft, at);
         receipt.insert("set".into(), json!(id));
         let answer = with_now(receipt, &id, &round_of(&opened_facts(plan.questions())));
+        let mut absences = checked.absences.clone();
+        absences.extend(checker_absences(plan.phase()));
         Ok(Decision {
             kind: OutcomeKind::Done,
             answer: with_preview(answer, &draft),
             sensitive: false,
             observed: Observed {
                 documents: checked.documents.clone(),
-                absences: checked.absences.clone(),
+                absences,
                 ..Observed::default()
             },
             git: None,
@@ -1012,6 +1017,30 @@ pub(crate) mod tests {
             &submit_command(O, &checked, R3, T6),
             Some(&checked),
             &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            C1,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_gate_off_submit_landing_beside_a_checker_order_issued_since_its_check_is_caught() {
+        use crate::planning::checker::tests::{C1, C9, issued_alone};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let checked = check(&store, &project(), &pl1(), O, None).expect("PL1 is accepted");
+        let c9 = issued_alone(&store, C9, R2, T5);
+        assert_eq!(c9["status"], "ok", "{c9}");
+        let before = head(&store);
+        let answer = record_gated(
+            &store,
+            &submit_command(O, &checked, R3, T6),
+            Some(&checked),
+            &poff(),
             Host::ClaudeCode,
             &n0(),
             C1,
