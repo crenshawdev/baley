@@ -225,6 +225,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "3",
         "a0856d65f56ecffaa9621baa64041a342edf953a9ba5e4e779e136eecd4e6cb8",
     ),
+    (
+        "bal-phase-checker",
+        "4",
+        "98c324fcdacf597e225bcfccc9231c76165f7271b59cb93441347a7c8e0f6cbe",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1053,7 +1058,7 @@ fn a_checker_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "3");
+    assert_eq!(text.version, "4");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -1183,6 +1188,15 @@ fn a_checker_input_list_promising_a_round_two_binding_or_hiding_the_scope_is_cau
         wrong.is_empty(),
         "the checker input list misstates a round: {wrong:?}"
     );
+}
+
+#[test]
+fn a_checker_text_dropping_an_open_first_round_blocker_from_round_two_is_caught() {
+    let input = section(served_text("bal-phase-checker"), "<input>", "</input>");
+    // PLN-R16: both scopes check every first-round blocker is closed, and a
+    // finding has no member marking one open, so it must come back.
+    let rule = "Every first-round blocker the revision has not closed is returned again as a `blocker` finding, beside any new defects.";
+    assert!(input.contains(rule), "the round-2 rule lacks: {rule}");
 }
 
 #[test]
