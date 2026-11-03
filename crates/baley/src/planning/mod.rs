@@ -16,6 +16,10 @@
 /// The owner's approval of a plan draft: the first step and the recording.
 pub mod approve;
 
+/// The plan checker's return: the check of a checker order's findings and
+/// the recording of its round-1 result.
+pub mod check_return;
+
 /// The plan checker's work order: its round-1 preparation and issue on
 /// `phase/<n>`, and the pending lookup and refusal.
 pub mod checker;
@@ -182,12 +186,18 @@ pub(crate) mod fixtures {
     }
 
     /// PB: P0 with a project file setting the plan gate `blocking`.
-    #[expect(
-        dead_code,
-        reason = "phase 10 plan 6's plan-gate test is its first reader"
-    )]
     pub(crate) fn pb() -> EffectivePolicy {
         gated("blocking")
+    }
+
+    /// PDF: P0 with a project file setting the plan gate `deferred`.
+    pub(crate) fn pdf() -> EffectivePolicy {
+        gated("deferred")
+    }
+
+    /// PAJ: P0 with a project file setting the plan gate `adjudicated`.
+    pub(crate) fn paj() -> EffectivePolicy {
+        gated("adjudicated")
     }
 
     /// P0 with a project file `/r/baley.toml` setting the plan gate to
