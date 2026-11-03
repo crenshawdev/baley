@@ -220,6 +220,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "2",
         "3fbb8c3337ae015099939ee1aeefbdb3482827ac1edb82e213d916010068766a",
     ),
+    (
+        "bal-phase-checker",
+        "3",
+        "a0856d65f56ecffaa9621baa64041a342edf953a9ba5e4e779e136eecd4e6cb8",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1048,7 +1053,7 @@ fn a_checker_text_given_a_help_row_or_a_skill_stub_is_caught() {
         panic!("{identity} is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "2");
+    assert_eq!(text.version, "3");
     assert!(
         !crate::help::table::COMMANDS
             .iter()
@@ -1144,6 +1149,39 @@ fn a_checker_text_judging_by_a_phase_goal_or_another_plans_truths_is_caught() {
     assert!(
         wrong.is_empty(),
         "the checker text misjudges one plan's scope: {wrong:?}"
+    );
+}
+
+#[test]
+fn a_checker_input_list_promising_a_round_two_binding_or_hiding_the_scope_is_caught() {
+    let input = section(served_text("bal-phase-checker"), "<input>", "</input>");
+    // Plan 5's round-1 inputs and D-09's round-2 material references, where
+    // the scope shows only as `delta` held or not (PLN-R16).
+    let mut wrong: Vec<&str> = [
+        "A round-1 order holds `check`, the check's binding",
+        "`plan`, the plan as submitted",
+        "`truths`, the stories it serves",
+        "A round-2 order holds `original`",
+        "`plan`, the revised plan",
+        "`blockers`, every first-round blocker",
+        "under the `diff` scope only, `delta`",
+        "A round-2 order holding `delta` is the `diff` scope, and one without it is `full`",
+    ]
+    .into_iter()
+    .filter(|rule| !input.contains(rule))
+    .collect();
+    let round_two = input
+        .lines()
+        .find(|line| line.starts_with("- A round-2 order holds"))
+        .unwrap_or("");
+    wrong.extend(
+        ["`check`", "binding"]
+            .into_iter()
+            .filter(|name| round_two.contains(name)),
+    );
+    assert!(
+        wrong.is_empty(),
+        "the checker input list misstates a round: {wrong:?}"
     );
 }
 

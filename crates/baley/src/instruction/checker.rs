@@ -69,11 +69,14 @@
 //! These rules are added under ADR 0049, which lets a ported text carry a
 //! rule a design requirement states, each stated by design 0005:
 //!
-//! - What the order carries in each round: the check's binding, the plan as
-//!   submitted and its stories' approved truths in round 1; the original and
-//!   revised plans, the same truths, every first-round blocker and, for the
-//!   `diff` scope, the changes in round 2 (PLN-R16, section 6
-//!   `plan.check_issued` and `plan.checked`).
+//! - What the order holds in each round, by input name: in round 1 `check`,
+//!   the check's binding, `plan`, the plan as submitted, and `truths`, its
+//!   stories' approved truths; in round 2 `original`, `plan`, `truths`,
+//!   `blockers` and, for the `diff` scope only, `delta`, the changes. A
+//!   round-2 order's binding is recorded in `plan.check_issued`, not given
+//!   as an input, so the text says a round-2 order holding `delta` is the
+//!   `diff` scope and one without it `full` (PLN-R16, section 6
+//!   `plan.check_issued` and `plan.checked`, D-09).
 //! - The truths a plan must deliver are the served truths its evidence map
 //!   names. A served truth the map does not name is delivered by an approved
 //!   plan of the phase and is no finding, since a submit whose served truths
@@ -94,11 +97,11 @@
 pub const IDENTITY: &str = "bal-phase-checker";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "2";
+pub const VERSION: &str = "3";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the
 /// code so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "3fbb8c3337ae015099939ee1aeefbdb3482827ac1edb82e213d916010068766a";
+pub const HASH: &str = "a0856d65f56ecffaa9621baa64041a342edf953a9ba5e4e779e136eecd4e6cb8";
 
 /// What the plan checker reads once it holds a check order, in either round.
 /// Ported from Cadence tag `v3.9.4`:
@@ -113,12 +116,11 @@ You are not the executor and not a style reviewer. A plan can have every field f
 </role>
 
 <input>
-You already hold your work order: you read it with `baley_query` `document`, and it sent you here. Each input in the order's `inputs` holds JSON in its `text`, and together they carry:
-- the check's binding: its round, its scope, the digests of the plans it reads and the versions of the truths it reads them against.
-- in round 1, the plan as submitted, and the stories it serves, each with its approved truths: each truth's id, its version and its sentence.
-- in round 2, the original plan, the revised plan, the same truths, every first-round blocker, and under the `diff` scope the changes since the checked plan: every addition, modification and deletion, with its before and after values.
+You already hold your work order: you read it with `baley_query` `document`, and it sent you here. Each input in the order's `inputs` holds JSON in its `text`:
+- A round-1 order holds `check`, the check's binding: round 1, the phase, the `full` scope, the plan's digest, the versions of the truths it reads the plan against and the version of the policy that chose the scope; `plan`, the plan as submitted; and `truths`, the stories it serves, each with its approved truths: each truth's id, its version and its sentence.
+- A round-2 order holds `original`, the plan the first check read; `plan`, the revised plan; `truths`, the same truths; `blockers`, every first-round blocker as returned; and, under the `diff` scope only, `delta`, the changes since the checked plan: every addition, modification and deletion, with its before and after values.
 
-Round 1 reads the whole plan. For round 2, follow the work order's scope, check every first-round blocker and report new defects in the selected material: under `full` the whole revised plan, under `diff` the changes.
+Round 1 reads the whole plan. A round-2 order holding `delta` is the `diff` scope, and one without it is `full`. For round 2, follow the work order's scope, check every first-round blocker and report new defects in the selected material: under `full` the whole revised plan, under `diff` the changes.
 </input>
 
 <rung>
