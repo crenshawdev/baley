@@ -1,12 +1,14 @@
 //! The owner's approval of a plan draft by its digest (design 0005 section
-//! 5 `plan approve`, PLN-R14, PLN-R15, PLN-R26, PLN-R27, D-02, D-06, D-07,
-//! D-14, D-16), in two steps.
+//! 5 `plan approve`, PLN-R14 to PLN-R16, PLN-R26, PLN-R27, D-02, D-06,
+//! D-07, D-14, D-16), in two steps.
 //!
 //! The first step reads and judges outside any transaction, so a refusal
-//! records nothing: the draft in D-16's order, then `phase-not-active` when
-//! a different phase is active, then the plan judged again against the
-//! phase as it stands now. Build 4 T14 adds `review-unsettled` after these
-//! refusals, judged against the same digest. A replacement draft is judged
+//! records nothing: the draft in D-16's order, with `check-unfinished` for a
+//! draft whose plan check has not finished (D-08), then `phase-not-active`
+//! when a different phase is active, then the plan judged again against the
+//! phase as it stands now. A checker's findings refuse nothing (D-04). Build
+//! 4 T14 adds `review-unsettled` after these refusals, judged against the
+//! same digest. A replacement draft is judged
 //! by the replacement judge again before its plan is. A first step whose
 //! capacity or suite differs from the policy the approval is recorded under
 //! is run again under that policy. The second step records one
@@ -100,7 +102,12 @@ struct Approval {
 /// newest read, standing as the newest, so the draft is `stale-draft`
 /// rather than a ledger fault), and last every `plan.approved` naming the
 /// digest, so one landing after that read moves the `phase_plan` document
-/// the second step observes. It judges them in D-16's order, then refuses
+/// the second step observes. The draft's check is unfinished when no set
+/// opened after its latest submission is held for it: its round 1 is
+/// pending, its revision is awaited or its round 2 is pending, since with
+/// the plan gate not `off` a draft's set opens only when its last check
+/// returns (D-08). It judges them in D-16's order, `check-unfinished` after
+/// `draft-approved` and before `question-open`, then refuses
 /// `phase-not-active` naming another active phase (D-02), then gathers the
 /// phase's facts now with the policy's capacity and judges the plan again
 /// with `judge_plan` (D-16), every refusal at slot `digest`. The suite is
@@ -158,8 +165,10 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
     }];
     let current = current_draft(phase_plan.as_ref().map(|document| &document.body), digest)?;
     // The `phase_plan` document is read after the newest index, so a draft
-    // it holds in this one's place was submitted since: judged the newest,
-    // this draft is refused `stale-draft`, as a later run refuses it.
+    // it holds in this one's place and submitted after the newest read was
+    // submitted since: judged the newest, this draft is refused
+    // `stale-draft`, as a later run refuses it. One submitted before is an
+    // earlier draft whose set this draft's check has not yet replaced.
     let newest = match current {
         Current::Other(other)
             if newest
@@ -168,13 +177,25 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
         {
             let read = preview(store, project, other).map_err(preview_failed)?;
             let (plan, other_seq) = accept(&read)?;
-            Some((read.digest, other_seq, plan))
+            if newest
+                .as_ref()
+                .is_none_or(|(_, newest_seq, _)| other_seq > *newest_seq)
+            {
+                Some((read.digest, other_seq, plan))
+            } else {
+                newest
+            }
         }
         _ => newest,
     };
+    // With the plan gate not `off` a draft's set opens only when its last
+    // check returns, so a draft with no set opened after its latest
+    // submission is one whose check has not finished (D-08). A set the
+    // phase holds for the same digest opened before that submission is an
+    // earlier check's.
     let set = match current {
-        Current::This(set) => Some(set),
-        Current::None | Current::Other(_) => None,
+        Current::This(set) if set_opened(store, project, &set)? > seq => Some(set),
+        Current::This(_) | Current::None | Current::Other(_) => None,
     };
     let facts = match &set {
         Some(set) => match read_set(store, project, set).map_err(busy)? {
@@ -215,6 +236,7 @@ pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
             owner: &approval.owner,
             at: &approval.at,
         }),
+        check_unfinished: set.is_none(),
         set: &facts,
     })
     .map_err(|refusal| refused(&refusal))?;
@@ -544,14 +566,29 @@ fn submitted_body<L: Ledger + ?Sized>(
         .and_then(|event| PayloadRef::from_value(&event.payload["body"])))
 }
 
+/// The sequence that opened question set `set`, as its `questions` document
+/// holds it. A set the view does not hold or whose sequence cannot be read
+/// is a ledger fault.
+fn set_opened<S: Views + ?Sized>(store: &S, project: &ProjectId, set: &str) -> Result<u64, Value> {
+    store
+        .get(project, QUESTIONS_VIEW, &questions_key(set))
+        .map_err(|error| store_failed(&error, NOT_RECORDED_BUSY))?
+        .and_then(|document| document.body.get("seq").and_then(Value::as_u64))
+        .ok_or_else(|| unreadable("the draft's question set cannot be read"))
+}
+
 /// The phase's current plan draft as its `phase_plan` document holds it,
 /// beside the draft being approved.
 enum Current {
-    /// The phase holds no unapproved draft.
+    /// The phase holds no unapproved draft's set: none was opened since the
+    /// last approval, as while a first draft's check runs.
     None,
-    /// The draft being approved is current, with its set's id.
+    /// The draft being approved holds the phase's latest set, with its id,
+    /// which may be an earlier submission's of the same digest.
     This(String),
-    /// Another draft, by its digest, replaced it (D-03).
+    /// Another draft, by its digest, holds the phase's latest set: one
+    /// submitted since that replaced this draft (D-03), or an earlier one
+    /// whose set this draft's check has not yet replaced (D-08).
     Other(Hash),
 }
 
@@ -650,6 +687,9 @@ fn refused(refusal: &PlanApprovalRefusal) -> Value {
         }
         PlanApprovalRefusal::DraftApproved { .. } => {
             "this draft was already approved after its latest submission, so it was not approved again. The details name that approval"
+        }
+        PlanApprovalRefusal::CheckUnfinished => {
+            "the draft's check has not finished, so it cannot be approved until the check's last round returns and its question set opens, and nothing was approved"
         }
         PlanApprovalRefusal::QuestionOpen { .. } => {
             "a question of the draft's set is neither answered nor deferred, so the plan was not approved. The details name each open question"
@@ -1167,5 +1207,46 @@ pub(crate) mod tests {
 
         digest_of(&plan_submitted(&store, &pl1(), REVISION, None, R4, T7));
         refused_with(&store, x2, &p0(), "stale-draft");
+    }
+
+    #[test]
+    fn a_draft_awaiting_its_revision_approved_or_a_newer_draft_read_as_unfinished_is_caught() {
+        use crate::planning::check_return::tests::{V, fb, gated, returned};
+        use crate::planning::checker::tests::C1;
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x2 = digest_of(&gated(&store, &pl2(), O, &p0(), C1, R2, T5));
+        let receipt = returned(&store, C1, vec![fb()], &p0(), V, R3, T6, 5);
+        assert_eq!(receipt["revision"]["work_order"], V, "{receipt}");
+        refused_with(&store, x2, &p0(), "check-unfinished");
+
+        digest_of(&gated(&store, &pl3(), O, &poff(), C1, R4, T7));
+        let stale = refused_with(&store, x2, &p0(), "stale-draft");
+        assert_eq!(stale["details"], json!({"path": "goal"}));
+    }
+
+    #[test]
+    fn an_identical_resubmit_read_as_finished_by_its_earlier_set_is_caught() {
+        use crate::planning::check_return::tests::{V, fw, gated, returned};
+        use crate::planning::checker::tests::C1;
+        use crate::planning::order::tests::O2;
+        use crate::planning::phase_plan::tests::planned;
+
+        /// C2, the identical draft's checker order.
+        const C2: &str = "c2c2c2c2-2a2b-4c2d-8e2f-303132333435";
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x2 = digest_of(&gated(&store, &pl2(), O, &p0(), C1, R2, T5));
+        let receipt = returned(&store, C1, vec![fw()], &p0(), V, R3, T6, 5);
+        assert!(receipt["set"].is_string(), "{receipt}");
+        let ordered = planned(&store, &[1], R4, T7, O2);
+        assert_eq!(ordered["work_order"], O2, "{ordered}");
+        let again = gated(&store, &pl2(), O2, &p0(), C2, R5, T8);
+        assert_eq!(again["check"]["work_order"], C2, "{again}");
+        assert_eq!(digest_of(&again), x2);
+
+        refused_with(&store, x2, &p0(), "check-unfinished");
     }
 }

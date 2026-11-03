@@ -44,7 +44,8 @@ mod submission;
 mod task;
 
 pub use approval::{
-    ANSWER_NOT_APPLIED, DraftRead, PlanApprovalFacts, PlanApprovalRefusal, judge_plan_approval,
+    ANSWER_NOT_APPLIED, CHECK_UNFINISHED, DraftRead, PlanApprovalFacts, PlanApprovalRefusal,
+    judge_plan_approval,
 };
 pub use check::{
     CHECKER_ORDER_PENDING, CheckRefusal, CheckRound, FINDING_SHAPE, Findings, Lineage,

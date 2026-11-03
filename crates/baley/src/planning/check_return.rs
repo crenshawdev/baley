@@ -897,4 +897,108 @@ pub(crate) mod tests {
         assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
     }
+
+    /// Store C with O, then PL2 through the gated recording under P0 as
+    /// C1, whose receipt must name C1 and give no preview, set or round.
+    /// Gives the store and X2.
+    fn pl2_gated() -> (tempfile::TempDir, SqliteStore, Hash) {
+        let (dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = gated(&store, &pl2(), O, &p0(), C1, R2, T5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["check"]["work_order"], C1, "{receipt}");
+        for member in ["preview", "set", "now"] {
+            assert!(receipt.get(member).is_none(), "{member}: {receipt}");
+        }
+        let x2 = Hash::from_hex(receipt["digest"].as_str().unwrap()).unwrap();
+        (dir, store, x2)
+    }
+
+    /// The approval's first step for `digest` under P0, which must refuse
+    /// with `code` at slot `digest` and record nothing.
+    fn approval_refused(store: &SqliteStore, digest: Hash, code: &str) {
+        let before = head(store);
+        let refusal = crate::planning::approve::judge(store, &project(), digest, &p0())
+            .expect_err("the approval is refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], code, "{refusal}");
+        assert_eq!(refusal["slot"], "digest", "{refusal}");
+        assert_eq!(head(store), before);
+    }
+
+    #[test]
+    fn a_checked_draft_previewed_approved_mid_check_or_given_two_revisions_is_caught() {
+        // Pending: round 1 has not returned.
+        let (_dir, store, x2) = pl2_gated();
+        approval_refused(&store, x2, "check-unfinished");
+        let before = head(&store);
+        let refusal = submit::check(&store, &project(), &pl3(), O, None)
+            .expect_err("a submit beside the checker order is refused");
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "checker-order-pending", "{refusal}");
+        assert_eq!(refusal["details"], json!({"work_order": C1}));
+        assert_eq!(head(&store), before);
+
+        // Blocker: one revision order, no set.
+        let (_dir, store, x2) = pl2_gated();
+        let receipt = returned(&store, C1, vec![fb(), fw()], &p0(), V, R3, T6, 5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["round"], 1, "{receipt}");
+        assert_eq!(receipt["digest"], x2.to_hex(), "{receipt}");
+        assert_eq!(receipt["findings"], json!([fb(), fw()]));
+        assert_eq!(receipt["revision"]["work_order"], V, "{receipt}");
+        let events = history(&store);
+        let mine: Vec<_> = events.iter().filter(|e| e.request_id.0 == R3).collect();
+        let orders: Vec<_> = mine
+            .iter()
+            .filter(|e| e.type_name == "work_order.issued")
+            .collect();
+        assert_eq!(orders.len(), 1);
+        let order = &orders[0].payload;
+        assert_eq!(order["id"], V);
+        assert_eq!(order["role"], "planner");
+        assert_eq!(order["subject"], "phase/1");
+        assert_eq!(order["attempt"], 1);
+        assert_eq!(order["parent"], Value::Null);
+        assert_eq!(
+            crate::refine::order::tests::input_names(orders[0]),
+            [
+                "phase",
+                "stories",
+                "description",
+                "approved_items",
+                "draft",
+                "findings"
+            ]
+        );
+        assert!(mine.iter().all(|e| e.type_name != "questions.opened"));
+        approval_refused(&store, x2, "check-unfinished");
+
+        // Warnings: the set opens and the draft is previewed, no revision.
+        let (_dir, store, x2) = pl2_gated();
+        let receipt = returned(&store, C1, vec![fw()], &p0(), V, R3, T6, 5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["round"], 1, "{receipt}");
+        assert_eq!(receipt["findings"], json!([fw()]));
+        assert_eq!(
+            receipt["preview"],
+            crate::planning::submit::tests::as_drafted(pl2())
+        );
+        assert!(receipt["set"].is_string(), "{receipt}");
+        assert_eq!(receipt["now"]["round"], 1, "{receipt}");
+        assert_eq!(
+            receipt["now"]["current"],
+            json!([{"id": "q1", "question": "Which store holds the ledger?",
+                "recommended": "SQLite"}])
+        );
+        assert!(receipt.get("revision").is_none(), "{receipt}");
+        let events = history(&store);
+        assert!(
+            events
+                .iter()
+                .filter(|e| e.request_id.0 == R3)
+                .all(|e| { e.type_name != "work_order.issued" || e.payload["role"] != "planner" })
+        );
+        approval_refused(&store, x2, "question-open");
+    }
 }

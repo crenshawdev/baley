@@ -3,8 +3,9 @@
 //!
 //! An approval is judged on facts the binary read, in one fixed order, so
 //! one approval always gets one answer: the draft, its staleness, an earlier
-//! approval, then the draft's question set. Judging the plan again against
-//! the phase as it stands is the binary's next step, with `judge_plan`.
+//! approval, an unfinished check, then the draft's question set. Judging the
+//! plan again against the phase as it stands is the binary's next step,
+//! with `judge_plan`.
 
 use std::collections::HashSet;
 
@@ -20,6 +21,10 @@ use crate::truth::QUESTION_OPEN;
 /// question set rejected the recommended answer, so the plan does not yet
 /// apply it (PLN-R27).
 pub const ANSWER_NOT_APPLIED: &str = "answer-not-applied";
+/// The refusal code for approving a plan draft whose check has not
+/// finished: its round 1 pending, its revision awaited or its round 2
+/// pending, so its question set is not yet open (PLN-R16, D-08).
+pub const CHECK_UNFINISHED: &str = "check-unfinished";
 
 // The members in the order the plan judge reads them, which is the order a
 // stale path is looked for in and the order the delta lists changes in.
@@ -66,6 +71,8 @@ pub enum PlanApprovalRefusal {
     /// The draft was approved by `owner` at `at` after its latest
     /// submission.
     DraftApproved { owner: String, at: String },
+    /// The draft's check has not finished.
+    CheckUnfinished,
     /// These questions of the draft's set are neither answered nor
     /// deferred, in submitted order.
     QuestionOpen { questions: Vec<String> },
@@ -81,6 +88,7 @@ impl PlanApprovalRefusal {
             Self::UnknownDraft => UNKNOWN_DRAFT,
             Self::StaleDraft { .. } => STALE_DRAFT,
             Self::DraftApproved { .. } => DRAFT_APPROVED,
+            Self::CheckUnfinished => CHECK_UNFINISHED,
             Self::QuestionOpen { .. } => QUESTION_OPEN,
             Self::AnswerNotApplied { .. } => ANSWER_NOT_APPLIED,
         }
@@ -89,7 +97,7 @@ impl PlanApprovalRefusal {
     /// What the refusal names, as its answer's details, or none.
     pub fn details(&self) -> Option<Value> {
         match self {
-            Self::UnknownDraft => None,
+            Self::UnknownDraft | Self::CheckUnfinished => None,
             Self::StaleDraft { path } => Some(json!({"path": path})),
             Self::DraftApproved { owner, at } => Some(json!({"owner": owner, "at": at})),
             Self::QuestionOpen { questions } | Self::AnswerNotApplied { questions } => {
@@ -121,6 +129,9 @@ pub struct PlanApprovalFacts<'a> {
     /// The `plan.approved` of this digest recorded after its latest
     /// submission, or `None`.
     pub approved: Option<PriorApproval<'a>>,
+    /// Whether the target draft's check has not finished, so its set is
+    /// not yet open (D-08).
+    pub check_unfinished: bool,
     /// Everything recorded about the target draft's question set.
     pub set: &'a SetFacts,
 }
@@ -129,10 +140,12 @@ pub struct PlanApprovalFacts<'a> {
 /// when the draft or its event is missing, or no newest draft is listed;
 /// `stale-draft` when the newest plan draft of the phase is not this one,
 /// with the first differing path; `draft-approved` naming the earlier
-/// approval; `question-open` naming every question neither answered nor
-/// deferred; and `answer-not-applied` naming every question whose answer
-/// rejected its recommendation. A deferral leaves the plan on the
-/// recommended answer, so it is never taken for a rejection (PLN-R27).
+/// approval; `check-unfinished` when the draft's check has not finished, so
+/// its set is not yet open (D-08); `question-open` naming every question
+/// neither answered nor deferred; and `answer-not-applied` naming every
+/// question whose answer rejected its recommendation. A deferral leaves the
+/// plan on the recommended answer, so it is never taken for a rejection
+/// (PLN-R27). A checker's findings refuse nothing here (D-04).
 pub fn judge_plan_approval(facts: &PlanApprovalFacts) -> Result<(), PlanApprovalRefusal> {
     let Some(target) = facts.target.filter(|_| facts.recorded) else {
         return Err(PlanApprovalRefusal::UnknownDraft);
@@ -152,6 +165,9 @@ pub fn judge_plan_approval(facts: &PlanApprovalFacts) -> Result<(), PlanApproval
             owner: approved.owner.into(),
             at: approved.at.into(),
         });
+    }
+    if facts.check_unfinished {
+        return Err(PlanApprovalRefusal::CheckUnfinished);
     }
     let set = facts.set;
     let answered: HashSet<&str> = set.answers.iter().map(|a| a.question.as_str()).collect();
@@ -380,6 +396,7 @@ mod tests {
                 owner: "Ada Owner",
                 at: T,
             }),
+            check_unfinished: false,
             set: &q2_open,
         };
 
@@ -429,6 +446,7 @@ mod tests {
                     plan: newest,
                 }),
                 approved: None,
+                check_unfinished: false,
                 set: &empty,
             })
         };
@@ -469,6 +487,7 @@ mod tests {
                 recorded: true,
                 newest: Some(draft),
                 approved: None,
+                check_unfinished: false,
                 set,
             })
         };
@@ -484,6 +503,60 @@ mod tests {
         assert_eq!(
             judged(&set(Vec::new(), Vec::new())),
             Err(("question-open", Some(json!({"questions": ["q1", "q2"]}))))
+        );
+    }
+
+    #[test]
+    fn an_unfinished_check_approved_or_judged_out_of_order_is_caught() {
+        let target = recorded(p1q());
+        let newer = recorded(p1());
+        let draft = DraftRead {
+            digest: x(),
+            plan: &target,
+        };
+        let none_open = SetFacts {
+            questions: Vec::new(),
+            answers: Vec::new(),
+            deferrals: Vec::new(),
+            abandoned: None,
+        };
+        let q2_open = set(vec![answer("q1", true)], Vec::new());
+        let mut facts = PlanApprovalFacts {
+            target: Some(draft),
+            recorded: true,
+            newest: Some(draft),
+            approved: None,
+            check_unfinished: true,
+            set: &none_open,
+        };
+
+        assert_eq!(answer_of(&facts), Err(("check-unfinished", None)));
+        facts.approved = Some(PriorApproval {
+            owner: "Ada Owner",
+            at: T,
+        });
+        assert_eq!(
+            answer_of(&facts),
+            Err((
+                "draft-approved",
+                Some(json!({"owner": "Ada Owner", "at": T}))
+            ))
+        );
+        facts.approved = None;
+        facts.newest = Some(DraftRead {
+            digest: y(),
+            plan: &newer,
+        });
+        assert_eq!(
+            answer_of(&facts),
+            Err(("stale-draft", Some(json!({"path": "questions[0]"}))))
+        );
+        facts.newest = Some(draft);
+        facts.check_unfinished = false;
+        facts.set = &q2_open;
+        assert_eq!(
+            answer_of(&facts),
+            Err(("question-open", Some(json!({"questions": ["q2"]}))))
         );
     }
 }
