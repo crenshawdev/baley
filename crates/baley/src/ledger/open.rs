@@ -37,18 +37,21 @@ use crate::update::events::register_update_events;
 /// `phase.reordered` and `phase.withdrawn`, `work_order.issued` and
 /// `work_order.failed`, the four question types `questions.opened`,
 /// `question.answered`, `question.deferred` and `questions.abandoned`,
-/// `story.refined`, and the four plan types `plan.approved`,
-/// `plan.replaced`, `plan.continuation` and `plan.continuation_followed`
-/// understood by the CLI, and declares view set version 14 over twenty
-/// views, the seventeen of view set 13 and `evidence_map`, `phase_plan` and
-/// `plan`: `backlog capture checkout claim_scope draft evidence_map guard
-/// guard_policy install model_catalog phase phase_detail phase_plan plan
-/// policy questions request roadmap truths work_order`. View set 13 covered
-/// the `work_order` view's version 2 and the `roadmap` view's version 3;
-/// view set 14 also covers the `backlog` view's version 4. The install view
-/// holds only install records. Update outcomes and provider acknowledgements
-/// are read from their streams and have no projector. A project brought to
-/// view set 14 is read-only for older binaries.
+/// `story.refined`, and the six plan types `plan.approved`,
+/// `plan.replaced`, `plan.continuation`, `plan.continuation_followed`,
+/// `plan.check_issued` and `plan.checked` understood by the CLI, and
+/// declares view set version 15 over twenty views, the seventeen of view
+/// set 13 and `evidence_map`, `phase_plan` and `plan`: `backlog capture
+/// checkout claim_scope draft evidence_map guard guard_policy install
+/// model_catalog phase phase_detail phase_plan plan policy questions request
+/// roadmap truths work_order`. View set 13 covered the `work_order` view's
+/// version 2 and the `roadmap` view's version 3; view set 14 also covered
+/// the `backlog` view's version 4; view set 15 covers the `phase_plan`
+/// view's version 2 and the `work_order` view's version 3, which project
+/// the check events. The install view holds only install records. Update
+/// outcomes and provider acknowledgements are read from their streams and
+/// have no projector. A project brought to view set 15 is read-only for
+/// older binaries.
 /// The startup `quick_check` is off for command-line callers.
 pub(crate) fn options() -> Options {
     let mut registry = Registry::new();
@@ -89,7 +92,7 @@ pub(crate) fn options() -> Options {
             Box::new(PlanProjector::new()),
             Box::new(EvidenceMapProjector::new()),
         ],
-        view_set_version: NonZeroU32::new(14).expect("nonzero"),
+        view_set_version: NonZeroU32::new(15).expect("nonzero"),
         ..Options::default()
     }
 }
@@ -357,6 +360,48 @@ pub(crate) mod tests {
         options
     }
 
+    /// The options as they stood at view set 14, before the check events
+    /// and the `phase_plan` and `work_order` views that project them.
+    fn view_set_14() -> Options {
+        use baley_core::plan::{
+            PLAN_APPROVED, PLAN_CONTINUATION, PLAN_CONTINUATION_FOLLOWED, PLAN_REPLACED,
+        };
+
+        let mut options = view_set_13();
+        let mut registry = Registry::new();
+        register_anchor_events(&mut registry).unwrap();
+        register_project_events(&mut registry).unwrap();
+        register_model_events(&mut registry).unwrap();
+        register_policy_events(&mut registry).unwrap();
+        register_checkout_events(&mut registry).unwrap();
+        register_capture_events(&mut registry).unwrap();
+        register_guard_events(&mut registry).unwrap();
+        register_install_events(&mut registry).unwrap();
+        register_update_events(&mut registry).unwrap();
+        register_provider_events(&mut registry).unwrap();
+        register_scope_events(&mut registry).unwrap();
+        register_work_order_events(&mut registry).unwrap();
+        register_question_events(&mut registry).unwrap();
+        register_truth_events(&mut registry).unwrap();
+        // The four plan types of view set 14, without the check events.
+        for name in [
+            PLAN_APPROVED,
+            PLAN_REPLACED,
+            PLAN_CONTINUATION,
+            PLAN_CONTINUATION_FOLLOWED,
+        ] {
+            registry.register(name, 1, []).unwrap();
+        }
+        options.schema = Box::new(registry);
+        options.projectors.push(Box::new(PhasePlanProjector::new()));
+        options.projectors.push(Box::new(PlanProjector::new()));
+        options
+            .projectors
+            .push(Box::new(EvidenceMapProjector::new()));
+        options.view_set_version = NonZeroU32::new(14).unwrap();
+        options
+    }
+
     /// The domain views of view set 13, sorted: the fourteen of view set 12
     /// and `truths`.
     const VIEW_SET_13: [&str; 15] = [
@@ -380,6 +425,29 @@ pub(crate) mod tests {
     /// The domain views of view set 14, sorted: the fifteen of view set 13
     /// and `evidence_map`, `phase_plan` and `plan`.
     const VIEW_SET_14: [&str; 18] = [
+        "backlog",
+        "capture",
+        "checkout",
+        "draft",
+        "evidence_map",
+        "guard",
+        "guard_policy",
+        "install",
+        "model_catalog",
+        "phase",
+        "phase_detail",
+        "phase_plan",
+        "plan",
+        "policy",
+        "questions",
+        "roadmap",
+        "truths",
+        "work_order",
+    ];
+
+    /// The domain views of view set 15, sorted: the eighteen of view set 14,
+    /// with the `phase_plan` view at version 2 and `work_order` at version 3.
+    const VIEW_SET_15: [&str; 18] = [
         "backlog",
         "capture",
         "checkout",
@@ -689,10 +757,10 @@ pub(crate) mod tests {
                     "{name}"
                 );
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_14);
+            assert_eq!(names, VIEW_SET_15);
         }
     }
 
@@ -717,10 +785,10 @@ pub(crate) mod tests {
                     .schema
                     .reads(PROVIDERS_ACKNOWLEDGED, PROVIDERS_ACKNOWLEDGED_VERSION + 1)
             );
-            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_14);
+            assert_eq!(names, VIEW_SET_15);
         }
     }
 
@@ -751,10 +819,10 @@ pub(crate) mod tests {
             assert!(opened.schema.reads("scope.submitted", 1));
             assert!(opened.schema.reads("scope.submitted", 2));
             assert!(!opened.schema.reads("scope.submitted", 3));
-            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_14);
+            assert_eq!(names, VIEW_SET_15);
         }
     }
 
@@ -771,10 +839,10 @@ pub(crate) mod tests {
                 assert!(opened.schema.reads(name, 1), "{name}");
                 assert!(!opened.schema.reads(name, 2), "{name}");
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_14);
+            assert_eq!(names, VIEW_SET_15);
         }
     }
 
@@ -796,10 +864,10 @@ pub(crate) mod tests {
                 assert!(opened.schema.reads(name, 1), "{name}");
                 assert!(!opened.schema.reads(name, 2), "{name}");
             }
-            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_14);
+            assert_eq!(names, VIEW_SET_15);
         }
     }
 
@@ -1163,10 +1231,10 @@ pub(crate) mod tests {
         ] {
             assert!(opened.schema.reads("story.refined", 1));
             assert!(!opened.schema.reads("story.refined", 2));
-            assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+            assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
             let mut names = view_names(&opened);
             names.sort();
-            assert_eq!(names, VIEW_SET_14);
+            assert_eq!(names, VIEW_SET_15);
         }
     }
 
@@ -1317,10 +1385,10 @@ pub(crate) mod tests {
         };
 
         let opened = options();
-        assert_eq!(opened.view_set_version, NonZeroU32::new(14).unwrap());
+        assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
         let mut names = view_names(&opened);
         names.sort();
-        assert_eq!(names, VIEW_SET_14);
+        assert_eq!(names, VIEW_SET_15);
         for name in [
             "plan.approved",
             "plan.replaced",
@@ -1396,5 +1464,134 @@ pub(crate) mod tests {
             let held = reopened.get(&project, view, &key).unwrap();
             assert!(held.is_some(), "{view} holds no document for plan 1");
         }
+    }
+
+    // Catches a check event the store would refuse at append, a changed
+    // projector left at its old version, or the set left at 14, which an
+    // older binary would misread.
+    #[test]
+    fn a_check_event_left_unregistered_or_the_set_left_at_14_is_caught() {
+        use baley_core::plan::{CheckResult, phase_plan_key, phase_stream};
+        use baley_core::policy::RecheckScope;
+        use baley_core::work_order::work_order_key;
+        use baley_store::{
+            Actor, Admin, Command, CommandKind, Decision, Hash, NewEvent, Observed, OutcomeKind,
+            ProjectId, RequestId, StreamName, Views,
+        };
+        use serde_json::{Value, json};
+
+        const W1: &str = "2c3d4e5f-6071-4c8d-9eaf-1a2b3c4d5e6f";
+        const V: &str = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+        let opened = options();
+        assert_eq!(opened.view_set_version, NonZeroU32::new(15).unwrap());
+        let mut names = view_names(&opened);
+        names.sort();
+        assert_eq!(names, VIEW_SET_15);
+        for name in ["plan.checked", "plan.check_issued"] {
+            assert!(opened.schema.reads(name, 1), "{name}");
+            assert!(!opened.schema.reads(name, 2), "{name}");
+        }
+
+        let older_options = view_set_14();
+        assert!(!older_options.schema.reads("plan.checked", 1));
+        let mut older_names = view_names(&older_options);
+        older_names.sort();
+        assert_eq!(older_names, VIEW_SET_14);
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = ProjectId("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f".into());
+        let older = store(&home, T0, older_options).unwrap();
+        older.create_project(&project, "sample", T0).unwrap();
+        drop(older);
+
+        let reopened = store(&home, T1, options()).unwrap();
+        // Appends `events` on phase 1's stream in one transaction and gives
+        // the sequence of the last.
+        let append = |request: &str, events: Vec<(&str, Value)>| {
+            let command = Command {
+                project: project.clone(),
+                kind: CommandKind("test.check".into()),
+                request_id: RequestId(request.into()),
+                digest: Hash([0x33; 32]),
+                scope: Vec::new(),
+                policy_version: 0,
+                recorded_at: T1.into(),
+                actor: Actor::Baley,
+                caller: None,
+            };
+            let mut last = 0;
+            reopened
+                .transact(&command, &mut |tx| {
+                    for (type_name, payload) in &events {
+                        last = tx.append(NewEvent {
+                            stream: StreamName(phase_stream(1)),
+                            type_name: (*type_name).into(),
+                            type_version: 1,
+                            git: None,
+                            payload: payload.clone(),
+                            attachments: vec![],
+                        })?;
+                    }
+                    Ok(Decision {
+                        kind: OutcomeKind::Done,
+                        answer: json!({}),
+                        sensitive: false,
+                        observed: Observed::default(),
+                        git: None,
+                    })
+                })
+                .unwrap();
+            last
+        };
+        let checked = |revision: Option<&str>| {
+            CheckResult {
+                phase: 1,
+                plan_digest: Hash([0x5c; 32]),
+                findings: &[],
+                work_order: W1,
+                scope: RecheckScope::Full,
+                previous_check: None,
+                truth_versions: &[],
+                material: &[],
+                scope_policy_version: 0,
+                revision,
+            }
+            .payload()
+        };
+        let order = json!({"id": W1, "request": W1, "parent": null, "role": "checker",
+            "subject": "phase/1", "attempt": 1, "route": {"rung": "low"},
+            "agent": "bal-checker-low", "instructions": [], "inputs": []});
+        append(
+            "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f74",
+            vec![
+                ("work_order.issued", order),
+                ("plan.checked", checked(None)),
+            ],
+        );
+
+        let phase = |reopened: &baley_store_sqlite::SqliteStore| {
+            reopened
+                .get(&project, "phase_plan", &phase_plan_key(1))
+                .unwrap()
+                .expect("phase 1's plan state")
+                .body
+        };
+        assert_eq!(phase(&reopened)["checks"], json!([]));
+        let held = reopened
+            .get(&project, "work_order", &work_order_key(W1))
+            .unwrap()
+            .expect("the checker order");
+        assert_eq!(held.body["state"], "answered");
+
+        let seq = append(
+            "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f75",
+            vec![("plan.checked", checked(Some(V)))],
+        );
+        assert_eq!(
+            phase(&reopened)["checks"],
+            json!([{"revision": V, "first": {"seq": seq, "plan_digest": "5c".repeat(32)},
+                "recheck": null}])
+        );
     }
 }
