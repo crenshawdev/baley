@@ -1,11 +1,12 @@
 //! `plan submit` (design 0005 section 5, PLN-R9, PLN-R11 to PLN-R13,
 //! PLN-R15, PLN-R25, PLN-R27, D-02, D-03, D-05, D-13): a session submits a
 //! planner's plan answering a planner order of its phase. The check runs
-//! before admission and records nothing: the order, the phase's activity,
-//! then the plan judged whole by `judge_plan` over the phase's facts read
-//! from the views. The recording then stores the draft, abandons the
-//! phase's earlier draft's set and opens the new draft's set in one
-//! transaction, so a phase holds one draft waiting for approval.
+//! before admission and records nothing: the order, the phase's pending
+//! checker order, the phase's activity, then the plan judged whole by
+//! `judge_plan` over the phase's facts read from the views. The recording
+//! then stores the draft, abandons the phase's earlier draft's set and
+//! opens the new draft's set in one transaction, so a phase holds one draft
+//! waiting for approval.
 //!
 //! Two seams sit between the check and the recording, before the preview
 //! is given (design 0005 Figure 5), both against the digest the recording
@@ -36,6 +37,7 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
+use crate::planning::checker::{checker_order_pending, pending_checker};
 use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
@@ -84,6 +86,8 @@ impl Checked {
 /// order that is not a planner order of the plan's phase, or one that
 /// failed, `wrong-work-order` at slot `work_order`, while a pending or
 /// answered one passes, so a resubmission becomes the newest draft;
+/// `checker-order-pending` at slot `operation` naming the phase's pending
+/// checker order (D-03), so a draft is never replaced under its own check;
 /// `phase-not-active` at slot `plan` when another phase is active (D-02);
 /// then the plan judged by `judge_plan` over the phase's facts, a refusal at
 /// slot `plan` with what it names. A read fault is the `failed` answer.
@@ -146,6 +150,11 @@ pub(crate) fn checked<S: Views + ?Sized>(
         )
         .slot("work_order")
         .value());
+    }
+    // Refused whatever the gate, since the gate is read at the recording
+    // and a late return must still find the draft its order checks.
+    if let Some(pending) = pending_checker(store, project, phase).map_err(busy)? {
+        return Err(checker_order_pending(phase, &pending, NOT_RECORDED));
     }
     let read = facts::read(store, project, phase, capacity)?;
     judge_submit_phase(phase, &read.active)
@@ -747,6 +756,21 @@ pub(crate) mod tests {
         refused_with(&store, &pl1(), A, "wrong-work-order", "work_order");
         fail_by_hand(&store, O, R4);
         refused_with(&store, &pl1(), O, "wrong-work-order", "work_order");
+    }
+
+    #[test]
+    fn a_plan_submitted_beside_a_pending_checker_order_is_caught() {
+        use crate::planning::checker::tests::{C1, drafted_with_check};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        drafted_with_check(&store, &pl1(), C1, R2, T5);
+        let refusal = refused_with(&store, &pl3(), O, "checker-order-pending", "operation");
+        assert_eq!(refusal["details"], json!({"work_order": C1}));
+
+        fail_by_hand(&store, C1, R3);
+        let checked = check(&store, &project(), &pl3(), O, None);
+        assert!(checked.is_ok(), "{checked:?}");
     }
 
     #[test]

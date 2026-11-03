@@ -34,6 +34,7 @@ use serde_json::{Map, Value, json};
 use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
+use crate::planning::checker::{checker_absences, checker_order_pending, pending_checker};
 use crate::planning::inputs::Revision;
 use crate::planning::order::{
     self, HandOver, pending_planner, planner_absences, planner_order_pending, read_hand_over,
@@ -251,10 +252,12 @@ pub(crate) struct Latest {
 /// the continuation's order's state from `work_order`, and whether the
 /// current draft's set closed with an answer that rejected a recommendation,
 /// then judges them (D-10, D-11, D-15). A refusal names its code at slot
-/// `phase`, `stories` or `operation`. A changed selection's `phase edit` is
-/// judged and checked against accepted scope here, its refusals at slot
-/// `stories`; a hand-over is read here, so an order no longer pending is
-/// refused here. A read fault is the `failed` answer.
+/// `phase`, `stories` or `operation`. Once the commitment judge passes, a
+/// pending checker order of the phase refuses every path
+/// `checker-order-pending` at slot `operation`, naming it (D-03). A changed
+/// selection's `phase edit` is judged and checked against accepted scope
+/// here, its refusals at slot `stories`; a hand-over is read here, so an
+/// order no longer pending is refused here. A read fault is the `failed` answer.
 pub fn check<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -307,7 +310,19 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
         }),
         revision_due,
     };
-    let path = match judge_commitment(&facts).map_err(|refusal| refused(phase, &refusal))? {
+    let judged = judge_commitment(&facts).map_err(|refusal| refused(phase, &refusal))?;
+    // A blocker's revision is issued only once the phase's checker returns,
+    // so no path runs beside a pending checker order (D-03, D-07).
+    if let Some(pending) = pending_checker(store, project, phase).map_err(busy)? {
+        return Err(checker_order_pending(
+            phase,
+            &pending,
+            "no planner order was issued and nothing was recorded",
+        ));
+    }
+    let mut absences = readiness.absences();
+    absences.extend(checker_absences(phase));
+    let path = match judged {
         PhasePlanPath::HandOver { work_order } => {
             // The judge hands over only the latest continuation's order.
             let edit = latest
@@ -317,7 +332,7 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
             // The hand-over observes what this check read, so a phase made
             // active or a story unrefined since it is not handed over.
             let read = read_hand_over(store, project, phase, edit, &work_order)?
-                .observing(&documents, readiness.absences());
+                .observing(&documents, absences.clone());
             Planned::HandOver(Box::new(read))
         }
         PhasePlanPath::Draft => {
@@ -341,7 +356,7 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
         phase,
         stories: stories.to_vec(),
         path,
-        absences: readiness.absences(),
+        absences,
         documents,
     })
 }
@@ -355,11 +370,12 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
 /// (D-09), so a replay answered from the record gets the same answer. A
 /// planning order, or the due revision, is issued as `id` for the selection
 /// under `policy`, the host's effective policy, for `host` with the catalog
-/// `names` (D-15); its
-/// decision declares no pending planner order of the phase and observes the
-/// check's documents and the inputs'. An approved continuation's order is
-/// handed over (D-01), observing the check's documents and declaring its
-/// absences beside the hand-over's own.
+/// `names` (D-15); its decision declares no pending planner order of the
+/// phase and the check's absences, among them no pending checker order of
+/// the phase, and observes the check's documents and the inputs'. An
+/// approved continuation's order is handed over (D-01), observing the
+/// check's documents and declaring its absences beside the hand-over's
+/// own, as a changed selection's edit declares them.
 #[allow(clippy::too_many_arguments)]
 pub fn run<S: Ledger + Views + Payloads>(
     store: &S,
@@ -776,6 +792,23 @@ pub(crate) mod tests {
         assert_eq!(questions["answers"][0]["question"], "q1");
         assert_eq!(questions["answers"][0]["answer"], "Postgres");
         assert_eq!(questions["answers"][0]["accepted"], false);
+    }
+
+    #[test]
+    fn a_planner_order_issued_beside_a_pending_checker_order_is_caught() {
+        use crate::planning::checker::tests::{C1, drafted_with_check};
+        use crate::planning::order::tests::fail_by_hand;
+        use crate::planning::submit::tests::order_o;
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        drafted_with_check(&store, &pl2(), C1, R2, T5);
+        let refusal = refused_with(&store, 1, &[1], "checker-order-pending", "operation");
+        assert_eq!(refusal["details"], json!({"work_order": C1}));
+
+        fail_by_hand(&store, C1, R3);
+        let checked = check(&store, &project(), 1, &[1]);
+        assert!(checked.is_ok(), "{checked:?}");
     }
 
     #[test]

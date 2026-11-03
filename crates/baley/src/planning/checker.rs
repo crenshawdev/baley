@@ -326,15 +326,20 @@ pub(crate) mod tests {
 
     /// PL1's check prepared as `id` under P0 and N0 and issued alone in its
     /// own transaction under `request_id` at `at`, declaring that no checker
-    /// order of phase 1 is pending. Gives the answer.
+    /// order of phase 1 is pending. PL1 is judged over phase 1's facts
+    /// directly, since a submit's check refuses beside a pending checker
+    /// order. Gives the answer.
     pub(crate) fn issued_alone(store: &SqliteStore, id: &str, request_id: &str, at: &str) -> Value {
-        let checked = check(store, &project(), &pl1(), O, None).expect("PL1 is accepted");
-        let draft = PlanDraft::new(&checked.plan);
+        let facts = crate::planning::facts::read(store, &project(), 1, None)
+            .expect("phase 1's facts are read")
+            .facts;
+        let plan = baley_core::plan::judge_plan(&pl1(), &facts).expect("PL1 is accepted");
+        let draft = PlanDraft::new(&plan);
         let command = command("plan.submit", request_id, 8, at);
         let prepared = prepare(
             store,
             &command,
-            &checked.plan,
+            &plan,
             &draft,
             &p0(),
             Host::ClaudeCode,
