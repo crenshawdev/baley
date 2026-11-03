@@ -205,6 +205,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "1",
         "54f7d52ad86a2c9fb5b0c1bd175e1d5d7e9de47df8976373b819993c4456d2a0",
     ),
+    (
+        "bal-phase-checker",
+        "1",
+        "2e4b8aa8ed3095c9df0833f966d95c4e6b0b828840042472175d53cbcc5f27cc",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -992,6 +997,86 @@ fn a_planner_text_naming_cadence_files_or_markers_is_caught() {
         "max_plan_tasks",
     ] {
         assert!(!body.contains(name), "the planner text names {name}");
+    }
+}
+
+#[test]
+fn a_checker_text_given_a_help_row_or_a_skill_stub_is_caught() {
+    let identity = "bal-phase-checker";
+    let Lookup::Served { entry, text } = lookup(identity) else {
+        panic!("{identity} is served");
+    };
+    assert_eq!(entry.build, 4);
+    assert_eq!(text.version, "1");
+    assert!(
+        !crate::help::table::COMMANDS
+            .iter()
+            .any(|command| command.name == identity),
+        "{identity} is a help row"
+    );
+    assert!(
+        !crate::host_artifacts::stubs::front_doors()
+            .iter()
+            .any(|(name, _)| *name == identity),
+        "{identity} is a front door"
+    );
+    // The checker's agent stubs are `bal-checker-<rung>` (ADR 0046).
+    assert!(!identity.starts_with("bal-checker-"));
+}
+
+#[test]
+fn a_checker_text_holding_a_count_or_a_cadence_name_is_caught() {
+    let body = served_text("bal-phase-checker");
+    // Counts design 0005 does not state (ADR 0017), and Cadence's files,
+    // commands, markers and roles (ADR 0048).
+    for name in [
+        "Task ceiling",
+        "max_plan_tasks",
+        "plan-size",
+        "3-7",
+        "PLAN",
+        "CONTEXT.md",
+        "REQUIREMENTS",
+        "ROADMAP",
+        "frontmatter",
+        "undeclared-files",
+        "lease-check",
+        "## ",
+        "VERIFICATION PASSED",
+        "ISSUES FOUND",
+        "cad-",
+        "planning.mjs",
+        "orchestrator",
+        "BLOCKER",
+        "WARNING",
+    ] {
+        assert!(!body.contains(name), "the checker text names {name}");
+    }
+}
+
+#[test]
+fn a_checker_text_missing_a_dimension_its_findings_shape_or_the_round_two_rule_is_caught() {
+    let body = served_text("bal-phase-checker");
+    // Design 0005 section 10's Checker row and PLN-R16.
+    for needle in [
+        "Coverage",
+        "Task completeness",
+        "Sequencing",
+        "Goal-backward",
+        "Scope sanity",
+        "Proportionality",
+        "\"severity\"",
+        "blocker",
+        "warning",
+        "location",
+        "claim",
+        "fix",
+        "finding-shape",
+        "`[]`",
+        "check every first-round blocker",
+        "Call no `baley_apply` operation",
+    ] {
+        assert!(body.contains(needle), "the checker text lacks {needle}");
     }
 }
 

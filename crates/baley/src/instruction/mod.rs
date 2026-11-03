@@ -16,6 +16,7 @@ use crate::help::front_door;
 
 pub mod analyzer;
 pub mod capture;
+pub mod checker;
 pub mod context;
 pub mod plan;
 pub mod planner;
@@ -338,6 +339,17 @@ pub static ENTRIES: &[Entry] = &[
             version: planner::VERSION,
             hash: planner::HASH,
             body: planner::TEXT,
+        }),
+    },
+    // Build 4 serves the plan checker's text by identity inside the checker's
+    // work order, never as a help row.
+    Entry {
+        identity: checker::IDENTITY,
+        build: 4,
+        text: Some(Text {
+            version: checker::VERSION,
+            hash: checker::HASH,
+            body: checker::TEXT,
         }),
     },
 ];
