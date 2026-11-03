@@ -4,14 +4,16 @@
 //! before admission and records nothing: the order, the phase's pending
 //! checker order, the phase's activity, then the plan judged whole by
 //! `judge_plan` over the phase's facts read from the views. The recording
-//! then stores the draft, abandons the phase's earlier draft's set and
-//! opens the new draft's set in one transaction, so a phase holds one draft
-//! waiting for approval.
+//! then stores the draft and abandons the phase's earlier draft's set in
+//! one transaction, so a phase holds one draft waiting for approval. Under
+//! the plan gate `off` the same transaction opens the new draft's set and
+//! the receipt previews the draft; under any other gate it issues round 1
+//! of the plan checker's order instead (PLN-R16, D-01, D-14), and the set
+//! and the preview wait for the last check.
 //!
-//! Two seams sit between the check and the recording, before the preview
-//! is given (design 0005 Figure 5), both against the digest the recording
-//! takes: Build 4 T11 raises risk at plan submit there, and Build 4 T10's
-//! plan checker issues its work order there when the plan gate is on.
+//! Build 4 T11's risk raise at plan submit still sits between the check and
+//! the recording, before the checker's order is issued (design 0005 Figure
+//! 5), against the digest the recording takes.
 
 use std::num::NonZeroU32;
 
@@ -19,7 +21,7 @@ use baley_core::plan::{
     PHASE_PLAN_VIEW, PLAN_KIND, PhaseNotActive, Plan, PlanDraft, PlanFacts, PlanRefusal, Replaces,
     judge_plan, judge_submit_phase, phase_plan_key,
 };
-use baley_core::policy::Role;
+use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, PlanGate, Role};
 use baley_core::questions::{Cause, Subject, round_of};
 use baley_core::scope::{
     PROJECT_STREAM, SCOPE_SUBMITTED, SCOPE_SUBMITTED_VERSION, submitted_payload,
@@ -29,7 +31,8 @@ use baley_core::work_order::{
 };
 use baley_store::{
     Absence, Command, Decision, InstructionEvidence, Ledger, NewEvent, Observed, ObservedDocument,
-    OutcomeKind, ProjectId, Recorded, RetentionClass, StoreError, StreamName, Transaction, Views,
+    OutcomeKind, Payloads, ProjectId, Recorded, RetentionClass, StoreError, StreamName,
+    Transaction, Views,
 };
 use serde_json::{Map, Value, json};
 
@@ -37,13 +40,13 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::parts::PART_BOUND;
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
-use crate::planning::checker::{checker_order_pending, pending_checker};
+use crate::planning::checker::{self, checker_absences, checker_order_pending, pending_checker};
 use crate::planning::{facts, replace};
 use crate::questions::answer::with_now;
 use crate::questions::record::{AbandonError, abandon, open};
 use crate::refine::order::order_evidence;
 use crate::refine::questions::opened_facts;
-use crate::scope::submit::NOT_RECORDED_BUSY;
+use crate::scope::submit::{NOT_RECORDED_BUSY, answer};
 use crate::work_order::read::order_document;
 
 /// What a refused submit did not do.
@@ -75,6 +78,15 @@ impl Checked {
     /// The size the phase would reach with the plan approved.
     pub fn reaching(&self) -> u64 {
         u64::from(self.size) + self.plan.size() as u64
+    }
+
+    /// The draft the plan is recorded as: a replacement's body names the
+    /// plan it replaces.
+    pub fn draft(&self) -> PlanDraft {
+        match self.replaces {
+            None => PlanDraft::new(&self.plan),
+            Some(replaces) => PlanDraft::replacing(&self.plan, replaces),
+        }
     }
 }
 
@@ -203,6 +215,7 @@ pub(crate) fn checked<S: Views + ?Sized>(
 /// at once. Every call records, so the same plan submitted again is the
 /// newest draft again with a new set; only a retry of the same request
 /// replays, before any decision runs.
+/// [`record_gated`] records through this under the plan gate `off`.
 ///
 /// The decision observes the order's and the facts' documents, so a phase
 /// made active, a plan approved or a truth revised since the check makes the
@@ -225,56 +238,17 @@ pub fn record<L: Ledger + ?Sized>(
     let at = command.recorded_at.as_str();
     store.transact(command, &mut |tx| {
         let Some(checked) = checked else {
-            return Err(StoreError::Unavailable(
-                "a plan submission reached its transaction without its check's read".into(),
-            ));
+            return Err(unread());
         };
         let plan = &checked.plan;
-        let phase = plan.phase();
-        // Read before anything is appended, so the set found is the earlier
-        // draft's, never the one opened below.
-        let earlier = current_set(tx, phase)?;
-        let draft = match checked.replaces {
-            None => PlanDraft::new(plan),
-            Some(replaces) => PlanDraft::replacing(plan, replaces),
-        };
-        let body = tx.put_payload(draft.body(), RetentionClass::Record)?;
-        tx.append(NewEvent {
-            stream: StreamName(PROJECT_STREAM.into()),
-            type_name: SCOPE_SUBMITTED.into(),
-            type_version: SCOPE_SUBMITTED_VERSION,
-            git: None,
-            payload: submitted_payload(draft.digest(), PLAN_KIND, draft.target(), &body),
-            attachments: vec![body],
-        })?;
-        if let Some(set) = earlier {
-            match abandon(tx, &set, Cause::DraftReplaced, at) {
-                // A set already abandoned, or one the view no longer holds,
-                // has nothing left to abandon.
-                Ok(()) | Err(AbandonError::NotHeld | AbandonError::Abandoned) => {}
-                Err(AbandonError::Store(error)) => return Err(error),
-            }
-        }
+        let draft = record_draft(tx, checked, at)?;
         let subject = Subject::Plan {
-            phase,
+            phase: plan.phase(),
             plan_digest: draft.digest(),
         };
         let id = open(tx, plan.questions(), &subject, at)?;
-        let mut receipt = Map::new();
-        receipt.insert("status".into(), json!("ok"));
-        receipt.insert("digest".into(), json!(draft.digest().to_hex()));
-        receipt.insert("kind".into(), json!(PLAN_KIND));
-        receipt.insert("phase".into(), json!(phase));
-        receipt.insert("stories".into(), json!(plan.stories()));
-        receipt.insert("size".into(), json!(plan.size()));
-        receipt.insert("phase_size".into(), json!(checked.size));
-        receipt.insert("reaching".into(), json!(checked.reaching()));
-        receipt.insert(
-            "capacity".into(),
-            json!(checked.capacity.map(NonZeroU32::get)),
-        );
+        let mut receipt = draft_receipt(checked, &draft, at);
         receipt.insert("set".into(), json!(id));
-        receipt.insert("recorded_at".into(), json!(at));
         let answer = with_now(receipt, &id, &round_of(&opened_facts(plan.questions())));
         Ok(Decision {
             kind: OutcomeKind::Done,
@@ -288,6 +262,148 @@ pub fn record<L: Ledger + ?Sized>(
             git: None,
         })
     })
+}
+
+/// Records the plan `checked` accepted under `command`, the command its
+/// caller prepared under `policy`, the host's effective policy, for `host`
+/// with the catalog `names`, reading the plan gate through
+/// `EffectivePolicy::plan_gate` (D-01, D-14, D-16). Under `off` it records
+/// through [`record`], unchanged, so the preview and the set follow at once.
+/// Under any other gate, set or by default, one transaction records what
+/// [`record`] records before the set, the draft answering its planner order
+/// and the earlier draft's set abandoned, then issues round 1 of its check
+/// as checker order `id` (`checker::prepare`) with the draft's digest. It
+/// opens no set and gives no preview: both wait for the last check.
+///
+/// The decision observes the check's documents and the checker inputs'
+/// and declares the check's absences and that no checker order of the
+/// phase is pending, so a checker order issued since the check makes the
+/// call `ledger-busy` with nothing recorded. The receipt holds `status`,
+/// `digest`, `kind`, `phase`, `stories`, `size`, `phase_size`, `reaching`,
+/// `capacity`, `recorded_at` and `check`, the checker order's members as
+/// its issue gives them. A retry of the same request is answered from the
+/// record before any decision runs, so a replay passes no `checked`.
+pub fn record_gated<S: Ledger + Views + Payloads>(
+    store: &S,
+    command: &Command,
+    checked: Option<&Checked>,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Value {
+    if policy.plan_gate().0 == PlanGate::Off {
+        return answer(record(store, command, checked), store);
+    }
+    let prepared = match checked {
+        Some(checked) => {
+            let draft = checked.draft();
+            match checker::prepare(
+                store,
+                command,
+                &checked.plan,
+                &draft,
+                policy,
+                host,
+                names,
+                id,
+            ) {
+                Ok(prepared) => Some(prepared),
+                Err(answer) => return answer,
+            }
+        }
+        None => None,
+    };
+    let at = command.recorded_at.as_str();
+    let result = store.transact(command, &mut |tx| {
+        let (Some(checked), Some(prepared)) = (checked, prepared.as_ref()) else {
+            return Err(unread());
+        };
+        let draft = record_draft(tx, checked, at)?;
+        let mut receipt = draft_receipt(checked, &draft, at);
+        receipt.insert(
+            "check".into(),
+            Value::Object(prepared.issue_within(tx, at)?),
+        );
+        let mut documents = checked.documents.clone();
+        documents.extend_from_slice(prepared.documents());
+        let mut absences = checked.absences.clone();
+        absences.extend(checker_absences(checked.plan.phase()));
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: Value::Object(receipt),
+            sensitive: false,
+            observed: Observed {
+                documents,
+                absences,
+                ..Observed::default()
+            },
+            git: None,
+        })
+    });
+    answer(result, store)
+}
+
+/// The fault of a decision run without the check's read.
+fn unread() -> StoreError {
+    StoreError::Unavailable(
+        "a plan submission reached its transaction without its check's read".into(),
+    )
+}
+
+/// Records `checked`'s draft inside `tx` at `at`: its body as a `record`
+/// payload and its `scope.submitted` of kind `plan` on the `project` stream,
+/// then the phase's current draft's set abandoned `draft-replaced` when it
+/// is held and not yet abandoned. Gives the draft.
+fn record_draft(
+    tx: &mut dyn Transaction,
+    checked: &Checked,
+    at: &str,
+) -> Result<PlanDraft, StoreError> {
+    // Read before anything is appended, so the set found is the earlier
+    // draft's, never one opened after.
+    let earlier = current_set(tx, checked.plan.phase())?;
+    let draft = checked.draft();
+    let body = tx.put_payload(draft.body(), RetentionClass::Record)?;
+    tx.append(NewEvent {
+        stream: StreamName(PROJECT_STREAM.into()),
+        type_name: SCOPE_SUBMITTED.into(),
+        type_version: SCOPE_SUBMITTED_VERSION,
+        git: None,
+        payload: submitted_payload(draft.digest(), PLAN_KIND, draft.target(), &body),
+        attachments: vec![body],
+    })?;
+    if let Some(set) = earlier {
+        match abandon(tx, &set, Cause::DraftReplaced, at) {
+            // A set already abandoned, or one the view no longer holds,
+            // has nothing left to abandon.
+            Ok(()) | Err(AbandonError::NotHeld | AbandonError::Abandoned) => {}
+            Err(AbandonError::Store(error)) => return Err(error),
+        }
+    }
+    Ok(draft)
+}
+
+/// The receipt members every recorded plan draft gives: `status`, `digest`,
+/// `kind`, `phase`, `stories`, `size`, `phase_size`, `reaching`, `capacity`
+/// and `recorded_at`.
+fn draft_receipt(checked: &Checked, draft: &PlanDraft, at: &str) -> Map<String, Value> {
+    let plan = &checked.plan;
+    let mut receipt = Map::new();
+    receipt.insert("status".into(), json!("ok"));
+    receipt.insert("digest".into(), json!(draft.digest().to_hex()));
+    receipt.insert("kind".into(), json!(PLAN_KIND));
+    receipt.insert("phase".into(), json!(plan.phase()));
+    receipt.insert("stories".into(), json!(plan.stories()));
+    receipt.insert("size".into(), json!(plan.size()));
+    receipt.insert("phase_size".into(), json!(checked.size));
+    receipt.insert("reaching".into(), json!(checked.reaching()));
+    receipt.insert(
+        "capacity".into(),
+        json!(checked.capacity.map(NonZeroU32::get)),
+    );
+    receipt.insert("recorded_at".into(), json!(at));
+    receipt
 }
 
 /// The set of phase `phase`'s current draft, as `phase_plan` holds it inside
@@ -756,6 +872,151 @@ pub(crate) mod tests {
         refused_with(&store, &pl1(), A, "wrong-work-order", "work_order");
         fail_by_hand(&store, O, R4);
         refused_with(&store, &pl1(), O, "wrong-work-order", "work_order");
+    }
+
+    /// Submits `plan` answering `order` with no capacity through the check
+    /// and the gated recording under `policy` for Claude Code with N0, its
+    /// checker order, if any, as `id`, under a command whose caller carries
+    /// the order and its instructions, under `request_id` at `at`.
+    fn gated_submitted(
+        store: &SqliteStore,
+        plan: &Value,
+        policy: &baley_core::policy::EffectivePolicy,
+        id: &str,
+        request_id: &str,
+        at: &str,
+    ) -> Value {
+        let checked = match check(store, &project(), plan, O, None) {
+            Ok(checked) => checked,
+            Err(refusal) => return refusal,
+        };
+        record_gated(
+            store,
+            &submit_command(O, &checked, request_id, at),
+            Some(&checked),
+            policy,
+            Host::ClaudeCode,
+            &n0(),
+            id,
+        )
+    }
+
+    /// The `plan.submit` command under `request_id` at `at`, its caller
+    /// carrying `order` and `checked`'s instructions.
+    fn submit_command(order: &str, checked: &Checked, request_id: &str, at: &str) -> Command {
+        let mut command = command("plan.submit", request_id, 8, at);
+        let on = caller()
+            .with_work_order(order)
+            .unwrap()
+            .with_instructions(checked.evidence.clone())
+            .unwrap();
+        command.caller = Some(baley_store::Caller::Server(on));
+        command
+    }
+
+    #[test]
+    fn a_gated_draft_previewed_or_given_a_set_before_its_check_is_caught() {
+        use crate::planning::checker::tests::{C1, C9};
+        use crate::refine::order::tests::issued;
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let first = gated_submitted(&store, &pl2(), &poff(), C9, R2, T5);
+        assert_eq!(first["status"], "ok", "{first}");
+        assert_eq!(first["preview"], as_drafted(pl2()));
+        assert!(first["set"].is_string(), "{first}");
+        assert_eq!(first["now"]["round"], 1, "{first}");
+        assert!(first.get("check").is_none(), "{first}");
+        assert!(
+            issued(&store)
+                .iter()
+                .all(|e| e.payload["role"] != "checker")
+        );
+        let x2 = first["digest"].as_str().unwrap().to_owned();
+        let s2 = first["set"].as_str().unwrap().to_owned();
+
+        let second = gated_submitted(&store, &pl3(), &p0(), C1, R3, T6);
+        assert_eq!(second["status"], "ok", "{second}");
+        let mut members: Vec<&str> = second
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        members.sort_unstable();
+        let mut expected = vec![
+            "status",
+            "digest",
+            "kind",
+            "phase",
+            "stories",
+            "size",
+            "phase_size",
+            "reaching",
+            "capacity",
+            "recorded_at",
+            "check",
+        ];
+        expected.sort_unstable();
+        assert_eq!(members, expected, "{second}");
+        assert_eq!(second["check"]["work_order"], C1);
+        assert_eq!(
+            second["check"]["prompt"],
+            format!("Read Baley work order {C1} and follow it.")
+        );
+        let x3 = second["digest"].as_str().unwrap().to_owned();
+
+        let events = history(&store);
+        let mine: Vec<_> = events.iter().filter(|e| e.request_id.0 == R3).collect();
+        let of = |name: &str| {
+            mine.iter()
+                .filter(|e| e.type_name == name)
+                .collect::<Vec<_>>()
+        };
+        let drafts = of("scope.submitted");
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].payload["kind"], "plan");
+        assert_eq!(drafts[0].payload["digest"], x3.as_str());
+        let abandoned = of("questions.abandoned");
+        assert_eq!(abandoned.len(), 1);
+        assert_eq!(abandoned[0].payload["set"], s2.as_str());
+        assert_eq!(abandoned[0].payload["cause"], "draft-replaced");
+        let orders = of("work_order.issued");
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].payload["role"], "checker");
+        assert_eq!(orders[0].payload["id"], C1);
+        assert!(of("questions.opened").is_empty());
+
+        let order = crate::work_order::read::order(&store, &project(), O)
+            .unwrap()
+            .unwrap();
+        assert_eq!(order["state"], "answered", "{order}");
+        assert_eq!(order["drafts"], json!([x2, x3]), "{order}");
+        assert_eq!(newest_plan_draft(&store), json!(x3));
+    }
+
+    #[test]
+    fn a_gated_submit_landing_beside_a_checker_order_issued_since_its_check_is_caught() {
+        use crate::planning::checker::tests::{C1, C9, issued_alone};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let checked = check(&store, &project(), &pl1(), O, None).expect("PL1 is accepted");
+        let c9 = issued_alone(&store, C9, R2, T5);
+        assert_eq!(c9["status"], "ok", "{c9}");
+        let before = head(&store);
+        let answer = record_gated(
+            &store,
+            &submit_command(O, &checked, R3, T6),
+            Some(&checked),
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            C1,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
     }
 
     #[test]

@@ -1,11 +1,13 @@
-//! A phase's planning over the storage port (design 0005 sections 4 and 5,
-//! D-01, D-08 to D-12, D-15): what a planner order binds at issue, read from
-//! the views; the planner order itself, issued on its phase's stream with
-//! one live per phase and handed to a session once an approval issued it;
+//! A phase's planning over the storage port (design 0005 sections 4 to 6,
+//! PLN-R16, D-01, D-08 to D-12, D-15): what a planner order binds at issue,
+//! read from the views; the planner order itself, issued on its phase's
+//! stream with one live per phase and handed to a session once an approval
+//! issued it; the plan checker's order, one live per phase too;
 //! and `phase plan`, which chooses between drafting a changed commitment,
 //! issuing an order and handing one over; then `plan submit`, which checks a
 //! planner's plan against its order and the phase, over facts read from the
-//! views, and records it as the phase's one draft with its question set;
+//! views, and records it as the phase's one draft, with its question set or,
+//! when the plan gate is not `off`, with the plan checker's round-1 order;
 //! `plan replace`, recorded as a submit is and approved into a new number;
 //! and the owner's approval of that draft, in two steps, at the terminal
 //! through `baley plan approve`; and a phase's approved plans read back with
@@ -172,6 +174,36 @@ pub(crate) mod fixtures {
             Some(&file),
         )
         .expect("the capacity is read")
+    }
+
+    /// POFF: P0 with a project file setting the plan gate `off`.
+    pub(crate) fn poff() -> EffectivePolicy {
+        gated("off")
+    }
+
+    /// PB: P0 with a project file setting the plan gate `blocking`.
+    #[expect(
+        dead_code,
+        reason = "phase 10 plan 6's plan-gate test is its first reader"
+    )]
+    pub(crate) fn pb() -> EffectivePolicy {
+        gated("blocking")
+    }
+
+    /// P0 with a project file `/r/baley.toml` setting the plan gate to
+    /// `gate`.
+    fn gated(gate: &str) -> EffectivePolicy {
+        let file = crate::settings::file(
+            Path::new("/r/baley.toml"),
+            format!("[review.triggers.plan]\ngate = \"{gate}\"\n").into_bytes(),
+        );
+        effective_policy(
+            Schema::standard(),
+            Some(Host::ClaudeCode),
+            None,
+            Some(&file),
+        )
+        .expect("the plan gate is read")
     }
 
     /// N0: no accepted name, at version 0.
