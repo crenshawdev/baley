@@ -30,9 +30,9 @@ use baley_core::work_order::{
     FAILED, NO_SUCH_WORK_ORDER, WORK_ORDER_VIEW, WRONG_WORK_ORDER, phase_subject, work_order_key,
 };
 use baley_store::{
-    Absence, Command, Decision, InstructionEvidence, Ledger, NewEvent, Observed, ObservedDocument,
-    OutcomeKind, Payloads, ProjectId, Recorded, RetentionClass, StoreError, StreamName,
-    Transaction, Views,
+    Absence, Command, Decision, Hash, InstructionEvidence, Ledger, NewEvent, Observed,
+    ObservedDocument, OutcomeKind, Payloads, ProjectId, Recorded, RetentionClass, StoreError,
+    StreamName, Transaction, Views,
 };
 use serde_json::{Map, Value, json};
 
@@ -267,9 +267,11 @@ pub fn record<L: Ledger + ?Sized>(
         let answer = with_now(receipt, &id, &round_of(&opened_facts(plan.questions())));
         let mut absences = checked.absences.clone();
         absences.extend(checker_absences(plan.phase()));
+        // An accepted plan's draft body is canonical JSON.
+        let submission = serde_json::from_slice(draft.body()).expect("a draft body is JSON");
         Ok(Decision {
             kind: OutcomeKind::Done,
-            answer: with_preview(answer, &draft),
+            answer: with_preview(answer, submission, draft.digest()),
             sensitive: false,
             observed: Observed {
                 documents: checked.documents.clone(),
@@ -437,24 +439,48 @@ fn record_draft(
     Ok(draft)
 }
 
-/// The receipt members every recorded plan draft gives: `status`, `digest`,
-/// `kind`, `phase`, `stories`, `size`, `phase_size`, `reaching`, `capacity`
-/// and `recorded_at`.
+/// The receipt members `checked`'s draft gives, as [`draft_members`] gives
+/// them.
 fn draft_receipt(checked: &Checked, draft: &PlanDraft, at: &str) -> Map<String, Value> {
     let plan = &checked.plan;
+    draft_members(
+        draft.digest(),
+        plan.phase(),
+        plan.stories(),
+        plan.size(),
+        checked.size,
+        checked.capacity,
+        at,
+    )
+}
+
+/// The receipt members every plan draft gives once it is recorded with its
+/// set: `status`, `digest`, `kind`, `phase`, `stories`, `size` (the plan's
+/// tasks), `phase_size`, `reaching` (the phase's size with the plan
+/// approved), `capacity` or null and `recorded_at`. A checker's return that
+/// opens the draft's set gives the same members.
+pub(crate) fn draft_members(
+    digest: Hash,
+    phase: u32,
+    stories: &[u32],
+    size: usize,
+    phase_size: u32,
+    capacity: Option<NonZeroU32>,
+    at: &str,
+) -> Map<String, Value> {
     let mut receipt = Map::new();
     receipt.insert("status".into(), json!("ok"));
-    receipt.insert("digest".into(), json!(draft.digest().to_hex()));
+    receipt.insert("digest".into(), json!(digest.to_hex()));
     receipt.insert("kind".into(), json!(PLAN_KIND));
-    receipt.insert("phase".into(), json!(plan.phase()));
-    receipt.insert("stories".into(), json!(plan.stories()));
-    receipt.insert("size".into(), json!(plan.size()));
-    receipt.insert("phase_size".into(), json!(checked.size));
-    receipt.insert("reaching".into(), json!(checked.reaching()));
+    receipt.insert("phase".into(), json!(phase));
+    receipt.insert("stories".into(), json!(stories));
+    receipt.insert("size".into(), json!(size));
+    receipt.insert("phase_size".into(), json!(phase_size));
     receipt.insert(
-        "capacity".into(),
-        json!(checked.capacity.map(NonZeroU32::get)),
+        "reaching".into(),
+        json!(u64::from(phase_size) + size as u64),
     );
+    receipt.insert("capacity".into(), json!(capacity.map(NonZeroU32::get)));
     receipt.insert("recorded_at".into(), json!(at));
     receipt
 }
@@ -476,20 +502,19 @@ fn current_set(tx: &mut dyn Transaction, phase: u32) -> Result<Option<String>, S
     }
 }
 
-/// `answer` with `preview`, the draft's submission when the whole answer
-/// stays within the part bound, otherwise the `document` read of the draft.
-fn with_preview(answer: Value, draft: &PlanDraft) -> Value {
+/// `answer` with `preview`, the draft's submission `submission` when the
+/// whole answer stays within the part bound, otherwise the `document` read
+/// of draft `digest`, since a receipt is never cut into parts.
+pub(crate) fn with_preview(answer: Value, submission: Value, digest: Hash) -> Value {
     let Value::Object(mut receipt) = answer else {
         return answer;
     };
-    // An accepted plan's draft body is canonical JSON.
-    let submission: Value = serde_json::from_slice(draft.body()).expect("a draft body is JSON");
     receipt.insert("preview".into(), submission);
     let text = serde_json::to_string(&receipt).expect("a receipt serializes");
     if text.len() > PART_BOUND {
         receipt.insert(
             "preview".into(),
-            json!({"read": {"kind": "draft", "digest": draft.digest().to_hex()}}),
+            json!({"read": {"kind": "draft", "digest": digest.to_hex()}}),
         );
     }
     Value::Object(receipt)

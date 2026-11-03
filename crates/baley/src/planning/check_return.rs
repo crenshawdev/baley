@@ -6,21 +6,27 @@
 //!
 //! The check runs before admission and records nothing: the order, the
 //! findings' shape, then the round's binding read back from the order
-//! itself, never from the files or settings current at the return.
+//! itself, never from the files or settings current at the return. The
+//! recording then records round 1's `plan.checked` with that binding and,
+//! in the same transaction, what the findings buy (D-07): a blocker the
+//! planner's one revision order, otherwise the draft's question set opened
+//! and the draft previewed at once.
 
 use std::io::Read;
 
 use baley_core::plan::{
-    CheckRefusal, Findings, RecordedPlan, TruthVersion, judge_findings, read_plan_draft,
+    CheckRefusal, CheckResult, Findings, PLAN_CHECKED, PLAN_CHECKED_VERSION, RecordedPlan,
+    TruthVersion, judge_findings, phase_stream, read_plan_draft,
 };
-use baley_core::policy::{RecheckScope, Role};
+use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, RecheckScope, Role};
+use baley_core::questions::{QuestionSet, Subject, judge_set, round_of};
 use baley_core::work_order::{
     NO_SUCH_WORK_ORDER, OrderInput, PENDING, WORK_ORDER_NOT_PENDING, WORK_ORDER_VIEW,
     WRONG_WORK_ORDER, phase_subject, work_order_key,
 };
 use baley_store::{
-    Hash, InstructionEvidence, ObservedDocument, PayloadBody, PayloadRef, Payloads, ProjectId,
-    StoreError, Views,
+    Command, Decision, Hash, InstructionEvidence, Ledger, NewEvent, Observed, ObservedDocument,
+    OutcomeKind, PayloadBody, PayloadRef, Payloads, ProjectId, StoreError, StreamName, Views,
 };
 use serde_json::{Value, json};
 
@@ -28,7 +34,13 @@ use crate::envelope::Refusal;
 use crate::mcp::capture::{PLACE_LEDGER, failed, store_failed};
 use crate::mcp::prepare::LEDGER_UNAVAILABLE;
 use crate::planning::checker::{CHECK_INPUT, PLAN_INPUT, TRUTHS_INPUT};
+use crate::planning::facts::{self, PhaseFacts};
+use crate::planning::order::{PreparedOrder, planner_absences, prepare_check_revision};
+use crate::planning::submit::{draft_members, with_preview};
+use crate::questions::answer::with_now;
+use crate::questions::record::open;
 use crate::refine::order::order_evidence;
+use crate::refine::questions::opened_facts;
 use crate::scope::submit::NOT_RECORDED_BUSY;
 use crate::work_order::read::order_document;
 
@@ -137,6 +149,213 @@ pub fn check<S: Views + Payloads + ?Sized>(
             key: work_order_key(work_order),
             produced_seq: Some(order.produced_seq),
         }],
+    })
+}
+
+/// What the round-1 recording does by the findings, prepared outside its
+/// transaction (D-07).
+enum Outcome {
+    /// A blocker buys the planner this revision order.
+    Revise(PreparedOrder),
+    /// No blocker: the draft's set opens with these questions, and the
+    /// receipt previews the draft with the phase's facts read now.
+    Open {
+        set: QuestionSet,
+        stories: Vec<u32>,
+        size: usize,
+        facts: PhaseFacts,
+    },
+}
+
+/// Records the round-1 return `checked` accepted under `command`, the
+/// command its caller prepared carrying the checker order and its
+/// instructions, under `policy`, the effective policy, for `host` with the
+/// catalog `names`, in one transaction (design 0005 section 6, D-07). It
+/// appends `plan.checked` on `phase/<n>` with round 1, no previous check,
+/// the findings as judged and the binding copied from the order, attaching
+/// the order's `plan` and `truths` references as they are held; the
+/// `work_order` view then marks the order answered.
+///
+/// With a blocker, the same transaction issues the planner's revision
+/// order as `id` (`order::prepare_check_revision`), which `revision` names,
+/// declaring that no planner order of the phase is pending and observing
+/// its documents, and the receipt is `{status, round, digest, findings,
+/// revision}`, `revision` the order's members as its issue gives them. With
+/// no blocker, `revision` is null and the draft's set opens on `phase/<n>`
+/// with the draft's questions, an empty set closing at once; the receipt is
+/// the one a recorded draft gives (`submit::draft_members`, its preview by
+/// `submit::with_preview`), with its `phase_size`, `reaching` and
+/// `capacity` from the phase's facts read now under the policy's capacity,
+/// and `set`, `now`, `round` and `findings`. A warning never buys a round.
+///
+/// Every decision observes the order's `work_order` document, so a second
+/// return or a failure since the check makes the call `ledger-busy` with
+/// nothing recorded. A replay is answered from the record before any
+/// decision runs, so it passes no `checked`.
+pub fn record<S: Ledger + Views + Payloads>(
+    store: &S,
+    command: &Command,
+    checked: Option<&CheckedReturn>,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Value {
+    let outcome = match checked {
+        None => None,
+        Some(checked) => match outcome(store, command, checked, policy, host, names, id) {
+            Ok(outcome) => Some(outcome),
+            Err(answer) => return answer,
+        },
+    };
+    let at = command.recorded_at.as_str();
+    let result = store.transact(command, &mut |tx| {
+        let (Some(checked), Some(outcome)) = (checked, outcome.as_ref()) else {
+            return Err(StoreError::Unavailable(
+                "a checker's return reached its transaction without its check's read".into(),
+            ));
+        };
+        let binding = &checked.binding;
+        let revision = match outcome {
+            Outcome::Revise(order) => Some(order.id()),
+            Outcome::Open { .. } => None,
+        };
+        let result = CheckResult {
+            phase: checked.phase,
+            plan_digest: binding.plan_digest,
+            findings: checked.findings.findings(),
+            work_order: &checked.work_order,
+            scope: binding.scope,
+            previous_check: None,
+            truth_versions: &binding.truth_versions,
+            material: &binding.material,
+            scope_policy_version: binding.scope_policy_version,
+            revision,
+        };
+        tx.append(NewEvent {
+            stream: StreamName(phase_stream(checked.phase)),
+            type_name: PLAN_CHECKED.into(),
+            type_version: PLAN_CHECKED_VERSION,
+            git: None,
+            payload: result.payload(),
+            attachments: binding
+                .material
+                .iter()
+                .map(|input| input.body.clone())
+                .collect(),
+        })?;
+        let mut observed = Observed {
+            documents: checked.documents.clone(),
+            ..Observed::default()
+        };
+        let findings = json!(checked.findings.findings());
+        let answer = match outcome {
+            Outcome::Revise(order) => {
+                let members = order.issue_within(tx, at)?;
+                observed.documents.extend_from_slice(order.documents());
+                observed.absences = planner_absences(checked.phase);
+                json!({"status": "ok", "round": binding.round,
+                    "digest": binding.plan_digest.to_hex(), "findings": findings,
+                    "revision": members})
+            }
+            Outcome::Open {
+                set,
+                stories,
+                size,
+                facts,
+            } => {
+                let subject = Subject::Plan {
+                    phase: checked.phase,
+                    plan_digest: binding.plan_digest,
+                };
+                let opened = open(tx, set, &subject, at)?;
+                observed.documents.extend_from_slice(facts.documents());
+                let mut receipt = draft_members(
+                    binding.plan_digest,
+                    checked.phase,
+                    stories,
+                    *size,
+                    facts.facts.size,
+                    facts.facts.capacity,
+                    at,
+                );
+                receipt.insert("set".into(), json!(opened));
+                receipt.insert("round".into(), json!(binding.round));
+                receipt.insert("findings".into(), findings);
+                let answer = with_now(receipt, &opened, &round_of(&opened_facts(set)));
+                with_preview(answer, checked.body.clone(), binding.plan_digest)
+            }
+        };
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer,
+            sensitive: false,
+            observed,
+            git: None,
+        })
+    });
+    crate::scope::submit::answer(result, store)
+}
+
+/// What the round-1 recording of `checked` does, prepared outside its
+/// transaction: the revision order as `id` for a blocker, otherwise the
+/// draft's set read back from its questions with `judge_set` and the
+/// phase's facts read now. A draft whose questions or stories cannot be
+/// read is a ledger fault; a fault is the answer to give.
+fn outcome<S: Views + Payloads + ?Sized>(
+    store: &S,
+    command: &Command,
+    checked: &CheckedReturn,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Result<Outcome, Value> {
+    if checked.findings.has_blocker() {
+        return prepare_check_revision(
+            store,
+            command,
+            checked.phase,
+            checked.binding.plan_digest,
+            checked.findings.findings(),
+            policy,
+            host,
+            names,
+            id,
+        )
+        .map(Outcome::Revise);
+    }
+    let plan = &checked.draft.plan;
+    let set = plan
+        .get("questions")
+        .and_then(|questions| judge_set(questions).ok())
+        .ok_or_else(|| unreadable("the checked draft's questions cannot be read"))?;
+    let stories = plan
+        .get("stories")
+        .and_then(Value::as_array)
+        .and_then(|stories| {
+            stories
+                .iter()
+                .map(|story| story.as_u64().and_then(|story| u32::try_from(story).ok()))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| unreadable("the checked draft's stories cannot be read"))?;
+    let size = plan
+        .get("tasks")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| unreadable("the checked draft's tasks cannot be read"))?;
+    let facts = facts::read(
+        store,
+        &command.project,
+        checked.phase,
+        facts::capacity(policy),
+    )?;
+    Ok(Outcome::Open {
+        set,
+        stories,
+        size,
+        facts,
     })
 }
 
@@ -557,5 +776,125 @@ pub(crate) mod tests {
         assert_eq!(checked.phase, 1);
         assert_eq!(checked.draft.plan, pl2());
         assert_eq!(checked.body, as_drafted(pl2()));
+    }
+
+    /// The `plan.check_return` command under `request_id` at `at` and policy
+    /// version `version`, its caller carrying `work_order` and `checked`'s
+    /// instructions.
+    fn return_command(
+        work_order: &str,
+        checked: &CheckedReturn,
+        request_id: &str,
+        at: &str,
+        version: u64,
+    ) -> Command {
+        let mut command = command("plan.check_return", request_id, 8, at);
+        command.policy_version = version;
+        let on = caller()
+            .with_work_order(work_order)
+            .unwrap()
+            .with_instructions(checked.evidence.clone())
+            .unwrap();
+        command.caller = Some(Caller::Server(on));
+        command
+    }
+
+    /// Returns `work_order` with `findings` through the check and the
+    /// recording under `policy` for Claude Code with N0, a revision, if any,
+    /// as `id`, under `request_id` at `at` and policy version `version`.
+    /// Gives the answer.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn returned(
+        store: &SqliteStore,
+        work_order: &str,
+        findings: Vec<Value>,
+        policy: &EffectivePolicy,
+        id: &str,
+        request_id: &str,
+        at: &str,
+        version: u64,
+    ) -> Value {
+        let checked = match check(store, &project(), work_order, findings) {
+            Ok(checked) => checked,
+            Err(refusal) => return refusal,
+        };
+        let command = return_command(work_order, &checked, request_id, at, version);
+        record(
+            store,
+            &command,
+            Some(&checked),
+            policy,
+            Host::ClaudeCode,
+            &n0(),
+            id,
+        )
+    }
+
+    #[test]
+    fn a_round_one_result_recorded_off_its_order_or_with_another_binding_is_caught() {
+        let (_dir, store, x2) = pl2_checking();
+        let receipt = returned(&store, C1, vec![fb(), fw()], &p0(), V, R3, T6, 9);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+
+        let events = history(&store);
+        let checked = of_type(&events, "plan.checked");
+        assert_eq!(checked.len(), 1);
+        let event = checked[0];
+        assert_eq!(event.stream, "phase/1");
+        let material: Vec<Value> = c1_material(&store)
+            .into_iter()
+            .map(|input| json!({"name": input.name, "body": input.body.to_value()}))
+            .collect();
+        // The store refuses a payload reference an event does not attach, so
+        // this material recorded is this material attached.
+        assert_eq!(
+            event.payload,
+            json!({"phase": 1, "plan_digest": x2, "findings": [fb(), fw()], "round": 1,
+                "work_order": C1, "scope": "full",
+                "truth_versions": [{"story": 1, "truth": "t1", "version": 1},
+                    {"story": 1, "truth": "t2", "version": 1}],
+                "material": material, "scope_policy_version": 5, "revision": V})
+        );
+
+        let order = crate::work_order::read::order(&store, &project(), C1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(order["state"], "answered", "{order}");
+        assert_eq!(order["drafts"], json!([x2]), "{order}");
+        let phase_plan = store
+            .get(
+                &project(),
+                baley_core::plan::PHASE_PLAN_VIEW,
+                &baley_core::plan::phase_plan_key(1),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            phase_plan.body["checks"],
+            json!([{"revision": V, "first": {"seq": event.seq, "plan_digest": x2},
+                "recheck": null}])
+        );
+    }
+
+    #[test]
+    fn a_return_landing_after_its_order_failed_is_caught() {
+        use crate::planning::order::tests::fail_by_hand;
+
+        let (_dir, store, _) = pl2_checking();
+        let checked = check(&store, &project(), C1, vec![fw()]).expect("the return is checked");
+        fail_by_hand(&store, C1, R3);
+        let before = head(&store);
+        let answer = record(
+            &store,
+            &return_command(C1, &checked, R4, T7, 5),
+            Some(&checked),
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            V,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
     }
 }

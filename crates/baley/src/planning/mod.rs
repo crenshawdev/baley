@@ -8,6 +8,8 @@
 //! planner's plan against its order and the phase, over facts read from the
 //! views, and records it as the phase's one draft, with its question set or,
 //! when the plan gate is not `off`, with the plan checker's round-1 order;
+//! the checker's return, whose round-1 result buys a blocker one planner
+//! revision and otherwise opens the draft's set and previews it;
 //! `plan replace`, recorded as a submit is and approved into a new number;
 //! and the owner's approval of that draft, in two steps, at the terminal
 //! through `baley plan approve`; and a phase's approved plans read back with
