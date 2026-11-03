@@ -43,7 +43,7 @@ use crate::mcp::prepare::{
     CHECKOUT_FACTS_UNAVAILABLE, LEDGER_UNAVAILABLE, Prepared, Stepped, WriteRequest,
     prepare_checked, prepare_settings_read,
 };
-use crate::planning::checker::{Refused, checker_order_pending, pending_checker};
+use crate::planning::checker::{Refused, checker_absences, checker_order_pending, pending_checker};
 use crate::planning::order::{pending_planner, planner_absences, planner_order_pending};
 use crate::process::Process;
 use crate::refine::order::{
@@ -892,7 +892,8 @@ fn retry_refused(id: &str, refusal: RetryRefusal) -> Value {
 /// pending start order and no start approval, so a start approved since the
 /// check makes it `ledger-busy` too, a retried analyzer order declares no
 /// pending analyzer order of its story, and a retried planner order no
-/// pending planner order of its phase, so one issued since does the same.
+/// pending planner or checker order of its phase, so one issued since does
+/// the same.
 pub fn issue_retry(
     store: &SqliteStore,
     command: &Command,
@@ -928,7 +929,9 @@ pub fn issue_retry(
     } else if let Some(story) = analyzer_story(retry) {
         analyzer_absences(story)
     } else if let Some(phase) = planner_phase(retry) {
-        planner_absences(phase)
+        let mut absences = planner_absences(phase);
+        absences.extend(checker_absences(phase));
+        absences
     } else {
         Vec::new()
     };

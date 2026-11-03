@@ -307,7 +307,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::planning::fixtures::*;
-    use crate::planning::order::tests::{O, fail_by_hand, prepared};
+    use crate::planning::order::tests::{O, O2, fail_by_hand, prepared};
     use crate::planning::submit::check;
     use crate::planning::submit::tests::order_o;
     use crate::refine::order::tests::{input_body, input_names, issued};
@@ -561,6 +561,34 @@ pub(crate) mod tests {
         let reason = refusal["reason"].as_str().unwrap();
         assert!(reason.ends_with("then retry the order again"), "{reason}");
         assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_planner_retry_issued_over_a_checker_order_since_its_check_is_caught() {
+        let (_dir, store) = failed_o();
+        let checked = crate::mcp::work_order::retry_check(&store, &project(), O)
+            .expect("O failed and no order of phase 1 is pending");
+        let checker = issued_alone(&store, C1, R3, T7);
+        assert_eq!(checker["status"], "ok", "{checker}");
+
+        let before = head(&store);
+        let command = command(crate::mcp::work_order::RETRY_COMMAND, R4, 9, T8);
+        let answer = crate::mcp::work_order::issue_retry(
+            &store,
+            &command,
+            &checked,
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            O2,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
+        assert_eq!(
+            crate::planning::order::pending_planner(&store, &project(), 1).unwrap(),
+            None
+        );
     }
 
     #[test]
