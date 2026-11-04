@@ -8,10 +8,10 @@
 //! planner's plan against its order and the phase, over facts read from the
 //! views, and records it as the phase's one draft, with its question set or,
 //! when the plan gate is not `off`, with the plan checker's round-1 order;
-//! the checker's return, whose round-1 result buys a blocker one planner
-//! revision and otherwise opens the draft's set and previews it; the
-//! re-check at submit, which finds a revision's first check and binds its
-//! round 2;
+//! the checker's return, recorded under its round's binding, where a round-1
+//! blocker buys one planner revision and otherwise the draft's set opens and
+//! the draft is previewed; the re-check at submit, which finds a revision's
+//! first check and binds its round 2;
 //! `plan replace`, recorded as a submit is and approved into a new number;
 //! and the owner's approval of that draft, in two steps, at the terminal
 //! through `baley plan approve`; and a phase's approved plans read back with
@@ -21,7 +21,7 @@
 pub mod approve;
 
 /// The plan checker's return: the check of a checker order's findings and
-/// the recording of its round-1 result.
+/// the recording of its result under its round's binding.
 pub mod check_return;
 
 /// The plan checker's work order: its round-1 preparation and issue on

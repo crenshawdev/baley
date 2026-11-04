@@ -8,10 +8,10 @@
 //! `work_order.issued`, its route resolved again under the current policy. A
 //! retried checker order keeps its parent's inputs and so its binding, its
 //! result finding that binding through the chain's first order with no second
-//! `plan.check_issued`, and it runs only while the draft it checks is the
-//! phase's newest (D-10). A refusal records nothing. The `route` query on
-//! `baley_query` explains the route a role or an order runs under, and records
-//! nothing at all.
+//! `plan.check_issued`, and it runs only while the submission it checks is the
+//! phase's newest plan draft (D-10). A refusal records nothing. The `route`
+//! query on `baley_query` explains the route a role or an order runs under, and
+//! records nothing at all.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
@@ -716,9 +716,12 @@ pub struct CheckedRetry {
 /// a blocker it returns issues the phase's revision order (D-07). A phase's
 /// checker order is refused `stale-draft` at slot `work_order`, naming the
 /// newest draft, unless the draft its binding names is the phase's newest
-/// plan draft, so a check is not run again on a draft the owner can no longer
-/// approve (D-10), and then `planner-order-pending` while a planner order of
-/// the phase is pending, since a round-1 blocker's revision declares none.
+/// plan draft and was not submitted again since the order was issued, so a
+/// check is not run again on a draft a later submission took over, whatever
+/// that submission's digest (D-10). A checker order pending beside a failed one
+/// always comes from such a submission, so this answers for it too. Then it is
+/// refused `planner-order-pending` while a planner order of the phase is
+/// pending, since a round-1 blocker's revision declares none.
 pub fn retry_check<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -806,7 +809,14 @@ pub fn retry_check<S: Ledger + Views + Payloads + ?Sized>(
             .first()
             .and_then(draft_at)
             .ok_or_else(order_unreadable)?;
-        if newest.0 != binding.plan_digest {
+        // A draft and its order are recorded together, the draft first, so a
+        // later sequence is a later submission, even of the same digest.
+        let issued = parent
+            .body
+            .get("seq")
+            .and_then(Value::as_u64)
+            .ok_or_else(order_unreadable)?;
+        if newest.0 != binding.plan_digest || newest.1 > issued {
             return Err(stale_checker_retry(id, newest.0));
         }
         let pending = pending_planner(store, project, phase)
@@ -876,14 +886,15 @@ fn draft_at(document: &Document) -> Option<(Hash, u64)> {
     Some((Hash::from_hex(digest)?, body.get("seq")?.as_u64()?))
 }
 
-/// The refusal for a retry of checker order `id`, whose draft `newest`
-/// replaced.
+/// The refusal for a retry of checker order `id`, whose draft a later
+/// submission took over, `newest` being that submission's digest, which can be
+/// the same one.
 fn stale_checker_retry(id: &str, newest: Hash) -> Value {
     let newest = newest.to_hex();
     Refusal::new(
         STALE_DRAFT,
         format!(
-            "a newer plan draft, {newest}, replaced the draft checker work order {id} checks, so its check is not run again and no retry was issued"
+            "plan draft {newest} was submitted after the draft checker work order {id} checks, so its check is not run again and no retry was issued"
         ),
     )
     .slot("work_order")
@@ -2518,5 +2529,47 @@ pub(crate) mod tests {
         assert_eq!(answer["status"], "failed", "{answer}");
         assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_checker_retry_of_a_draft_submitted_again_is_caught() {
+        use crate::mcp::questions::tests::{REVISION, relayed};
+        use crate::planning::approve::tests::{approved, digest_of};
+        use crate::planning::check_return::tests::{V, fw, gated, returned};
+        use crate::planning::checker::tests::C1;
+        use crate::planning::fixtures::*;
+        use crate::planning::order::tests::O;
+        use crate::questions::answer::tests::take;
+        use crate::scope::fixtures::*;
+
+        let (_dir, store) = c1_failed();
+        let refused = |store: &SqliteStore, digest: &str| {
+            let before = head(store);
+            let refusal = retry_check(store, &project(), C1).expect_err("C1's draft came again");
+            assert_refused(
+                &refusal,
+                "stale-draft",
+                "work_order",
+                &json!({"newest": digest}),
+            );
+            assert_eq!(head(store), before);
+        };
+
+        // The same bytes under O: one digest, a later submission.
+        let again = gated(&store, &pl2(), O, &p0(), C3, R4, T6);
+        assert_eq!(again["check"]["work_order"], C3, "{again}");
+        let x2 = digest_of(&again);
+        refused(&store, &x2.to_hex());
+
+        let back = returned(&store, C3, vec![fw()], &p0(), V, R5, T7, 5);
+        assert_eq!(back["status"], "ok", "{back}");
+        refused(&store, &x2.to_hex());
+
+        let set = back["set"].as_str().expect("a set id");
+        let closed = relayed(&store, set, &json!([take("q1")]), R6, T8, REVISION);
+        assert_eq!(closed["status"], "ok", "{closed}");
+        let approval = approved(&store, x2, &p0(), R7, T9);
+        assert_eq!(approval["status"], "ok", "{approval}");
+        refused(&store, &x2.to_hex());
     }
 }

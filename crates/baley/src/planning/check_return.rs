@@ -5,10 +5,11 @@
 //! belongs to reviews (ADR 0019).
 //!
 //! The check runs before admission and records nothing: the order, the
-//! findings' shape, then the round's binding, never the files or settings
-//! current at the return. An order whose chain's first order is a lineage's
-//! round-2 order is round 2, bound by that lineage's `plan.check_issued`
-//! (D-09, D-10), and any other is round 1, bound by its own `check` input.
+//! findings' shape, the order's inputs still held, then the round's binding,
+//! never the files or settings current at the return. An order whose chain's
+//! first order is a lineage's round-2 order is round 2, bound by that
+//! lineage's `plan.check_issued` (D-09, D-10), and any other is round 1, bound
+//! by its own `check` input.
 //! The recording then records the round's `plan.checked` with that binding
 //! and, in the same transaction, what the findings buy (D-07): in round 1 a
 //! blocker buys the planner's one revision order, and otherwise, round 2's
@@ -25,13 +26,13 @@ use baley_core::plan::{
 use baley_core::policy::{AcceptedNames, EffectivePolicy, Host, RecheckScope, Role};
 use baley_core::questions::{QuestionSet, Subject, judge_set, round_of};
 use baley_core::work_order::{
-    NO_SUCH_WORK_ORDER, OrderInput, PENDING, WORK_ORDER_NOT_PENDING, WORK_ORDER_VIEW,
-    WRONG_WORK_ORDER, phase_subject, work_order_key,
+    MATERIAL_UNAVAILABLE, NO_SUCH_WORK_ORDER, OrderInput, PENDING, WORK_ORDER_NOT_PENDING,
+    WORK_ORDER_VIEW, WRONG_WORK_ORDER, phase_subject, work_order_key,
 };
 use baley_store::{
     Command, Decision, Hash, HistoryFilter, InstructionEvidence, Ledger, NewEvent, Observed,
     ObservedDocument, OutcomeKind, PageRequest, PayloadBody, PayloadRef, Payloads, ProjectId,
-    StoreError, StreamName, Views,
+    RETENTION_STREAM, StoreError, StreamName, Views,
 };
 use serde_json::{Value, json};
 
@@ -49,7 +50,7 @@ use crate::refine::order::order_evidence;
 use crate::refine::questions::opened_facts;
 use crate::scope::submit::NOT_RECORDED_BUSY;
 use crate::work_order::issue::attachments;
-use crate::work_order::read::order_document;
+use crate::work_order::read::{Releases, order_document, releases};
 
 /// What the return's check read and judged, which the recording records.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +73,9 @@ pub struct CheckedReturn {
     /// The order's `work_order` document and the `phase_plan` document that
     /// told its round, each at the sequence that produced it.
     documents: Vec<ObservedDocument>,
+    /// The `retention` stream's version the check's releases were read up
+    /// to.
+    retention: u64,
 }
 
 /// A round's binding as it was fixed when the round was issued (design 0005
@@ -102,11 +106,14 @@ pub(crate) struct Binding {
 /// phase; `work-order-not-pending` naming its state when it failed or
 /// already returned. Then the findings judged by `judge_findings`,
 /// `finding-shape` at slot `findings` naming the first entry that is not a
-/// finding. Then the round's binding by [`order_binding`] and the draft read
-/// back through its `plan` material, so the result is bound to what was
-/// fixed at issue and never to the truths or settings current now (design
-/// 0005 section 6). A binding or body that cannot be read is a ledger fault;
-/// a read fault is the `failed` answer.
+/// finding. Then `material-unavailable` at slot `work_order` naming the first
+/// input of the order this project purged, since the result attaches what the
+/// order holds and the session sent none of it; the way out is the order's
+/// failure and a fresh planner order (D-02). Then the round's binding by
+/// [`order_binding`] and the draft read back through its `plan` material, so
+/// the result is bound to what was fixed at issue and never to the truths or
+/// settings current now (design 0005 section 6). A binding or body that cannot
+/// be read is a ledger fault; a read fault is the `failed` answer.
 pub fn check<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
@@ -130,6 +137,10 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
     let findings = judge_findings(findings).map_err(|refusal| finding_refused(&refusal))?;
     let evidence = order_evidence(body)
         .ok_or_else(|| unreadable("the checker order's instructions cannot be read"))?;
+    let released = releases(store, project).map_err(busy)?;
+    if let Some(input) = purged_input(body, &released) {
+        return Err(material_unavailable(work_order, input));
+    }
     let (binding, phase_plan) = order_binding(store, project, body, phase)?;
     let plan = binding
         .material
@@ -155,6 +166,21 @@ pub fn check<S: Ledger + Views + Payloads + ?Sized>(
             },
             phase_plan,
         ],
+        retention: released.version,
+    })
+}
+
+/// The name of the first input `order`, a `work_order` document, lists whose
+/// reference this project's purges released, as the retry judge finds one. A
+/// purge releases every reference the project holds to a body, the order's
+/// issue included. A document that cannot be read holds none here, and the
+/// binding's read answers for it.
+fn purged_input<'a>(order: &'a Value, released: &Releases) -> Option<&'a str> {
+    let seq = order.get("seq")?.as_u64()?;
+    order.get("inputs")?.as_array()?.iter().find_map(|input| {
+        let body = PayloadRef::from_value(input.get("body")?)?;
+        released.find(seq, &body.hash)?;
+        input.get("name")?.as_str()
     })
 }
 
@@ -301,10 +327,11 @@ enum Outcome {
 /// `now`, `round` and `findings`. A warning never buys a round.
 ///
 /// Every decision observes the order's `work_order` document and the
-/// `phase_plan` document, so a second return, a failure or a moved lineage
-/// since the check makes the call `ledger-busy` with nothing recorded. A
-/// replay is answered from the record before any
-/// decision runs, so it passes no `checked`.
+/// `phase_plan` document and expects the `retention` stream where the check
+/// read it, so a second return, a failure, a moved lineage or a purge since
+/// the check makes the call `ledger-busy` with nothing recorded, and a repeat
+/// is judged afresh. A replay is answered from the record before any decision
+/// runs, so it passes no `checked`.
 pub fn record<S: Ledger + Views + Payloads>(
     store: &S,
     command: &Command,
@@ -328,6 +355,9 @@ pub fn record<S: Ledger + Views + Payloads>(
                 "a checker's return reached its transaction without its check's read".into(),
             ));
         };
+        // Before the attachments: a purged body would refuse them as if the
+        // caller had sent it.
+        tx.expect(&StreamName(RETENTION_STREAM.into()), checked.retention)?;
         let binding = &checked.binding;
         let revision = match outcome {
             Outcome::Revise(order) => Some(order.id()),
@@ -665,6 +695,20 @@ fn not_pending(work_order: &str, state: &str) -> Value {
     )
     .slot("work_order")
     .details(json!({"state": state}))
+    .value()
+}
+
+/// The refusal for checker order `work_order`, whose input `input` this
+/// project purged.
+fn material_unavailable(work_order: &str, input: &str) -> Value {
+    Refusal::new(
+        MATERIAL_UNAVAILABLE,
+        format!(
+            "this project purged the {input} input of checker work order {work_order}, so these findings were not recorded, and sending them again changes nothing. Fail the order with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check, since a retry carries the same inputs"
+        ),
+    )
+    .slot("work_order")
+    .details(json!({"input": input}))
     .value()
 }
 
@@ -1407,5 +1451,101 @@ pub(crate) mod tests {
         assert_eq!(receipt["preview"], as_drafted(pl2r()));
         assert!(receipt["set"].is_string(), "{receipt}");
         assert!(receipt.get("revision").is_none(), "{receipt}");
+    }
+
+    #[test]
+    fn a_round_two_return_of_an_unchanged_revision_attaching_one_body_twice_is_caught() {
+        let (_dir, store, x2) = pl2_checking();
+        let back = returned(&store, C1, vec![fb(), fw()], &p0(), V, R3, T6, 5);
+        assert_eq!(back["revision"]["work_order"], V, "{back}");
+
+        // The revision changes nothing, so the draft keeps its digest.
+        let revised = through_lineage(&store, &pl2(), V, &p0(), C2, R4, T7, 5);
+        assert_eq!(revised["check"]["work_order"], C2, "{revised}");
+        assert_eq!(revised["digest"], x2.as_str(), "{revised}");
+        let inputs = issue_of(&store, C2).payload["inputs"].clone();
+        let body_of = |name: &str| {
+            inputs
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|input| input["name"] == name)
+                .unwrap()["body"]
+                .clone()
+        };
+        assert_eq!(body_of("original"), body_of("plan"));
+
+        let receipt = returned(&store, C2, vec![fw()], &p0(), V, R5, T8, 5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["round"], 2, "{receipt}");
+        let events = history(&store);
+        let results = of_type(&events, "plan.checked");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[1].payload["round"], 2);
+        assert_eq!(results[1].payload["plan_digest"], x2.as_str());
+        assert_eq!(results[1].payload["work_order"], C2);
+        assert_eq!(results[1].payload["material"], inputs);
+    }
+
+    #[test]
+    fn a_purged_input_blamed_on_the_returned_submission_is_caught() {
+        for name in ["original", "plan", "truths", "delta", "blockers"] {
+            let (_dir, store, ..) = lineage(&pd(), 6);
+            let held = issue_of(&store, C2);
+            let input = held.payload["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|input| input["name"] == name)
+                .unwrap();
+            let gone = PayloadRef::from_value(&input["body"]).unwrap().hash;
+            purge_in(&store, &project(), gone, "the owner purged it");
+
+            let refusal = refused_with(&store, C2, "material-unavailable");
+            assert_eq!(refusal["details"], json!({"input": name}), "{refusal}");
+            let reason = refusal["reason"].as_str().unwrap();
+            assert!(reason.contains(name), "{reason}");
+            assert!(reason.contains("`work-order-fail`"), "{reason}");
+            assert_eq!(
+                pending_checker(&store, &project(), 1).unwrap().as_deref(),
+                Some(C2)
+            );
+        }
+
+        // Round 1's binding is its own input, purged the same way.
+        let (_dir, store, _) = pl2_checking();
+        let held = issue_of(&store, C1);
+        let input = held.payload["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["name"] == "check")
+            .unwrap();
+        let gone = PayloadRef::from_value(&input["body"]).unwrap().hash;
+        purge_in(&store, &project(), gone, "the owner purged it");
+        let refusal = refused_with(&store, C1, "material-unavailable");
+        assert_eq!(refusal["details"], json!({"input": "check"}), "{refusal}");
+    }
+
+    #[test]
+    fn a_purge_landing_after_a_returns_check_blamed_on_the_submission_is_caught() {
+        let (_dir, store, ..) = lineage(&pd(), 6);
+        let checked = check(&store, &project(), C2, vec![fw()]).expect("every input is held");
+        let gone = c1_material(&store)[0].body.hash;
+        purge_in(&store, &project(), gone, "the owner purged it");
+
+        let before = head(&store);
+        let answer = record(
+            &store,
+            &return_command(C2, &checked, R5, T8, 6),
+            Some(&checked),
+            &p0(),
+            Host::ClaudeCode,
+            &n0(),
+            V,
+        );
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
     }
 }
