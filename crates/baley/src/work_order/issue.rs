@@ -17,8 +17,8 @@ use baley_core::work_order::{
 };
 use baley_store::{
     Absence, Command, Decision, InstructionEvidence, KeyValue, Ledger, NewEvent, Observed,
-    ObservedDocument, OutcomeKind, Payloads, Recorded, Refusal as StoreRefusal, RetentionClass,
-    StoreError, StreamName, Transaction,
+    ObservedDocument, OutcomeKind, PayloadRef, Payloads, Recorded, Refusal as StoreRefusal,
+    RetentionClass, StoreError, StreamName, Transaction,
 };
 use serde_json::{Map, Value, json};
 
@@ -146,6 +146,19 @@ pub fn record<L: Ledger + ?Sized>(
     })
 }
 
+/// The attachments of an event carrying `inputs`: each body once, in the order
+/// first named. Bodies are content-addressed, so two inputs can hold one body,
+/// and an event may list an attachment only once.
+pub fn attachments(inputs: &[OrderInput]) -> Vec<PayloadRef> {
+    let mut bodies: Vec<PayloadRef> = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        if !bodies.iter().any(|body| body.hash == input.body.hash) {
+            bodies.push(input.body.clone());
+        }
+    }
+    bodies
+}
+
 /// Issues `issue` inside `tx`, a transaction its caller runs, recorded at
 /// `recorded_at`: its inputs stored as `record` payloads and one
 /// `work_order.issued` on its subject's stream, after the stream versions it
@@ -197,7 +210,7 @@ pub fn issue_within(
         type_version: WORK_ORDER_ISSUED_VERSION,
         git: None,
         payload,
-        attachments: inputs.iter().map(|input| input.body.clone()).collect(),
+        attachments: attachments(&inputs),
     })?;
     let mut receipt = Map::new();
     receipt.insert("work_order".into(), json!(issue.id));

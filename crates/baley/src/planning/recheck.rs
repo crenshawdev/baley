@@ -37,6 +37,7 @@ use crate::planning::checker::{
 };
 use crate::planning::submit::Checked;
 use crate::scope::submit::NOT_RECORDED_BUSY;
+use crate::work_order::issue::attachments;
 
 /// The setting the re-check scope is read from.
 const SCOPE_SETTING: &str = "review.triggers.plan.recheck";
@@ -70,6 +71,7 @@ impl Recheck {
     /// and the material, then `order` issued with that material as its
     /// inputs. The material is, in order, `original`, `plan`, `truths`,
     /// `delta` only under `diff`, and `blockers`, each body canonical JSON.
+    /// An unchanged revision's `original` and `plan` name one body.
     /// Gives the order's receipt members.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn record_within(
@@ -128,7 +130,7 @@ impl Recheck {
             type_version: PLAN_CHECK_ISSUED_VERSION,
             git: None,
             payload: issue.payload(),
-            attachments: material.iter().map(|input| input.body.clone()).collect(),
+            attachments: attachments(&material),
         })?;
         order.issue_within(tx, at, &material)
     }
@@ -793,6 +795,39 @@ mod tests {
             .iter()
             .map(|input| input["name"].as_str().unwrap())
             .collect()
+    }
+
+    #[test]
+    fn an_unchanged_revision_listing_one_body_twice_failing_its_round_two_is_caught() {
+        use crate::refine::order::tests::input_body;
+
+        // Under P0: PL2 resubmitted as it stands, so `original` and `plan`
+        // name one body.
+        let (_dir, store, x2, _) = lineage_v(vec![fb()]);
+        let receipt = through(&store, &pl2(), V, &p0(), C2, R4, T7, 5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["check"]["work_order"], C2, "{receipt}");
+        assert_eq!(receipt["digest"], x2.to_hex());
+        let events = history(&store);
+        let issue = of_type(&events, "plan.check_issued")[0];
+        assert_eq!(issue.payload["original_plan_digest"], x2.to_hex());
+        assert_eq!(issue.payload["plan_digest"], x2.to_hex());
+        let material = &issue.payload["material"];
+        assert_eq!(names(material), ["original", "plan", "truths", "blockers"]);
+        assert_eq!(material[0]["body"], material[1]["body"]);
+        assert_eq!(&issue_of(&store, C2).payload["inputs"], material);
+        assert_eq!(state(&store, C2), "pending");
+
+        // Under PD: the same, with an empty delta.
+        let (_dir, store, _, _) = lineage_v(vec![fb()]);
+        let receipt = through(&store, &pl2(), V, &pd(), C2, R4, T7, 6);
+        assert_eq!(receipt["check"]["work_order"], C2, "{receipt}");
+        let order = issue_of(&store, C2);
+        assert_eq!(
+            names(&order.payload["inputs"]),
+            ["original", "plan", "truths", "delta", "blockers"]
+        );
+        assert_eq!(input_body(&store, &order, "delta"), json!([]));
     }
 
     #[test]
