@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Accepted |
-| Design issue | [#47](https://github.com/jcrenshaw-dev/baley/issues/47) |
+| Design issue | [#47](https://github.com/crenshawdev/baley/issues/47) |
 | Requirement prefix | UPK |
 | Applies | [0002: System design](0002-system-design.md) |
 | Related | ADRs: [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md), [0034](../adr/0034-one-server-per-session.md), [0038](../adr/0038-installer-and-opt-in-updates.md), [0039](../adr/0039-session-owned-provider-credentials.md) · C4 view: not applicable (no runtime component) |
@@ -14,7 +14,7 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 Baley uses one public name, describes its built state accurately, and requires a reproducible set of checks before changes reach `main`. This area defines those names, the treatment of project history, repository metadata and labels, the formatting gate, and the evidence used to assess the test suite's cost.
 
-The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/jcrenshaw-dev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/jcrenshaw-dev/baley/issues/14), and the architecture overview to [#44](https://github.com/jcrenshaw-dev/baley/issues/44).
+The host interface in [0012](0012-host-interface.md) owns installation and protocol behavior. [ADR 0038](../adr/0038-installer-and-opt-in-updates.md) specifies one installer command, the binary writing all host wiring through `baley install`, and opt-in verified updates for new server sessions, with the hook taking the new stable-path version at its next call. [Build 3 tasks T14 to T17](../roadmap.md#build-3-hosts) implement that decision under [HST-R17](0012-host-interface.md#3-requirements) and [#24](https://github.com/crenshawdev/baley/issues/24). The evidence ledger in [0001](0001-evidence-ledger.md) owns storage replacement and compatibility. The release gate belongs to [#14](https://github.com/crenshawdev/baley/issues/14), and the architecture overview to [#44](https://github.com/crenshawdev/baley/issues/44).
 
 Cadence is Baley's predecessor project, a separately maintained tool that can still be registered in the same host.
 
@@ -43,7 +43,7 @@ This area uses the existing [glossary](../../CONTEXT.md) terms without changing 
 | UPK-R5 | `main` requires `cargo-test`, `clippy`, `cargo-deny` and `fmt`, with strict up-to-date checks and the expected check producer preserved; `fmt` becomes required only after its job exists and passes. | The gate includes formatting without requiring a result no workflow can produce. | | Active |
 | UPK-R6 | Formatting uses the exact toolchain in `rust-toolchain.toml`, explicitly installs that toolchain's `rustfmt`, and runs `cargo fmt --all --check`. | A minimal toolchain installation does not supply every optional component. | UPK-R5 | Active |
 | UPK-R7 | Repository metadata and README status describe the built product and supported host, using section 9's values. | Public entry points must describe the same project. | ADR 0033 | Active |
-| UPK-R8 | Issues use the jcrenshaw-dev issue types and labels in the [org label standard](https://github.com/jcrenshaw-dev/.github/blob/main/LABELS.md). Dependabot's `dependencies` and `rust` labels stay as Dependabot applies them. A label is deleted only after every issue carrying it has the type that replaces it. | Removing a used label erases classification. | | Active |
+| UPK-R8 | Issues use the labels in the [label standard](https://github.com/crenshawdev/.github/blob/main/LABELS.md). Dependabot's `dependencies` and `rust` labels stay as Dependabot applies them. A label is deleted only after every issue carrying it has the label that replaces it. | Removing a used label erases classification. | | Active |
 | UPK-R9 | The bug form sets the Bug type and `needs-triage`, and requires one of section 9's three impact choices. The question form sets `needs-triage`. Impact is the reporter's, and severity is set at triage. | Only the reporter knows what the problem costs them. | | Active |
 | UPK-R10 | Suite cost is measured at the implementation commit without a competing build, with six build jobs and six test threads, full per-file executed counts, the twenty slowest cases plus ties, and an assessment of every represented file. | Elapsed time and source counts do not establish test value. | UPK-R11 | Active |
 | UPK-R11 | Each build and test run uses its share of half the machine's threads: half the thread count divided by the number of streams building at the same time, rounded down. The other half stays free for the owner's own work. Nextest commands explicitly set the share as build jobs and test threads, and clippy explicitly sets it with `-j`. The repository sets no cargo job count and nextest's default profile uses every thread, so a command that does not set the share uses all of them. CI runs one stream and sets six. | Compilation and test execution have separate concurrency limits, a fixed count leaves threads idle when one stream builds alone, and a run on every thread leaves the machine no room for other work. | | Active |
@@ -83,7 +83,7 @@ The `fmt` job belongs in [test.yml](../../.github/workflows/test.yml). It uses t
 
 ### Inspect the applied gate
 
-**Input:** `gh api repos/jcrenshaw-dev/baley/rules/branches/main`.
+**Input:** `gh api repos/crenshawdev/baley/rules/branches/main`.
 
 **Output:** the applied contexts, strict-check setting and expected integration for each check. A workflow job's presence does not establish that it is required. The required context is exactly `fmt`, from the same expected producer as the existing checks. Other branch rules remain intact. GitHub documents the expected source in [ruleset checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) and pending results from skipped workflows in [required-check troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
@@ -133,7 +133,7 @@ The unnamed baseline is retained in [0001:35](0001-evidence-ledger.md#L35), its 
 
 ### Canonical names and consumers
 
-The names below cover the public and stored surfaces of [#53](https://github.com/jcrenshaw-dev/baley/issues/53). Retained engine definitions are distinguished from the session server that runs in production.
+The names below cover the public and stored surfaces of [#53](https://github.com/crenshawdev/baley/issues/53). Retained engine definitions are distinguished from the session server that runs in production.
 
 | Surface | Names and current source |
 |---|---|
@@ -151,7 +151,7 @@ The file-valued `BALEY_GLOBAL_CONFIG` is not an alias for the directory-valued `
 
 ### Suite-cost report
 
-The measurement belongs in the pull request for [#54](https://github.com/jcrenshaw-dev/baley/issues/54), not in a runtime ledger record.
+The measurement belongs in the pull request for [#54](https://github.com/crenshawdev/baley/issues/54), not in a runtime ledger record.
 
 | Field | Meaning |
 |---|---|
@@ -211,9 +211,9 @@ UPK-R10 and UPK-Q3 require the measurement specified in section 5, full per-file
 
 ### Labels
 
-Baley uses the organization's issue types and labels, defined in the [org label standard](https://github.com/jcrenshaw-dev/.github/blob/main/LABELS.md). The issue types are Bug, Enhancement, Docs and Task. The labels are the four severity labels, the four resolution labels, `needs-triage`, `needs-info`, `good first issue`, `help wanted`, `security` and `design`. Dependabot adds `dependencies` and `rust` to its own pull requests and creates them when they are missing.
+Baley uses the labels defined in the [label standard](https://github.com/crenshawdev/.github/blob/main/LABELS.md). Every issue gets one type label: `bug`, `enhancement`, `docs` or `task`. The other labels are the four severity labels, the four resolution labels, `needs-triage`, `needs-info`, `good first issue`, `help wanted`, `security` and `design`. Dependabot adds `dependencies` and `rust` to its own pull requests and creates them when they are missing.
 
-Issue types replace the former `bug` and `enhancement` labels. The 18 issues that carried `bug` are type Bug, and the 54 that carried `enhancement` are type Enhancement. The 15 issues labeled `design` are type Task and keep the label. No issue carried `question`. Open issues that carried no label have `needs-triage`, as read on 2026-10-18.
+Issues filed while the repository was in an organization have no type label, because GitHub issue types don't exist on a personal account. Open issues that carried no label have `needs-triage`, as read on 2026-10-18.
 
 ### Bug impact
 
@@ -244,12 +244,12 @@ Not applicable as a new instruction surface: repository upkeep serves no model i
 | UPK-R5 | Built | [test.yml:132-151](../../.github/workflows/test.yml#L132) runs `fmt` beside the three other jobs, and the applied rules require all four from one producer with strict checks, as the note below records |
 | UPK-R6 | Built | [test.yml:138-151](../../.github/workflows/test.yml#L138) reads the exact channel from [rust-toolchain.toml:11](../../rust-toolchain.toml#L11), installs and selects it, explicitly adds its `rustfmt` component and runs `cargo fmt --all --check` |
 | UPK-R7 | Built | README describes the [status](../../README.md), [host](../../README.md#hosts-and-platforms), [four required checks](../../README.md#how-it-is-designed-and-built), [contribution policy](../../README.md#issues-and-contributions) and [designed credential boundary](../../README.md#outside-reviews-and-your-api-keys) and [what is still unbuilt](../../README.md#current-state). GitHub's description, six topics and disabled wiki match section 9, as read on 2026-10-06 |
-| UPK-R8 | Built | The repository has the org standard's 14 labels plus `dependencies` and `rust`, and its issues carry 18 Bug, 54 Enhancement and 15 Task types, with `needs-triage` on the 39 open issues that have no type, as read on 2026-10-18 |
+| UPK-R8 | Built | The repository has the label standard's 18 labels plus `dependencies` and `rust`, with `needs-triage` on open issues that carried no label, as read on 2026-10-18 |
 | UPK-R9 | Built | [bug.yml:3-4](../../.github/ISSUE_TEMPLATE/bug.yml#L3) sets the Bug type and `needs-triage`; [bug.yml:13-22](../../.github/ISSUE_TEMPLATE/bug.yml#L13) requires one of section 9's three impact choices with no preselected answer; the required `what`, `repro` and `version` fields remain at [6-12](../../.github/ISSUE_TEMPLATE/bug.yml#L6) and [23-36](../../.github/ISSUE_TEMPLATE/bug.yml#L23); [question.yml:3](../../.github/ISSUE_TEMPLATE/question.yml#L3) sets `needs-triage` |
-| UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/jcrenshaw-dev/baley/issues/54) owns the measurement and assessment |
+| UPK-R10, UPK-Q3 | Not built | Static counts below supply no executed counts or durations; [#54](https://github.com/crenshawdev/baley/issues/54) owns the measurement and assessment |
 | UPK-R11 | Built | The repository sets no cargo job count, so cargo uses every logical CPU; [.config/nextest.toml:3](../../.config/nextest.toml#L3) sets `test-threads = "num-cpus"`; nextest at [test.yml:60](../../.github/workflows/test.yml#L60) explicitly sets `--build-jobs 6 --test-threads 6`, and clippy at [test.yml:89](../../.github/workflows/test.yml#L89) sets `-j 6` |
 | UPK-Q1 | Built | Section 6 classifies every retained match; no active source uses an old name |
-| UPK-Q2 | Built | The check-only command at [test.yml:151](../../.github/workflows/test.yml#L151) failed on a disposable misformatted commit and passed on its correction ([#210](https://github.com/jcrenshaw-dev/baley/pull/210), closed unmerged), a documentation-only pull request produces it, and the applied rules require its exact context |
+| UPK-Q2 | Built | The check-only command at [test.yml:151](../../.github/workflows/test.yml#L151) failed on a disposable misformatted commit and passed on its correction ([#210](https://github.com/crenshawdev/baley/pull/210), closed unmerged), a documentation-only pull request produces it, and the applied rules require its exact context |
 
 The applied `main` rules, read on 2026-10-06, come from ruleset `23995653`. They require `cargo-test`, `clippy`, `cargo-deny` and `fmt`, each from integration `15368`, with `strict_required_status_checks_policy: true` and `do_not_enforce_on_create: false`. The endpoint also reports deletion and non-fast-forward protection, required signatures, and a pull-request rule with resolved review threads, dismissed stale approvals, zero required approving reviews, and merge or squash. Its bypass list is empty.
 

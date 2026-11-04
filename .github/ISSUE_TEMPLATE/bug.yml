@@ -1,7 +1,6 @@
 name: Bug
 description: Something Baley does wrong, or a doc that says something false
-type: Bug
-labels: [needs-triage]
+labels: [bug, needs-triage]
 body:
   - type: textarea
     id: what
