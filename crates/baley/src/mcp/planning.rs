@@ -337,15 +337,23 @@ fn lowercase_digest(text: &str) -> Option<Hash> {
 /// `preparation`. The arguments are judged first; then the settings are read,
 /// recording nothing; then the write is prepared under the caller carrying
 /// the order, with the submit's or the replacement's check and the lineage
-/// step under those settings as its own check, so every refusal comes before
-/// checkout admission and the policy step and records nothing. A failed
+/// step under those settings as its own check, so that check's refusals come
+/// before checkout admission and the policy step and record nothing. A failed
 /// settings read is answered by that check, so a retry of a recorded request
 /// still replays as preparation keeps it. For a write that ran its steps, the
 /// command's caller then takes the order's instruction evidence, the host
 /// catalog is read and the plan is recorded through
 /// [`submit::record_served`] with the policy the policy step gave and a fresh
-/// lowercase UUID for its checker order. A replay goes to the recording with
-/// nothing to record, and the store answers it from its record.
+/// lowercase UUID for its checker order.
+///
+/// Some refusals come after admission and the policy step: the second
+/// judgement's, when the policy step's settings differ from the earlier read;
+/// `planner-order-pending`, which the gated recording judges; and a refused
+/// route for the checker order. Each records no plan, and whatever those two
+/// steps recorded stands beside it.
+///
+/// A replay goes to the recording with nothing to record, and the store
+/// answers it from its record.
 pub fn serve_submit(arguments: &Value, preparation: &Preparation) -> Value {
     submit_through(arguments, preparation, &mut crate::process::System)
 }

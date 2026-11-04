@@ -103,9 +103,9 @@
 //!   `no-such-plan` and `admitted-plan` refusals (PLN-R14).
 //! - The approved plans read with `plan-read` or `baley plan show`, a draft
 //!   never among them (section 6, the `evidence_map` view).
-//! - The findings relayed unchanged, a return refused `finding-shape` failed
-//!   and retried, and the owner shown every finding with the preview
-//!   (PLN-R16).
+//! - The findings relayed unchanged, a return refused `finding-shape` or
+//!   `invalid-arguments` at slot `findings` failed and retried, and the owner
+//!   shown every finding with the preview (PLN-R16).
 //! - `checker-order-pending` refusing a submit beside a pending check
 //!   (PLN-R16, section 5, `plan submit`).
 //! - `recheck-truths-changed` and `material-unavailable` refusing a re-check,
@@ -120,11 +120,11 @@
 pub const IDENTITY: &str = "bal-plan";
 
 /// Pinned by hand: raise it by one whenever [`TEXT`] changes.
-pub const VERSION: &str = "2";
+pub const VERSION: &str = "3";
 
 /// Lowercase hex SHA-256 of [`TEXT`]'s exact bytes, computed outside the
 /// code so a changed text without a new pin fails the registry's pin test.
-pub const HASH: &str = "e91120957ab9d7678ceb18e68c62c8c5e7049c9d055d0c33b3fa958fd61fa7d3";
+pub const HASH: &str = "e9ec66d6d697f5afceaa76d4d29988f846a7b952945684aab7a636e7c347824d";
 
 /// What a session is told when it follows the plan command. Ported from
 /// Cadence tag `v3.9.0`: `skills/cad-plan/SKILL.md` and
@@ -168,7 +168,7 @@ A receipt naming a checker order in `check` sends the draft to the plan checker 
 
 The checker returns one JSON list of findings as its final message, `[]` when it found none. Relay the list with one `baley_apply` call: `{"operation":"plan-check-return","request_id":"<a fresh lowercase UUID>","work_order":"<the checker order's id>","findings":<the findings exactly as returned>}`. Send the findings exactly as returned: never edit, drop or judge one. Send no `instruction` on this call, since its shape takes none.
 
-When the checker cannot launch, returns nothing, or returns something that is not a findings list, or the return is refused `finding-shape`, fail the checker order with `work-order-fail` and retry it with `work-order-retry`, as above, and launch the retried order from its receipt the same way. An empty or failed check is never a pass.
+When the checker cannot launch, returns nothing, or returns something that is not a findings list, or the return is refused `finding-shape` or `invalid-arguments` at slot `findings`, fail the checker order with `work-order-fail` and retry it with `work-order-retry`, as above, and launch the retried order from its receipt the same way. An empty or failed check is never a pass.
 
 A receipt naming `revision` is the one revision a blocker buys, with the `findings` beside it. Launch the revision order exactly as its `launch` says, with its `prompt` as the whole prompt, and wait. Submit the plan it returns naming the revision order: with `plan-submit`, or with `plan-replace` and the same `replaces` when the draft it revises replaces an approved plan. That receipt names the re-check's order in `check`: run it and relay its findings the same way. A re-check buys no further revision.
 

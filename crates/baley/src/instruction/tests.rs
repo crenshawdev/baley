@@ -245,6 +245,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "2",
         "e91120957ab9d7678ceb18e68c62c8c5e7049c9d055d0c33b3fa958fd61fa7d3",
     ),
+    (
+        "bal-plan",
+        "3",
+        "e9ec66d6d697f5afceaa76d4d29988f846a7b952945684aab7a636e7c347824d",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1315,7 +1320,7 @@ fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
         panic!("bal-plan is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "2");
+    assert_eq!(text.version, "3");
     let body = text.body;
     // The members each call's served shape takes (D-04, D-06, D-08, D-13).
     let phase_plan = call(body, "phase-plan");
@@ -1412,6 +1417,7 @@ fn a_plan_door_skipping_the_check_or_passing_an_empty_return_is_caught() {
         "plan-check-return",
         r#""findings":"#,
         "never a pass",
+        "`invalid-arguments` at slot `findings`",
         "checker-order-pending",
         "third-round",
         "recheck-truths-changed",
