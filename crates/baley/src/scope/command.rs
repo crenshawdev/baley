@@ -12,7 +12,8 @@
 //! approve` approves a scope draft, the second prints a story's refinement.
 //! A plan draft is approved only by `baley plan approve <digest>`: `scope
 //! approve` refuses its digest naming that command, and `scope preview`
-//! prints the plan draft with it (D-05).
+//! prints the plan draft with its checker rounds and that command (D-04,
+//! D-05).
 //! Approving a commitment, the `phase edit` a session's `phase-plan` drafted
 //! for a changed selection, also issues the phase's planner order, routed for
 //! Claude Code, and prints its id (D-01).
@@ -51,6 +52,8 @@ use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::mcp::prepare::{LEDGER_UNAVAILABLE, NOT_A_PROJECT, PROJECT_NOT_IN_LEDGER};
 use crate::mcp::scope::change_kind;
+use crate::planning::command::round_lines;
+use crate::planning::read::checker_rounds;
 use crate::providers::identity;
 use crate::refine::command::{sentence, truth_detail};
 use crate::refine::submit::{current_truths, mark_str};
@@ -81,7 +84,8 @@ enum ScopeCommand {
         #[arg(value_name = "DIGEST")]
         digest: String,
     },
-    /// Print a draft by its digest, exactly as an approval would record it.
+    /// Print a draft by its digest, exactly as an approval would record it,
+    /// and a plan draft's checker rounds after it.
     Preview {
         /// The draft's digest from its submission's receipt.
         #[arg(value_name = "DIGEST")]
@@ -795,7 +799,9 @@ pub(crate) fn preview(store: &SqliteStore, project: &ProjectId, digest: Hash) ->
         Ok(Draft::Held(preview)) if preview.kind == STORY_TRUTHS => {
             truth_preview(store, project, &preview)
         }
-        Ok(Draft::Held(preview)) if preview.kind == PLAN_KIND => plan_preview(&preview),
+        Ok(Draft::Held(preview)) if preview.kind == PLAN_KIND => {
+            plan_preview(store, project, &preview)
+        }
         read => preview_render(read),
     }
 }
@@ -933,16 +939,22 @@ struct PlanQuestion {
 /// <title>` with its files and one `verify:` line per command; each evidence
 /// item as `item <id>: story <s>, truth <t> version <v>, <kind>`, with
 /// `level <level>` for a check; each question as `question <id>: <text>`
-/// with its recommended answer; and the command that approves it. A body
-/// that does not read back as a plan prints the unavailable line a change
-/// prints.
-fn plan_preview(preview: &Preview) -> Render {
+/// with its recommended answer; the draft's checker rounds, read from the
+/// ledger by its digest, as `baley plan show` prints them, none printing
+/// nothing (D-04); and the command that approves it. A body that does not
+/// read back as a plan prints the unavailable line a change prints; a read
+/// fault prints as a read's failure.
+fn plan_preview(store: &SqliteStore, project: &ProjectId, preview: &Preview) -> Render {
     let recorded = read_plan_draft(&preview.submission);
     let body = recorded
         .as_ref()
         .and_then(|recorded| serde_json::from_value::<PlanBody>(recorded.plan.clone()).ok());
     let (Some(recorded), Some(body)) = (recorded, body) else {
         return unavailable("the draft is recorded, but its body no longer reads as a plan");
+    };
+    let rounds = match checker_rounds(store, project, body.phase, &preview.digest.to_hex()) {
+        Ok(rounds) => rounds,
+        Err(error) => return read_error(error),
     };
     let texts = |items: &[String]| or_none(items.iter().map(|item| escaped(item)).collect());
     let mut lines = vec![format!(
@@ -998,6 +1010,7 @@ fn plan_preview(preview: &Preview) -> Render {
         ));
         lines.push(format!("  recommended: {}", escaped(&question.recommended)));
     }
+    lines.extend(round_lines(&rounds));
     lines.push(format!(
         "approve it with: baley plan approve {}",
         preview.digest.to_hex()
@@ -2172,6 +2185,45 @@ mod tests {
         for line in [
             format!("replaces plan 1 approved at {}", x1.to_hex()).as_str(),
             format!("approve it with: baley plan approve {}", x1r.to_hex()).as_str(),
+        ] {
+            assert!(lines.contains(&line), "{line} in {lines:?}");
+        }
+    }
+
+    #[test]
+    fn a_plan_draft_previewed_without_its_checker_findings_is_caught() {
+        use crate::planning::approve::tests::digest_of;
+        use crate::planning::check_return::tests::{V, fw, gated, returned};
+        use crate::planning::checker::tests::C1;
+        use crate::planning::fixtures::{p0, pl2, store_c};
+        use crate::planning::order::tests::O;
+        use crate::planning::submit::tests::order_o;
+        use crate::scope::fixtures::{R1, R2, R3, T5, T6, project};
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let x2 = digest_of(&gated(&store, &pl2(), O, &p0(), C1, R2, T5));
+        let back = returned(&store, C1, vec![fw()], &p0(), V, R3, T6, 5);
+        assert_eq!(back["status"], "ok", "{back}");
+
+        let render = preview(&store, &project(), x2);
+        let lines = shown(&render);
+        let x2 = x2.to_hex();
+        let tail = lines.len() - 5;
+        assert_eq!(
+            lines[tail..],
+            [
+                "  recommended: SQLite",
+                "checker round 1, scope full",
+                "  warning at tasks[0].verify[0]: The verify runs every ledger test",
+                "    fix: Name the round test",
+                format!("approve it with: baley plan approve {x2}").as_str(),
+            ]
+        );
+        for line in [
+            "phase: 1",
+            "task k1: Record",
+            "question q1: Which store holds the ledger?",
         ] {
             assert!(lines.contains(&line), "{line} in {lines:?}");
         }

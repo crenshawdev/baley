@@ -340,7 +340,7 @@ pub fn read<S: Ledger + Views + Payloads + ?Sized>(
 /// and its approved plans as `planning::read` gives them to `plan-read`, in
 /// parts when large. A phase the roadmap does not hold is `no-such-phase`,
 /// echoing none of its number.
-fn phase_answer<S: Views + ?Sized>(
+fn phase_answer<S: Ledger + Views + ?Sized>(
     store: &S,
     project: &ProjectId,
     identity: &Identity,
@@ -369,7 +369,7 @@ fn phase_answer<S: Views + ?Sized>(
 /// The answer for plan `plan` of phase `phase`: that one plan with its
 /// evidence map from the read [`phase_answer`] shares, in parts when large.
 /// A plan number never approved in the phase is `no-such-plan` naming it.
-fn plan_answer<S: Views + ?Sized>(
+fn plan_answer<S: Ledger + Views + ?Sized>(
     store: &S,
     project: &ProjectId,
     identity: &Identity,

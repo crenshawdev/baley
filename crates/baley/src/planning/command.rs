@@ -1,8 +1,9 @@
 //! `baley plan approve <digest>`: the owner approves a plan draft by its
 //! digest at the terminal, the only way a plan is approved (design 0005
 //! section 5 `plan approve`, D-16, ADR 0044). `baley plan show <phase>`:
-//! the owner reads a phase's approved plans with their evidence maps and
-//! readiness, through the read `plan-read` serves (D-17), recording nothing.
+//! the owner reads a phase's approved plans with their evidence maps,
+//! readiness and checker rounds, through the read `plan-read` serves (D-04,
+//! D-17), recording nothing.
 //!
 //! Gathering finds the project, opens the ledger and reads the settings; the
 //! approval's two steps are `planning::approve`'s, and what is printed is
@@ -17,7 +18,7 @@ use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::Render;
 use crate::planning::approve;
-use crate::planning::read::{self, PhasePlans};
+use crate::planning::read::{self, CheckerRound, PhasePlans};
 use crate::providers::identity;
 use crate::scope::command::{
     admitted, approve_command, checkout, effective, emit, escaped, judge_digest, judge_number,
@@ -49,8 +50,8 @@ pub enum PlanCommand {
         digest: String,
     },
     /// Show a phase's approved plans in plan-number order, replaced ones
-    /// included, each with its evidence map and whether its items still
-    /// name their truths' current versions.
+    /// included, each with its evidence map, whether its items still name
+    /// their truths' current versions, and its checker rounds' findings.
     Show {
         /// The phase's number, as the roadmap gives it.
         #[arg(value_name = "PHASE")]
@@ -116,10 +117,10 @@ fn show(phase: &str) -> Result<Render, Render> {
 /// a replaced one, then `ready` or `not ready:` and the items bound to a
 /// version that is not current; then its stories, its size and its suite or
 /// `suite: none`; then one line per item as `item <id>: story <s>, truth
-/// <t> version <v>, <kind>`, with `level <level>` for a check. A phase with
-/// no approved plan prints one line saying so. A refusal prints `<code>:
-/// <reason>`, exit 2, and a failure exit 1. Every text from the ledger is
-/// printed through `escaped`.
+/// <t> version <v>, <kind>`, with `level <level>` for a check; then its
+/// checker rounds by [`round_lines`]. A phase with no approved plan prints one
+/// line saying so. A refusal prints `<code>: <reason>`, exit 2, and a failure
+/// exit 1. Every text from the ledger is printed through `escaped`.
 pub(crate) fn show_render(read: Result<PhasePlans, ReadError>) -> Render {
     let plans = match read {
         Ok(plans) => plans,
@@ -172,12 +173,40 @@ pub(crate) fn show_render(read: Result<PhasePlans, ReadError>) -> Render {
             }
             lines.push(line);
         }
+        lines.extend(round_lines(&plan.checker_rounds));
     }
     Render {
         lines,
         code: 0,
         error: false,
     }
+}
+
+/// A plan's checker rounds as the owner reads them under it, none printing
+/// nothing: each round as `checker round <r>, scope <scope>`, each of its
+/// findings as `<severity> at <location>: <claim>` and `fix: <fix>`. Findings
+/// refuse nothing here (D-04). A checker's words reach the terminal only
+/// through `escaped`, so a line break in a finding cannot forge a line.
+pub(crate) fn round_lines(rounds: &[CheckerRound]) -> Vec<String> {
+    let text = |value: &Value| escaped(value.as_str().unwrap_or_default());
+    let mut lines = Vec::new();
+    for round in rounds {
+        lines.push(format!(
+            "checker round {}, scope {}",
+            round.round,
+            escaped(&round.scope)
+        ));
+        for finding in &round.findings {
+            lines.push(format!(
+                "  {} at {}: {}",
+                text(&finding["severity"]),
+                text(&finding["location"]),
+                text(&finding["claim"])
+            ));
+            lines.push(format!("    fix: {}", text(&finding["fix"])));
+        }
+    }
+    lines
 }
 
 /// What a plan approval's answer prints: an `ok` receipt as `approved plan
@@ -350,6 +379,7 @@ mod tests {
                 not_ready: Vec::new(),
             },
             items: vec![e1(), e2()],
+            checker_rounds: Vec::new(),
         };
         let mut one = plan(1, X, None);
         one.state = "replaced".into();
@@ -385,6 +415,51 @@ mod tests {
             "suite: cargo test\\nplan 9 at x: approved, ready"
         );
         assert_eq!(shown.lines.len(), 12, "{:?}", shown.lines);
+    }
+
+    #[test]
+    fn a_plan_shown_without_its_checker_findings_is_caught() {
+        use crate::planning::read::tests::approved_through_two_rounds;
+        use crate::scope::fixtures::project;
+
+        let (_dir, store) = approved_through_two_rounds();
+        let shown = show_render(read::read(&store, &project(), 1));
+        assert_eq!(shown.code, 0);
+        let rounds = shown
+            .lines
+            .iter()
+            .position(|line| line.starts_with("checker round"))
+            .expect("a checker round is printed");
+        assert_eq!(
+            shown.lines[rounds..],
+            [
+                "checker round 1, scope full",
+                "  blocker at tasks[0]: No task makes truth t2 of story 1 true",
+                "    fix: Add a task that records the round",
+                "  warning at tasks[0].verify[0]: The verify runs every ledger test",
+                "    fix: Name the round test",
+                "checker round 2, scope full",
+                "  warning at tasks[0].verify[0]: The verify runs every ledger test",
+                "    fix: Name the round test",
+            ]
+        );
+
+        let forged = round_lines(&[CheckerRound {
+            round: 1,
+            scope: "full".into(),
+            findings: vec![
+                serde_json::json!({"severity": "warning", "location": "tasks[0]",
+                "claim": "fine\nchecker round 9, scope full", "fix": "none\nplan 9"}),
+            ],
+        }]);
+        assert_eq!(
+            forged,
+            [
+                "checker round 1, scope full",
+                "  warning at tasks[0]: fine\\nchecker round 9, scope full",
+                "    fix: none\\nplan 9",
+            ]
+        );
     }
 
     /// The `baley plan` part of the command line, over the library's own

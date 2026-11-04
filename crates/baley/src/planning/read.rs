@@ -7,17 +7,19 @@
 //! `evidence_map`, so a draft's map never appears. A replaced plan is read
 //! with the rest, its map unchanged. Readiness is worked out here from the
 //! `truths` view each time and never stored, so a truth revised after an
-//! approval shows at once. Nothing is appended.
+//! approval shows at once. A plan's checker rounds come from the `plan.checked`
+//! events by its digest, not from a view, so the owner sees every round's
+//! findings (design 0005 section 6, D-04). Nothing is appended.
 
-use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 use baley_core::plan::{
-    EVIDENCE_MAP_VIEW, PHASE_PLAN_VIEW, PLAN_VIEW, approved_items, evidence_map_key,
-    phase_plan_key, plan_key,
+    EVIDENCE_MAP_VIEW, PHASE_PLAN_VIEW, PLAN_CHECKED, PLAN_VIEW, approved_items, evidence_map_key,
+    phase_plan_key, phase_stream, plan_key,
 };
 use baley_core::truth::{TRUTHS_VIEW, truths_key};
-use baley_store::{DocKey, ProjectId, Views};
+use baley_store::{DocKey, EVENT_PAGE_BOUND, HistoryFilter, Ledger, PageRequest, ProjectId, Views};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -59,6 +61,21 @@ pub struct ApprovedPlan {
     pub readiness: Readiness,
     /// Its evidence items, whole, as approved.
     pub items: Vec<Value>,
+    /// The checker rounds of its draft, oldest first, none when the plan gate
+    /// was off.
+    pub checker_rounds: Vec<CheckerRound>,
+}
+
+/// One checker round of a plan draft, exactly as its `plan.checked` recorded
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CheckerRound {
+    /// The round, 1 or 2.
+    pub round: u64,
+    /// The scope the round read, `full` or `diff`.
+    pub scope: String,
+    /// The findings as the checker returned them.
+    pub findings: Vec<Value>,
 }
 
 /// A plan's readiness, worked out when read.
@@ -75,9 +92,10 @@ pub struct Readiness {
 /// are the ones its `phase_plan` document lists, in plan-number order,
 /// replaced ones included, each joined from its `plan` and `evidence_map`
 /// documents; each plan's readiness is worked out from the current truths
-/// of the stories its items name. A plan listed with a document that is
+/// of the stories its items name, and its checker rounds from the phase's
+/// `plan.checked` events by its digest. A plan listed with a document that is
 /// missing or cannot be read is a ledger fault, never skipped.
-pub fn read<S: Views + ?Sized>(
+pub fn read<S: Ledger + Views + ?Sized>(
     store: &S,
     project: &ProjectId,
     phase: u32,
@@ -100,6 +118,7 @@ pub fn read<S: Views + ?Sized>(
     };
     let mut numbers: Vec<u32> = listed.into_iter().map(|listed| listed.plan).collect();
     numbers.sort_unstable();
+    let results = checked_results(store, project, phase)?;
     let mut current = BTreeMap::new();
     let mut plans = Vec::with_capacity(numbers.len());
     for number in numbers {
@@ -122,6 +141,7 @@ pub fn read<S: Views + ?Sized>(
                 not_ready.push(item.id.clone());
             }
         }
+        let checker_rounds = rounds_of(&results, &held.digest).ok_or_else(rounds_unreadable)?;
         plans.push(ApprovedPlan {
             plan: number,
             digest: held.digest,
@@ -138,9 +158,94 @@ pub fn read<S: Views + ?Sized>(
                 not_ready,
             },
             items: bound.into_iter().map(|item| item.definition).collect(),
+            checker_rounds,
         });
     }
     Ok(PhasePlans { phase, plans })
+}
+
+/// The checker rounds of the plan draft `digest` of phase `phase`, oldest
+/// first, recording nothing: every `plan.checked` on the phase's stream naming
+/// the digest and, for a round-2 result, the round-1 result its `previous_check`
+/// names, each exactly as recorded. A result that cannot be read is a ledger
+/// fault, never skipped.
+pub fn checker_rounds<L: Ledger + ?Sized>(
+    store: &L,
+    project: &ProjectId,
+    phase: u32,
+    digest: &str,
+) -> Result<Vec<CheckerRound>, ReadError> {
+    rounds_of(&checked_results(store, project, phase)?, digest).ok_or_else(rounds_unreadable)
+}
+
+/// Every `plan.checked` payload on phase `phase`'s stream by its sequence.
+fn checked_results<L: Ledger + ?Sized>(
+    store: &L,
+    project: &ProjectId,
+    phase: u32,
+) -> Result<BTreeMap<u64, Value>, ReadError> {
+    let filter = HistoryFilter {
+        types: vec![PLAN_CHECKED.into()],
+        git_commit: None,
+    };
+    let stream = phase_stream(phase);
+    let mut results = BTreeMap::new();
+    let mut after = None;
+    loop {
+        let page = store
+            .history(
+                project,
+                1..=u64::MAX,
+                &filter,
+                PageRequest {
+                    limit: EVENT_PAGE_BOUND,
+                    after,
+                },
+            )
+            .map_err(ReadError::Store)?;
+        results.extend(
+            page.items
+                .into_iter()
+                .filter(|event| event.stream == stream)
+                .map(|event| (event.seq, event.payload)),
+        );
+        match page.next {
+            Some(next) => after = Some(next),
+            None => return Ok(results),
+        }
+    }
+}
+
+/// The rounds of the draft `digest` among a phase's `results`, oldest first,
+/// or none when a result, or a previous check not among them, cannot be read.
+/// Round 1 of a revised draft names the original's digest, so it is found
+/// through round 2's `previous_check`; a revision that changed nothing names
+/// the same digest, and its round 1 is still given once.
+fn rounds_of(results: &BTreeMap<u64, Value>, digest: &str) -> Option<Vec<CheckerRound>> {
+    let mut chosen = BTreeSet::new();
+    for (seq, result) in results {
+        if result.get("plan_digest")?.as_str()? == digest {
+            chosen.insert(*seq);
+            if let Some(previous) = result.get("previous_check") {
+                chosen.insert(previous.get("seq")?.as_u64()?);
+            }
+        }
+    }
+    chosen
+        .into_iter()
+        .map(|seq| {
+            let result = results.get(&seq)?;
+            Some(CheckerRound {
+                round: result.get("round")?.as_u64()?,
+                scope: result.get("scope")?.as_str()?.to_owned(),
+                findings: result.get("findings")?.as_array()?.clone(),
+            })
+        })
+        .collect()
+}
+
+fn rounds_unreadable() -> ReadError {
+    ReadError::Unreadable(format!("a {PLAN_CHECKED} event cannot be read"))
 }
 
 /// The `phase_plan` document as its projector writes it; only its plan
@@ -228,18 +333,22 @@ fn unreadable(view: &str) -> ReadError {
 pub(crate) mod tests {
     //! Stores are real SQLite stores in fresh temporary directories, with
     //! times supplied; expected values are written out from design 0001
-    //! Appendix B `plan-read`, design 0005 section 6 Views, D-07, D-17 and
-    //! the plan's data store C, O, PL1 and PL2, with PL3 and PL1r given maps
-    //! of their own here, never from running this code.
+    //! Appendix B `plan-read`, design 0005 section 6 Views, D-04, D-07, D-17
+    //! and the plan's data store C, O, PL1 and PL2, with PL3 and PL1r given
+    //! maps of their own here, never from running this code.
 
     use baley_store::Hash;
+    use baley_store_sqlite::SqliteStore;
     use serde_json::json;
 
     use super::*;
+    use crate::mcp::questions::tests::{REVISION, relayed};
     use crate::planning::approve::tests::{approved, digest_of};
+    use crate::planning::check_return::tests::{C2, V, fb, fw, lineage, returned};
     use crate::planning::fixtures::*;
     use crate::planning::order::tests::O;
     use crate::planning::submit::tests::{order_o, plan_submitted};
+    use crate::questions::answer::tests::take;
     use crate::refine::submit::tests::{t1, t2};
     use crate::scope::fixtures::*;
 
@@ -296,7 +405,37 @@ pub(crate) mod tests {
                 not_ready: Vec::new(),
             },
             items,
+            checker_rounds: Vec::new(),
         }
+    }
+
+    /// The lineage with `recheck` `full` (PL2r under P0 as C2), C2's return of
+    /// `[FW]`, `q1` answered with its recommendation and X2r approved by the
+    /// owner, as plan 1.
+    pub(crate) fn approved_through_two_rounds() -> (tempfile::TempDir, SqliteStore) {
+        let (dir, store, _, x2r, _) = lineage(&p0(), 5);
+        let receipt = returned(&store, C2, vec![fw()], &p0(), V, R5, T8, 5);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        let set = receipt["set"].as_str().expect("a set id");
+        let closed = relayed(&store, set, &json!([take("q1")]), R6, T8, REVISION);
+        assert_eq!(closed["status"], "ok", "{closed}");
+        approved_ok(&store, Hash::from_hex(&x2r).unwrap(), R7, T9);
+        (dir, store)
+    }
+
+    #[test]
+    fn a_plans_checker_rounds_left_out_of_plan_read_is_caught() {
+        let (_dir, store) = approved_through_two_rounds();
+        let plans = read(&store, &project(), 1).expect("phase 1 is read").plans;
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].plan, 1);
+        assert_eq!(
+            serde_json::to_value(&plans[0].checker_rounds).unwrap(),
+            json!([
+                {"round": 1, "scope": "full", "findings": [fb(), fw()]},
+                {"round": 2, "scope": "full", "findings": [fw()]},
+            ])
+        );
     }
 
     #[test]

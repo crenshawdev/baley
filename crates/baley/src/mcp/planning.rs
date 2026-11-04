@@ -33,7 +33,7 @@ use std::path::Path;
 use baley_core::capture::NO_SUCH_PHASE;
 use baley_core::plan::Replaces;
 use baley_store::{
-    CommandKind, Hash, InstructionEvidence, ProjectId, RequestId, Views, request_digest,
+    CommandKind, Hash, InstructionEvidence, Ledger, ProjectId, RequestId, Views, request_digest,
 };
 use baley_store_sqlite::SqliteStore;
 use schemars::JsonSchema;
@@ -467,7 +467,7 @@ pub fn serve_read(arguments: &Value, preparation: &Preparation) -> Value {
 /// into parts when large. A phase the roadmap does not hold is refused
 /// `no-such-phase` echoing none of its number; any other fault is the read's
 /// `failed` answer.
-pub fn read_answer<S: Views + ?Sized>(
+pub fn read_answer<S: Ledger + Views + ?Sized>(
     store: &S,
     project: &ProjectId,
     shape: &PlanReadShape,
