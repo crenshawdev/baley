@@ -26,6 +26,13 @@
 //! checker order instead. The owner approves the draft at the terminal with
 //! `baley plan approve`.
 //!
+//! `plan-check-return` on `baley_apply` (design 0005 PLN-R16, D-06, D-07):
+//! a session relays the findings a checker order's worker returned, unchanged.
+//! It has no terminal form. The arguments are judged first; then the write is
+//! prepared under the caller carrying the order, with the return's check as
+//! its own check; the return is recorded through
+//! [`crate::planning::check_return::record`].
+//!
 //! `plan-read` on `baley_query` (design 0001 Appendix B `plan-read`, D-08,
 //! D-17): a phase's approved plans with their evidence maps and readiness,
 //! read through [`crate::planning::read`] as `baley plan show` reads them,
@@ -55,8 +62,8 @@ use crate::mcp::work_order::{
     evidenced, judge_instruction, judge_order_id, judge_request_id, prepared_write, shape_fault,
 };
 use crate::planning::phase_plan::{self, PHASE_PLAN_COMMAND};
-use crate::planning::read;
 use crate::planning::submit::{self, Submission};
+use crate::planning::{check_return, read};
 use crate::process::Process;
 use crate::scope::read::ReadError;
 use crate::scope::submit::{NOT_RECORDED_BUSY, SUBMIT_COMMAND};
@@ -429,6 +436,136 @@ fn settings_read(
     })
 }
 
+/// The command kind a checker's return is recorded under.
+pub const CHECK_RETURN_COMMAND: &str = "plan.check_return";
+
+// `schema` serves this same declaration, so its doc comments are wire text.
+/// The arguments `plan-check-return` takes beside its `operation`. Unknown
+/// fields are refused.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanCheckReturnShape {
+    /// A fresh UUID for this return in lowercase hyphenated form. A retry of
+    /// the same return sends the same id.
+    pub request_id: String,
+    /// The id of the checker work order these findings answer, as its receipt
+    /// gave it, a UUID in lowercase hyphenated form.
+    pub work_order: String,
+    /// The checker's findings exactly as it returned them: never edited,
+    /// dropped or judged.
+    pub findings: Vec<Value>,
+}
+
+/// The tagged form `plan-check-return`'s arguments arrive in.
+#[derive(Deserialize)]
+#[serde(tag = "operation")]
+enum CheckReturnCall {
+    #[serde(rename = "plan-check-return")]
+    Return(PlanCheckReturnShape),
+}
+
+/// A `plan-check-return` call whose arguments passed every check made before
+/// preparation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JudgedCheckReturn {
+    /// The write preparation carries into the domain command.
+    pub request: WriteRequest,
+    /// The checker order returned.
+    pub work_order: String,
+    /// The findings as relayed, for the return's check to judge.
+    pub findings: Vec<Value>,
+}
+
+/// Judges `plan-check-return`'s arguments before anything is prepared or
+/// recorded: the shape, then the request id and the order id's form. A fault
+/// is the `refused` answer, which records nothing. The request digest covers
+/// the command kind, the order and the findings, so a retry replays and other
+/// findings under the same id are a reused id; findings holding a number with
+/// no canonical form are `invalid-arguments` at slot `findings`.
+pub fn judge_check_return_arguments(arguments: &Value) -> Result<JudgedCheckReturn, Value> {
+    let shape = match serde_json::from_value::<CheckReturnCall>(arguments.clone()) {
+        Ok(CheckReturnCall::Return(shape)) => shape,
+        Err(error) => return Err(shape_fault(&error)),
+    };
+    judge_request_id(&shape.request_id, "return")?;
+    judge_order_id(&shape.work_order)?;
+    let digest = request_digest(&json!({"command": CHECK_RETURN_COMMAND,
+        "findings": shape.findings, "work_order": shape.work_order}))
+    .map_err(|error| {
+        Refusal::new(
+            "invalid-arguments",
+            format!("the findings hold a number with no canonical form: {error}"),
+        )
+        .slot("findings")
+        .value()
+    })?;
+    Ok(JudgedCheckReturn {
+        request: WriteRequest {
+            kind: CommandKind(CHECK_RETURN_COMMAND.into()),
+            request_id: RequestId(shape.request_id),
+            digest,
+        },
+        work_order: shape.work_order,
+        findings: shape.findings,
+    })
+}
+
+/// Serves one `plan-check-return` call for the session's `preparation`. The
+/// arguments are judged first; then the write is prepared under the caller
+/// carrying the order, with the return's check as its own check, so every
+/// refusal comes before checkout admission and the policy step and records
+/// nothing. For a write that ran its steps, the command's caller then takes
+/// the order's instruction evidence, the host catalog is read and the return
+/// is recorded with the policy the policy step gave and a fresh lowercase UUID
+/// for a revision order. A replay goes to the recording with nothing to
+/// record, and the store answers it from its record.
+pub fn serve_check_return(arguments: &Value, preparation: &Preparation) -> Value {
+    let judged = match judge_check_return_arguments(arguments) {
+        Ok(judged) => judged,
+        Err(refusal) => return refusal,
+    };
+    let caller = match order_caller(&preparation.caller, &judged.work_order) {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // Kept for the binding and the recording. A replay skips the check.
+    let kept = RefCell::new(None);
+    let check = |store: &SqliteStore, project: &ProjectId| {
+        let checked =
+            check_return::check(store, project, &judged.work_order, judged.findings.clone())?;
+        *kept.borrow_mut() = Some(checked);
+        Ok(())
+    };
+    let (store, command, stepped) =
+        match prepared_write(preparation, &caller, &judged.request, &check) {
+            Ok(prepared) => prepared,
+            Err(answer) => return answer,
+        };
+    let kept = kept.borrow();
+    let (Some(stepped), Some(checked)) = (stepped, kept.as_ref()) else {
+        // A replay has no policy to give the return's recording, and any
+        // transaction under this command answers it from the record.
+        return crate::scope::submit::answer(submit::record(store, &command, None), store);
+    };
+    let command = match bind_instructions(command, Some(&checked.evidence)) {
+        Ok(command) => command,
+        Err(answer) => return answer,
+    };
+    let names = match host_names(store, preparation.host) {
+        Ok(names) => names,
+        Err(error) => return store_failed(&error, NOT_RECORDED_BUSY),
+    };
+    check_return::record(
+        store,
+        &command,
+        Some(checked),
+        &stepped.policy,
+        preparation.host,
+        &names,
+        &uuid::Uuid::new_v4().to_string(),
+    )
+}
+
 // `schema` serves this same declaration, so its doc comments are wire text.
 /// The arguments `plan-read` takes beside its `operation`. Unknown fields
 /// are refused.
@@ -659,9 +796,81 @@ mod tests {
             names[at.expect("plan-submit is listed") - 1],
             "execution-authorize"
         );
+        let at = names
+            .iter()
+            .position(|name| *name == "plan-replace")
+            .expect("plan-replace is listed");
+        assert_eq!(names[at - 1], "phase-plan");
+    }
+
+    /// C1, a checker order's id.
+    const C1: &str = "c1c1c1c1-0a0b-4c0d-8e0f-101112131415";
+
+    /// `{"operation": "plan-check-return", "request_id": R1, "work_order": C1,
+    /// "findings": [FB, FW]}`.
+    fn check_return_call() -> Value {
+        use crate::planning::check_return::tests::{fb, fw};
+
+        json!({"operation": "plan-check-return", "request_id": R1, "work_order": C1,
+            "findings": [fb(), fw()]})
+    }
+
+    #[test]
+    fn a_check_return_shape_or_digest_judged_wrongly_is_caught() {
+        let mut instruction = check_return_call();
+        instruction["instruction"] = json!("bal-phase-checker");
+        let mut unknown = check_return_call();
+        unknown["plan"] = json!(1);
+        let mut upper = check_return_call();
+        upper["work_order"] = json!(C1.to_uppercase());
+        let mut object = check_return_call();
+        object["findings"] = json!({"severity": "blocker"});
+        for call in [&instruction, &unknown, &upper, &object] {
+            let refusal = judge_check_return_arguments(call).expect_err("refused");
+            assert_eq!(refusal["status"], "refused", "{refusal}");
+            assert_eq!(refusal["code"], "invalid-arguments", "{refusal}");
+        }
+
+        // A retry sends the identical call, which must replay, while other
+        // findings under the same id are another request.
+        let first = judge_check_return_arguments(&check_return_call()).expect("accepted");
+        assert_eq!(first.request.kind, CommandKind("plan.check_return".into()));
+        assert_eq!(first.work_order, C1);
+        assert_eq!(json!(first.findings), check_return_call()["findings"]);
+        let again = judge_check_return_arguments(&check_return_call()).expect("accepted");
+        assert_eq!(again.request.digest, first.request.digest);
+        let mut other = check_return_call();
+        other["findings"][1]["claim"] = json!("The verify runs no ledger test");
+        let other = judge_check_return_arguments(&other).expect("accepted");
+        assert_ne!(other.request.digest, first.request.digest);
+    }
+
+    #[test]
+    fn plan_check_return_left_unserved_or_out_of_baseline_order_is_caught() {
+        use crate::mcp::operations::schema_answer;
+
+        let names: Vec<&str> = APPLY_OPERATIONS.iter().map(|op| op.name).collect();
         let (last, earlier) = names.split_last().expect("a baseline");
-        assert_eq!(*last, "plan-replace");
-        assert_eq!(earlier.last(), Some(&"phase-plan"));
+        assert_eq!(*last, "plan-check-return");
+        assert_eq!(earlier.last(), Some(&"plan-replace"));
+        assert_eq!(names, APPLY);
+        assert_eq!(
+            lookup(Tool::Apply, Some("plan-check-return")),
+            Lookup::Available {
+                needs_project: true
+            }
+        );
+        let answer = schema_answer(
+            &json!({"operation": "schema", "tool": "apply", "for": "plan-check-return"}),
+        );
+        assert_eq!(answer["status"], "ok", "{answer}");
+        let properties = answer["schema"]["properties"]
+            .as_object()
+            .expect("properties");
+        let mut taken: Vec<&str> = properties.keys().map(String::as_str).collect();
+        taken.sort_unstable();
+        assert_eq!(taken, ["findings", "operation", "request_id", "work_order"]);
+        assert_eq!(properties["findings"]["type"], "array", "{answer}");
     }
 
     #[test]

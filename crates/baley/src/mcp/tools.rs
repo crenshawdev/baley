@@ -403,7 +403,8 @@ mod tests {
         // story-questions-submit takes request_id, story, work_order and
         // questions, phase-plan takes request_id, phase, stories and
         // instruction, plan-submit takes request_id, work_order and plan,
-        // plan-replace takes those and replaces, context-submit takes
+        // plan-replace takes those and replaces, plan-check-return takes
+        // request_id, work_order and findings, context-submit takes
         // request_id, work_order, story, set and truths,
         // context-intake takes story and part, plan-read takes phase and part,
         // and route takes role or work_order.
@@ -437,6 +438,7 @@ mod tests {
             names(Tool::Apply),
             [
                 "brief",
+                "findings",
                 "instruction",
                 "items",
                 "kind",

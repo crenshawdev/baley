@@ -109,8 +109,10 @@ pub(crate) struct Binding {
 /// finding. Then `material-unavailable` at slot `work_order` naming the first
 /// input of the order this project purged, since the result attaches what the
 /// order holds and the session sent none of it; the way out is the order's
-/// failure and a fresh planner order (D-02). Then the round's binding by
-/// [`order_binding`] and the draft read back through its `plan` material, so
+/// failure and a fresh planner order (D-02), which for a purged `truths` input
+/// cannot run until the truth text or the stories the plan serves change. Then
+/// the round's binding by [`order_binding`] and the draft read back through its
+/// `plan` material, so
 /// the result is bound to what was fixed at issue and never to the truths or
 /// settings current now (design 0005 section 6). A binding or body that cannot
 /// be read is a ledger fault; a read fault is the `failed` answer.
@@ -701,10 +703,16 @@ fn not_pending(work_order: &str, state: &str) -> Value {
 /// The refusal for checker order `work_order`, whose input `input` this
 /// project purged.
 fn material_unavailable(work_order: &str, input: &str) -> Value {
+    let way_out = if input == TRUTHS_INPUT {
+        // A fresh order would store the same text, which a purge refuses.
+        "No fresh order or check can run until the truth text or the stories the plan serves change, since a purged text cannot be stored again and a retry carries the same inputs. Then fail the order with `work-order-fail`, and a fresh `phase-plan` order starts a new lineage"
+    } else {
+        "Fail the order with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check, since a retry carries the same inputs"
+    };
     Refusal::new(
         MATERIAL_UNAVAILABLE,
         format!(
-            "this project purged the {input} input of checker work order {work_order}, so these findings were not recorded, and sending them again changes nothing. Fail the order with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check, since a retry carries the same inputs"
+            "this project purged the {input} input of checker work order {work_order}, so these findings were not recorded, and sending them again changes nothing. {way_out}"
         ),
     )
     .slot("work_order")
@@ -1506,6 +1514,12 @@ pub(crate) mod tests {
             let reason = refusal["reason"].as_str().unwrap();
             assert!(reason.contains(name), "{reason}");
             assert!(reason.contains("`work-order-fail`"), "{reason}");
+            // A fresh order stores the same truth text, which a purge refuses.
+            assert_eq!(
+                reason.contains("until the truth text or the stories the plan serves change"),
+                name == "truths",
+                "{reason}"
+            );
             assert_eq!(
                 pending_checker(&store, &project(), 1).unwrap().as_deref(),
                 Some(C2)

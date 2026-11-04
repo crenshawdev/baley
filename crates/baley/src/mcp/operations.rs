@@ -214,6 +214,7 @@ pub const APPLY_OPERATIONS: &[Operation] = &[
     with_project("story-questions-submit"),
     with_project("phase-plan"),
     with_project("plan-replace"),
+    with_project("plan-check-return"),
 ];
 
 /// A spelling served only from a project, which its call prepares.
@@ -398,6 +399,9 @@ enum RequestShape {
     // `plan-replace` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "plan-replace")]
     PlanReplace(#[allow(dead_code)] crate::mcp::planning::PlanReplaceShape),
+    // `plan-check-return` parses its own arguments, so this variant is here for its schema.
+    #[serde(rename = "plan-check-return")]
+    PlanCheckReturn(#[allow(dead_code)] crate::mcp::planning::PlanCheckReturnShape),
     // `plan-read` parses its own arguments, so this variant is here for its schema.
     #[serde(rename = "plan-read")]
     PlanRead(#[allow(dead_code)] crate::mcp::planning::PlanReadShape),
@@ -690,6 +694,7 @@ pub(crate) mod expected {
         "story-questions-submit",
         "phase-plan",
         "plan-replace",
+        "plan-check-return",
     ];
 }
 
@@ -762,6 +767,7 @@ mod tests {
                     "phase-plan",
                     "plan-submit",
                     "plan-replace",
+                    "plan-check-return",
                     "context-submit",
                     "plan-read",
                     "context-intake",
@@ -811,6 +817,7 @@ mod tests {
             "phase-plan",
             "plan-submit",
             "plan-replace",
+            "plan-check-return",
             "context-submit",
         ] {
             assert_eq!(

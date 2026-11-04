@@ -402,14 +402,25 @@ fn original_held<P: Payloads + ?Sized>(
 /// The refusal for a re-check of the lineage of revision order `revision`
 /// whose retained `input` is gone.
 fn material_unavailable(input: &str, revision: &str) -> Value {
-    let what = match input {
-        ORIGINAL_INPUT => "the draft round 1 checked",
-        _ => "the truths round 1 was bound to",
+    let (what, way_out) = match input {
+        ORIGINAL_INPUT => (
+            "the draft round 1 checked",
+            format!(
+                "Fail revision work order {revision} with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check"
+            ),
+        ),
+        // A fresh order would store the same text, which a purge refuses.
+        _ => (
+            "the truths round 1 was bound to",
+            format!(
+                "No fresh order or check can run either until the truth text or the stories the plan serves change, since a purged text cannot be stored again. Then fail revision work order {revision} with `work-order-fail`, and a fresh `phase-plan` order starts a new lineage"
+            ),
+        ),
     };
     Refusal::new(
         MATERIAL_UNAVAILABLE,
         format!(
-            "the retained copy of {what} is no longer held as recorded, so no re-check can run and nothing was recorded, since a re-check reads the retained copies and never the current draft or truths. Fail revision work order {revision} with `work-order-fail`, then a fresh `phase-plan` order starts a new lineage, whose submit gets a full first check"
+            "the retained copy of {what} is no longer held as recorded, so no re-check can run and nothing was recorded, since a re-check reads the retained copies and never the current draft or truths. {way_out}"
         ),
     )
     .slot("work_order")
@@ -633,6 +644,13 @@ mod tests {
             assert_eq!(refusal["details"], json!({"input": name}));
             assert_eq!(head(&store), before);
             assert_eq!(state(&store, V), "pending");
+            // A fresh order stores the same truth text, which a purge refuses.
+            let reason = refusal["reason"].as_str().unwrap();
+            assert_eq!(
+                reason.contains("until the truth text or the stories the plan serves change"),
+                name == "truths",
+                "{reason}"
+            );
         }
     }
 

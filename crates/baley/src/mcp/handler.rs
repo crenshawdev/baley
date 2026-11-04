@@ -10,7 +10,8 @@
 //! `scope-submit`, the ten change operations from `project-describe` to
 //! `backlog-reorder`, `project-start`, `work-order-fail`, `work-order-retry`,
 //! `questions-answer`, `story-refine`, `story-questions-submit`,
-//! `phase-plan`, `plan-submit`, `plan-replace`, `context-submit`, `document`,
+//! `phase-plan`, `plan-submit`, `plan-replace`, `plan-check-return`,
+//! `context-submit`, `document`,
 //! `context-intake`, `plan-read` and `route` set `needs_project`, and in
 //! their [`operate`] arms the writes prepare a write from it, `plan-submit`
 //! and `plan-replace` after a settings read that records nothing, `document`,
@@ -220,6 +221,9 @@ pub(crate) fn operate(
             if spelling == "plan-submit" || spelling == "plan-replace" =>
         {
             planning::serve_submit(arguments_or_null, preparation)
+        }
+        (Called::Operation(_, spelling), Some(preparation)) if spelling == "plan-check-return" => {
+            planning::serve_check_return(arguments_or_null, preparation)
         }
         (Called::Operation(_, spelling), Some(preparation)) if spelling == "context-submit" => {
             refine::serve_context(arguments_or_null, preparation)
