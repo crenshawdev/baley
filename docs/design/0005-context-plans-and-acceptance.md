@@ -340,36 +340,39 @@ Baley records it in the same transaction as the later set's `questions.opened` o
 
 ### plan.check_issued (event, `phase/<n>` stream)
 
-`plan submit` appends this event when it issues the checker's round 2, before handing the work order to the host. It uses the existing phase stream.
+`plan submit` appends this event when it issues the checker's round 2, in the transaction that records the revised draft and before handing the work order to the host. It uses the existing phase stream.
 
 | Field | Type | Meaning |
 |---|---|---|
+| `phase` | integer | The phase the plan is for |
 | `work_order` | work order id | The round-2 check being issued |
 | `round` | 2 | The re-check |
-| `previous_check` | event reference | The first `plan.checked` result and its original plan digest |
+| `previous_check` | `{seq, plan_digest}` | The first `plan.checked` result's sequence and the digest of the draft it checked |
 | `original_plan_digest`, `plan_digest` | digests | The first draft and submitted revision |
 | `truth_versions` | list of story ids, truth ids and versions | The unchanged truths from the first check |
 | `scope` | `full`, `diff` | The selected reading scope |
 | `scope_policy_version` | integer | The policy version that selected the scope |
-| `material` | payload references | Original and revised plans, truths and the exact selected checker input |
+| `material` | list of `{name, body}` | The `record` references of `original`, the first draft; `plan`, the revision; `truths`; `delta`, only under `diff`; and `blockers`, in that order |
 
-`plan.checked` for that work order records the result with its issued binding. A retry must keep this binding and never select scope or material again. How the pending binding is keyed and read back before approval, and how draft discard closes a pending check, are open questions for Build 4 in section 12.
+`plan.checked` for that work order records the result with its issued binding. A retry keeps this binding and never selects scope or material again: a retry's result finds it through its chain's first order, and no second `plan.check_issued` is recorded. The pending binding is keyed by the lineage, not by a plan number, which does not exist before approval: `phase_plan`'s `checks` member holds one lineage per revision order, and `plan.check_issued` sets that lineage's `recheck`, whose sequence reads the binding back. A draft is never discarded under a pending check, since a submit is refused `checker-order-pending` while the phase's checker order is pending. After that order fails, a later submission may replace the draft, and the failed order's retry is then refused `stale-draft`.
 
 ### plan.checked (event, `phase/<n>` stream)
 
 | Field | Type | Meaning |
 |---|---|---|
+| `phase` | integer | The phase the plan is for |
 | `plan_digest` | digest | The submission checked |
-| `findings` | list | severity (`blocker`, `warning`), location, claim, fix |
+| `findings` | list | severity (`blocker`, `warning`), location, claim, fix, exactly as the checker returned them |
 | `round` | 1 or 2 | First check or the re-check |
-| `work_order` | work order id | The issued check whose result this event records |
+| `work_order` | work order id | The issued check whose result this event records, a retry's own id for a retry |
 | `scope` | `full`, `diff` | The scope actually issued: `full` for round 1 and the resolved re-check scope for round 2 |
-| `previous_check` | event reference or absent | Required for round 2 and absent for round 1; identifies the first check and its draft digest |
+| `previous_check` | `{seq, plan_digest}` or absent | Required for round 2 and absent for round 1: the first check's sequence and the digest of the draft it checked |
 | `truth_versions` | list of story ids, truth ids and versions | The stories' truths bound to the work order, unchanged between rounds |
-| `material` | payload references | Retained plan and truth snapshots and the exact selected checker input, including the delta for `diff` |
+| `material` | list of `{name, body}` | Round 1: the `record` references of `plan` and `truths`. Round 2: `plan.check_issued`'s material, `original`, `plan`, `truths`, `delta` for `diff`, and `blockers` |
 | `scope_policy_version` | integer | The policy version used when the checked work order selected its scope |
+| `revision` | work order id or null | The planner revision order a round-1 blocker issued in the same transaction; null otherwise, and always null in round 2 |
 
-The work order selects the full-plan input or the delta and blocker input from the retained material. Both carry the same versioned truths and every first-round blocker in round 2. The work order id, plan digest, scope, previous-check reference, truth versions, scope policy version and material references are copied from the issued work order, using `plan.check_issued` for round 2, never supplied by the checker or reconstructed from current files. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged (0001). The event envelope records the policy of the command that appends the result; `scope_policy_version` identifies the policy that selected the work order's scope.
+A round-1 order's inputs are `check`, which holds the binding, and the two its material names. A round-2 order's inputs are exactly its material, so it reads the revised plan and every first-round blocker under either scope, and `delta` only under `diff`. The work order id, plan digest, scope, previous-check reference, truth versions, scope policy version and material references are copied from the issued work order, using `plan.check_issued` for round 2, never supplied by the checker or reconstructed from current files. Plan and truth snapshots and all generated checker input, including the delta, use `record` references, kept for the life of the project unless purged (0001). The event envelope records the policy of the command that appends the result; `scope_policy_version` identifies the policy that selected the work order's scope. The `work_order` view marks the order the result names answered, and a failed order stays failed, so a late result never revives it.
 
 ### plan.replaced, plan.continuation, plan.continuation_followed (events, `phase/<n>` stream), phase.retrospective (event)
 
@@ -387,7 +390,7 @@ The work order selects the full-plan input or the delta and blocker input from t
 |---|---|---|
 | `backlog` | project | Stories in priority order, each with its latest question set id, the refined marker (the set its latest `story.refined` names), the truth count of that refinement, the phase it is committed to, the approved plans in force serving it, each with its phase, number and size, and its size, those plans' tasks summed, or null when none serves it. `plan.approved` adds a plan to every story it serves and `plan.replaced` removes it. Its refinement state, unrefined, questions open with the current round, drafting or refined, is worked out when read from the latest set's `questions` document and the marker, never stored |
 | `truths` | project, story | The story's current truths in submitted order, each with its version, and the set, digest, sequence and time of the latest `story.refined`; and every version each truth id ever had, oldest first, each kept once with the sequence of the `story.refined` that first carried it |
-| `phase_plan` | project, phase; indexed by status, then phase | The phase's planning state: its approved plans in number order, each with its digest, stories, size, `state` (`in-force` or `replaced`) and the replacing digest; the highest plan number ever assigned, replaced plans included, which the next approval numbers past; its size, the tasks of the plans in force, each plan counted once however many stories it serves; whether it was withdrawn; its status, `active` while a plan is in force and it is not withdrawn and `inactive` otherwise, worked out on every change; its one unapproved plan draft with that draft's set, which an approval of it clears; and its latest planning continuation with whether it was followed. It projects `plan.approved`, `plan.replaced`, `phase.withdrawn`, a plan draft's `questions.opened`, `plan.continuation` and `plan.continuation_followed`, and refuses a plan number not above the highest. It is separate from the `phase` view of [0004](0004-starting-a-project-and-changing-scope.md). Tasks done, the definition of done's state and the velocity of closed phases come from execution and completion ([0006](0006-execution.md), [0007](0007-verification.md)) |
+| `phase_plan` | project, phase; indexed by status, then phase | The phase's planning state: its approved plans in number order, each with its digest, stories, size, `state` (`in-force` or `replaced`) and the replacing digest; the highest plan number ever assigned, replaced plans included, which the next approval numbers past; its size, the tasks of the plans in force, each plan counted once however many stories it serves; whether it was withdrawn; its status, `active` while a plan is in force and it is not withdrawn and `inactive` otherwise, worked out on every change; its one unapproved plan draft with that draft's set, set only when a draft's set opens, so a draft under check is not there until its last check returns, and cleared by an approval of it; its latest planning continuation with whether it was followed; and in `checks` its check lineages that bought a revision, in the order their round 1 returned, each with `revision`, the planner revision order, `first`, that result's sequence and draft digest, and `recheck`, the round-2 issue's order and sequence or null, every lineage kept. It projects `plan.approved`, `plan.replaced`, `phase.withdrawn`, a plan draft's `questions.opened`, `plan.continuation`, `plan.continuation_followed`, `plan.checked` and `plan.check_issued`, and refuses a plan number not above the highest, a `plan.check_issued` naming no lineage or a lineage whose round 2 was already issued, and a round-2 `plan.checked` whose round 2 was never issued. It is separate from the `phase` view of [0004](0004-starting-a-project-and-changing-scope.md). Tasks done, the definition of done's state and the velocity of closed phases come from execution and completion ([0006](0006-execution.md), [0007](0007-verification.md)) |
 | `plan` | project, phase, plan | Each approved plan's binding: its digest, stories, size, suite, question set, the hash of its draft's body, owner and time, and its `state`, `approved` or `replaced`, with the replacing draft's digest. Only `plan.approved` and `plan.replaced` reach it, so a draft never appears, and a replacement keeps every other field, so a replaced plan's binding stays readable. The checker's completed rounds, each with its scope, previous-check reference and material references, come from `plan.checked` (PLN-R16) |
 | `evidence_map` | project, phase, plan | Each approved plan's evidence items exactly as approved, with their truth versions and each check's `level`, and its `state`, `approved` or `replaced`. Only `plan.approved` and `plan.replaced` reach it, so a draft's map never appears, and a replaced plan's map stays. Whether a plan's items still name their truths' current versions is worked out when read (`plan read`), never stored |
 | `questions` | project, set | The set's facts and records only: its subject, the stream it was opened on, the questions as submitted, each answer with whether it took the recommendation, its round, owner and time, each deferral with its reason, round, owner and time, and its abandonment with the cause and time. Whether the set is open, closed or abandoned, each question's state (waiting and on what, in the current round, answered, deferred) and the current round are computed when the set is read, from the questions in submitted order and these records, never stored |
@@ -415,13 +418,16 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Draft: plan submit or plan replace
-  Draft --> Checking: plan gate on
-  Checking --> Draft: first-round blocker, one revision
-  Draft --> Draft: re-check refused, revision still pending
-  Checking --> Previewed: no blocker, or re-check done
-  Draft --> Discarded: no pending checker revision, draft replaced
-  Draft --> Previewed: plan gate off
+  [*] --> Draft: plan submit or plan replace records it
+  Draft --> Previewed: plan gate off, in the submit's transaction
+  Draft --> Checking: plan gate not off, the round's checker order recorded with the draft
+  Checking --> Checking: checker order failed and retried
+  Checking --> Discarded: checker order failed, then a new submit
+  Checking --> AwaitingRevision: first-round blocker, plan.checked with the one revision order
+  Checking --> Previewed: round 1 with no blocker, or round 2 whatever it holds
+  AwaitingRevision --> AwaitingRevision: re-check refused, revision order still pending
+  AwaitingRevision --> Discarded: the revision submitted, a new draft for round 2
+  AwaitingRevision --> Discarded: revision order failed, then a fresh planner order's submit
   Previewed --> Answering: questions.opened, a question open
   Previewed --> Ready: questions.opened, no question
   Answering --> Answering: a round answered, a question still open
@@ -435,7 +441,7 @@ stateDiagram-v2
   Approved --> Admitted: execution admits it (0006)
 ```
 
-*Figure 2. States of a plan. Every draft is recorded in the ledger when it is submitted, and Discarded means a newer submission replaced it, so it can no longer be approved; its record stays ([ADR 0043](../adr/0043-submissions-recorded-as-drafts.md)). A phase holds one plan draft: every plan draft of the phase, a replacement's included, is filed under `phase/<n>`, so a new submit discards the draft before it and abandons that draft's set with cause `draft-replaced`. The end of a session changes no state. Previewed is the moment Baley records the draft with its question set and gives the preview, in the submit's one transaction. Revising is a set closed with an answer that rejected a recommended answer: the planner's revision order is issued by the closing `questions-answer` over MCP, or, after a close at the terminal, by the session's next `phase plan`. `baley plan approve` is refused in Answering (`question-open`), in Revising (`answer-not-applied`), once Discarded (`stale-draft`), and in any state while a phase other than the plan's is active (`phase-not-active`); it also judges the plan again against the phase as it stands. A replaced plan keeps its number, its record and its evidence map, read with `plan read`, and its replacement gets the next number. Admitted and later states belong to [0006](0006-execution.md). Each check is bound to its submitted draft; the second check uses PLN-R16's recorded scope.*
+*Figure 2. States of a plan. Every draft is recorded in the ledger when it is submitted, and Discarded means a newer submission replaced it, so it can no longer be approved; its record stays ([ADR 0043](../adr/0043-submissions-recorded-as-drafts.md)). A phase holds one plan draft: every plan draft of the phase, a replacement's included, is filed under `phase/<n>`, so a new submit discards the draft before it and abandons that draft's set with cause `draft-replaced`. The end of a session changes no state. With the plan gate not `off`, a draft is recorded with its checker order and checked before it is previewed: Checking is a round of its check pending. AwaitingRevision is a draft whose first-round blocker bought the one revision, whose order is the phase's only live planner order. The revision's submit is a new draft in round 2 of the same lineage, bound as PLN-R16 records it, and a second re-check is refused `third-round`. A refused re-check, `material-unavailable` or `recheck-truths-changed`, records nothing and leaves the revision order pending until the session fails it with `work-order-fail` and plans again: its next `phase plan` gives a fresh planner order, whose submit starts a new lineage with a full first check ([ADR 0037](../adr/0037-plan-recheck-scope.md)). Previewed is the moment Baley opens the draft's question set and gives the preview, in the submit's transaction under the gate `off`, and otherwise in the transaction of the last check's return. Revising is a set closed with an answer that rejected a recommended answer: the planner's revision order is issued by the closing `questions-answer` over MCP, or, after a close at the terminal, by the session's next `phase plan`. `baley plan approve` is refused in Checking and AwaitingRevision (`check-unfinished`), in Answering (`question-open`), in Revising (`answer-not-applied`), once Discarded (`stale-draft`), and in any state while a phase other than the plan's is active (`phase-not-active`); it also judges the plan again against the phase as it stands. A checker's findings refuse no approval: they go to the owner with the preview, round 2's blockers included. A replaced plan keeps its number, its record and its evidence map, read with `plan read`, and its replacement gets the next number. Admitted and later states belong to [0006](0006-execution.md).*
 
 ```mermaid
 stateDiagram-v2
@@ -548,23 +554,23 @@ sequenceDiagram
     B-->>H: phase-active, story-unrefined or story-in-phase, naming it
   end
   alt S1, S2 differ from N's committed stories
-    break a planner order of N pending
-      B-->>H: planner-order-pending, naming it
+    break a planner or checker order of N pending
+      B-->>H: planner-order-pending or checker-order-pending, naming it
     end
     B->>L: scope.submitted of kind phase-edit and plan.continuation
     B-->>H: the edit's digest with the preview and approve commands, no work order
     H->>O: the digest
     O->>B: baley scope preview, then baley scope approve, with the digest
-    B->>B: recheck the selection's readiness and the phase's pending planner order
+    B->>B: recheck the selection's readiness and the phase's pending planner and checker orders
     B->>L: phase.declared (edit), scope.approved and work_order.issued, the planner order
     B-->>O: receipt naming the planner order
     H->>B: phase-plan N [S1, S2] again
-    Note over H,B: readiness is judged again, then the hand-over comes before any pending-order refusal
+    Note over H,B: readiness is judged again, then the hand-over comes before the pending planner order's refusal
     B->>L: plan.continuation_followed
     B-->>H: the planner order the approval issued
   else S1, S2 are N's committed stories, no hand-over due
-    break a planner order of N pending
-      B-->>H: planner-order-pending, naming it
+    break a planner or checker order of N pending
+      B-->>H: planner-order-pending or checker-order-pending, naming it
     end
     B->>L: work_order.issued, the planning order
     B-->>H: the planner order
@@ -572,35 +578,48 @@ sequenceDiagram
   H->>P: launch
   P-->>H: plan with evidence map and questions
   H->>B: plan-submit naming the order
-  break the order, the phase or the plan refused
-    B-->>H: wrong-work-order, phase-not-active, over-capacity or a refusal naming the item
+  break the order, a pending checker order, the phase or the plan refused
+    B-->>H: wrong-work-order, checker-order-pending, phase-not-active, over-capacity or a refusal naming the item
   end
-  opt plan gate on
-    B-->>H: checker work order with the full plan and versioned truths
+  alt plan gate off
+    B->>L: scope.submitted of kind plan, questions.abandoned for the earlier draft's set, questions.opened
+    B-->>H: preview, size and phase size against capacity, set id, round 1, digest
+  else plan gate not off
+    break another planner order of N pending
+      B-->>H: planner-order-pending, naming it
+    end
+    B->>L: scope.submitted of kind plan, questions.abandoned for the earlier draft's set, work_order.issued, the round-1 checker order
+    B-->>H: digest, size and phase size against capacity, the checker order in check, no preview and no set
     H->>C: launch
     C-->>H: findings
-    H->>B: checker findings for the issued work order
-    B->>L: plan.checked with scope and material references
+    H->>B: plan-check-return naming the order, the findings unchanged
+    break the order or the findings refused
+      B-->>H: no-such-work-order, wrong-work-order, work-order-not-pending, finding-shape or material-unavailable
+    end
     opt blocker, first round
-      B-->>H: planner work order for one revision
+      B->>L: plan.checked naming the revision order, work_order.issued, the planner revision order
+      B-->>H: findings, the planner work order for one revision in revision
       H->>P: launch revision
       P-->>H: revised plan
-      H->>B: plan-submit revision
-      B->>B: select scope, retain and validate material against the first check
+      H->>B: plan-submit naming the revision order
+      B->>B: find the first check from the lineage, read the retained material, compare the truths
+      break round 2 of the lineage already issued
+        B-->>H: third-round
+        Note over H,B: revision order already answered, the next phase-plan gives a fresh planner order
+      end
       break retained input unavailable or truth versions changed
         B-->>H: material-unavailable or recheck-truths-changed
-        Note over H,B: revision still pending, exit remains open for Build 4
+        Note over H,B: revision order still pending, work-order-fail on it and the next phase-plan gives a fresh planner order
       end
-      B->>L: plan.check_issued with work order, scope, policy and material binding
-      B-->>H: round-2 checker work order from the recorded binding
+      B->>L: scope.submitted of kind plan, plan.check_issued with scope, policy version and material binding, work_order.issued, the round-2 checker order
+      B-->>H: digest and the round-2 checker order in check, from the recorded binding
       H->>C: launch re-check
       C-->>H: findings
-      H->>B: checker findings for the issued work order
-      B->>L: plan.checked with the recorded binding and findings
+      H->>B: plan-check-return naming the order, the findings unchanged
     end
+    B->>L: plan.checked with the issued binding and findings, questions.opened
+    B-->>H: preview, findings, size and phase size against capacity, set id, round 1, digest
   end
-  B->>L: scope.submitted of kind plan, questions.abandoned for the earlier draft's set, questions.opened
-  B-->>H: preview, findings, size and phase size against capacity, set id, round 1, digest
   H->>O: preview
   opt the draft has questions
     H->>O: the rounds of Figure 8, until no question is open
@@ -615,8 +634,8 @@ sequenceDiagram
     B-->>H: ready
     H->>O: the digest
     O->>B: baley scope preview, then baley plan approve, with the digest
-    alt a question open, a recommendation rejected, or another phase active
-      B-->>O: question-open, answer-not-applied or phase-not-active
+    alt the check unfinished, a question open, a recommendation rejected, or another phase active
+      B-->>O: check-unfinished, question-open, answer-not-applied or phase-not-active
     else
       B->>B: judge the plan again against the phase as it stands
       B->>L: plan.approved with the next number, the evidence map inline, the set id, the size and the suite
@@ -625,7 +644,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 5. Phase planning and a plan's submission, check, questions and approval. A `phase-plan` that changes the phase's stories, a reorder included, only drafts the `phase edit` with its continuation; the owner's approval at the terminal rechecks the selection and records the stories and the planner order in one transaction, and the session's next `phase-plan` with the same stories hands that order over once ([ADR 0050](../adr/0050-phase-plan-commits-stories-through-an-approved-edit.md)). Every `phase-plan` is judged for readiness first; the hand-over is judged next, so the call that collects the approval's order is never refused for that order, and `planner-order-pending` refuses only a call with no hand-over due. An unchanged selection issues its order at once, the revision order when the current draft's set closed on a rejected recommendation. A revised draft is checked and previewed again and opens its own question set, abandoning the set of the draft it replaces. The revision order is issued by the closing `questions-answer` over MCP; after a close at the terminal, which issues no order, the session's next `phase-plan` issues it. A replacement goes the same way through `plan-replace`, and its approval also records `plan.replaced`. Every refusal records nothing. Round 2 reads the full revision or its changes, as selected by PLN-R16, and both scopes check every first-round blocker. Missing or mismatched retained inputs refuse the re-check before dispatch. The plan gate's path draws the checker's revision order before the draft's `scope.submitted`, which is what answers the planner order the draft came from, so the phase's one live planner order is not yet settled there; section 12 holds that ordering open for Build 4 T10.*
+*Figure 5. Phase planning and a plan's submission, check, questions and approval. A `phase-plan` that changes the phase's stories, a reorder included, only drafts the `phase edit` with its continuation; the owner's approval at the terminal rechecks the selection and records the stories and the planner order in one transaction, and the session's next `phase-plan` with the same stories hands that order over once ([ADR 0050](../adr/0050-phase-plan-commits-stories-through-an-approved-edit.md)). Every `phase-plan` is judged for readiness first; the hand-over is judged next, so the call that collects the approval's order is never refused for that order, and `planner-order-pending` refuses only a call with no hand-over due. A pending checker order then refuses every path `checker-order-pending`. An unchanged selection issues its order at once, the revision order when the current draft's set closed on a rejected recommendation. A revised draft is checked and previewed again and opens its own question set, abandoning the set of the draft it replaces. The revision order is issued by the closing `questions-answer` over MCP; after a close at the terminal, which issues no order, the session's next `phase-plan` issues it. A replacement goes the same way through `plan-replace`, and its approval also records `plan.replaced`. Every refusal records nothing, except that `planner-order-pending` from a gated recording, a refusal from judging a submission again under the policy step's settings and a refused route for the checker's order record no plan and leave whatever checkout admission and the policy step recorded standing beside them (section 5). With the plan gate not `off`, the draft is recorded with its checker order, so it answers its planner order before a blocker's revision exists and that revision is the phase's only live planner order. The session relays the checker's findings unchanged with `plan-check-return`, naming the order, and a round-1 blocker issues the one revision in the same transaction as `plan.checked`. The revision's submit records `plan.check_issued` with the round-2 order before its receipt returns. Round 2 reads the full revision or its changes, as selected by PLN-R16, and both scopes check every first-round blocker ([ADR 0037](../adr/0037-plan-recheck-scope.md)). Missing or mismatched retained inputs or changed truths refuse the re-check before dispatch, and the session leaves that state by failing the revision order and planning again, whose submit starts a new lineage with a full first check. A submit under the revision order once its round 2 was issued is refused `third-round`. A checker that fails or returns nothing has a failed order, never a pass, which the session fails and retries ([ADR 0051](../adr/0051-skip-the-plan-checker-only-for-an-off-gate.md)). Round 2's blockers go to the owner with the preview, and a checker's findings refuse no approval.*
 
 ```mermaid
 sequenceDiagram
