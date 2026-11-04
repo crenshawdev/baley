@@ -12,14 +12,19 @@
 //! and the judged path is run through [`crate::planning::phase_plan`].
 //!
 //! `plan-submit` and `plan-replace` on `baley_apply` (design 0005 `plan
-//! submit` and `plan replace`, D-04, D-08, D-13): a session submits the
-//! plan a planner order returned, as a new plan or as the replacement of
-//! one in force. The arguments are judged first; the settings are read for
-//! the capacity, recording nothing; then the write is prepared under the
-//! caller carrying the order, with the submit's or the replacement's check
-//! as its own check, and the draft is recorded through
-//! [`crate::planning::submit::record`]. The owner approves the draft at the
-//! terminal with `baley plan approve`.
+//! submit` and `plan replace`, PLN-R16, D-04, D-08, D-09, D-13, D-14): a
+//! session submits the plan a planner order returned, as a new plan, as the
+//! replacement of one in force, or as the revision a checker's blocker
+//! bought. The arguments are judged first; the settings are read, recording
+//! nothing; then the write is prepared under the caller carrying the order,
+//! with the submit's or the replacement's check and the check lineage step,
+//! under those settings, as its own check. The plan is recorded under the
+//! plan gate and re-check scope the command's own policy step gave, through
+//! [`crate::planning::submit::record_served`], which judges again when they
+//! differ from the earlier read. Under the gate `off` the draft is previewed
+//! and its question set opens; under any other gate the receipt names the
+//! checker order instead. The owner approves the draft at the terminal with
+//! `baley plan approve`.
 //!
 //! `plan-read` on `baley_query` (design 0001 Appendix B `plan-read`, D-08,
 //! D-17): a phase's approved plans with their evidence maps and readiness,
@@ -27,11 +32,11 @@
 //! prepared as `context-intake` is and recording nothing.
 
 use std::cell::RefCell;
-use std::num::NonZeroU32;
 use std::path::Path;
 
 use baley_core::capture::NO_SUCH_PHASE;
 use baley_core::plan::Replaces;
+use baley_core::policy::EffectivePolicy;
 use baley_store::{
     CommandKind, Hash, InstructionEvidence, Ledger, ProjectId, RequestId, Views, request_digest,
 };
@@ -50,7 +55,8 @@ use crate::mcp::work_order::{
     evidenced, judge_instruction, judge_order_id, judge_request_id, prepared_write, shape_fault,
 };
 use crate::planning::phase_plan::{self, PHASE_PLAN_COMMAND};
-use crate::planning::{facts, read, replace, submit};
+use crate::planning::read;
+use crate::planning::submit::{self, Submission};
 use crate::process::Process;
 use crate::scope::read::ReadError;
 use crate::scope::submit::{NOT_RECORDED_BUSY, SUBMIT_COMMAND};
@@ -321,20 +327,23 @@ fn lowercase_digest(text: &str) -> Option<Hash> {
 }
 
 /// Serves one `plan-submit` or `plan-replace` call for the session's
-/// `preparation`. The arguments are judged first; then the settings are read
-/// for `planning.phase_capacity`, recording nothing; then the write is
-/// prepared under the caller carrying the order, with the submit's or the
-/// replacement's check as its own check, so every refusal comes before
+/// `preparation`. The arguments are judged first; then the settings are read,
+/// recording nothing; then the write is prepared under the caller carrying
+/// the order, with the submit's or the replacement's check and the lineage
+/// step under those settings as its own check, so every refusal comes before
 /// checkout admission and the policy step and records nothing. A failed
 /// settings read is answered by that check, so a retry of a recorded request
-/// still replays as preparation keeps it. The command's caller then takes
-/// the order's instruction evidence and the draft is recorded. A replay goes
-/// to the recording with no read, and the store answers it from its record.
+/// still replays as preparation keeps it. For a write that ran its steps, the
+/// command's caller then takes the order's instruction evidence, the host
+/// catalog is read and the plan is recorded through
+/// [`submit::record_served`] with the policy the policy step gave and a fresh
+/// lowercase UUID for its checker order. A replay goes to the recording with
+/// nothing to record, and the store answers it from its record.
 pub fn serve_submit(arguments: &Value, preparation: &Preparation) -> Value {
     submit_through(arguments, preparation, &mut crate::process::System)
 }
 
-/// [`serve_submit`] with the settings read for the capacity running git
+/// [`serve_submit`] with the settings read before admission running git
 /// through `process`, the seam a test supplies.
 fn submit_through(
     arguments: &Value,
@@ -349,45 +358,56 @@ fn submit_through(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
-    let capacity = capacity(preparation, process);
+    let read = settings_read(preparation, process);
+    let submission = Submission {
+        plan: &judged.plan,
+        work_order: &judged.work_order,
+        replaces: judged.replaces,
+    };
     // Kept for the binding and the recording. A replay skips the check.
     let kept = RefCell::new(None);
     let check = |store: &SqliteStore, project: &ProjectId| {
-        let capacity = capacity.clone()?;
-        let checked = match judged.replaces {
-            None => submit::check(store, project, &judged.plan, &judged.work_order, capacity),
-            Some(replaces) => replace::check(
-                store,
-                project,
-                &judged.plan,
-                &judged.work_order,
-                replaces,
-                capacity,
-            ),
-        }?;
-        *kept.borrow_mut() = Some(checked);
+        let read = read.as_ref().map_err(Clone::clone)?;
+        *kept.borrow_mut() = Some(submission.judge(store, project, read)?);
         Ok(())
     };
-    let (store, command, _) = match prepared_write(preparation, &caller, &judged.request, &check) {
-        Ok(prepared) => prepared,
+    let (store, command, stepped) =
+        match prepared_write(preparation, &caller, &judged.request, &check) {
+            Ok(prepared) => prepared,
+            Err(answer) => return answer,
+        };
+    let kept = kept.borrow();
+    let (Some(stepped), Some(checked), Ok(read)) = (stepped, kept.as_ref(), read.as_ref()) else {
+        return crate::scope::submit::answer(submit::record(store, &command, None), store);
+    };
+    let command = match bind_instructions(command, Some(&checked.evidence)) {
+        Ok(command) => command,
         Err(answer) => return answer,
     };
-    let kept = kept.borrow();
-    let evidence = kept.as_ref().map(|checked| checked.evidence.as_slice());
-    match bind_instructions(command, evidence) {
-        Ok(command) => {
-            crate::scope::submit::answer(submit::record(store, &command, kept.as_ref()), store)
-        }
-        Err(answer) => answer,
-    }
+    let names = match host_names(store, preparation.host) {
+        Ok(names) => names,
+        Err(error) => return store_failed(&error, NOT_RECORDED_BUSY),
+    };
+    submit::record_served(
+        store,
+        &command,
+        &submission,
+        checked,
+        read,
+        &stepped.policy,
+        preparation.host,
+        &names,
+        &uuid::Uuid::new_v4().to_string(),
+    )
 }
 
-/// The capacity the session's settings set, read and judged with nothing
-/// recorded, or the answer that read ended with. Git runs through `process`.
-fn capacity(
+/// The host's effective policy the session's settings give, read and judged
+/// with nothing recorded, or the answer that read ended with. Git runs
+/// through `process`.
+fn settings_read(
     preparation: &Preparation,
     process: &mut dyn Process,
-) -> Result<Option<NonZeroU32>, Value> {
+) -> Result<EffectivePolicy, Value> {
     let ledger = preparation.ledger.as_deref();
     // With no ledger, the read fails at the project check, before any
     // settings are read from the config folder.
@@ -400,17 +420,13 @@ fn capacity(
         &preparation.at,
         process,
     )?;
-    prepared
-        .policy
-        .as_ref()
-        .map(facts::capacity)
-        .ok_or_else(|| {
-            failed(
-                LEDGER_UNAVAILABLE,
-                "the settings were read without a policy",
-                PLACE_LEDGER,
-            )
-        })
+    prepared.policy.ok_or_else(|| {
+        failed(
+            LEDGER_UNAVAILABLE,
+            "the settings were read without a policy",
+            PLACE_LEDGER,
+        )
+    })
 }
 
 // `schema` serves this same declaration, so its doc comments are wire text.
@@ -657,6 +673,7 @@ mod tests {
         use crate::mcp::prepare::prepared_command;
         use crate::planning::approve::tests::{approved, digest_of};
         use crate::planning::fixtures::{p0, pl1, store_c};
+        use crate::planning::replace;
         use crate::planning::submit::tests::{order_o, plan_submitted};
         use crate::scope::fixtures::{ID, R2, R3, R4, R5, SESSION, T5, T6, T7, T8, head, project};
 

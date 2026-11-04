@@ -434,6 +434,87 @@ pub fn record_gated<S: Ledger + Views + Payloads>(
     answer(result, store)
 }
 
+/// What a `plan-submit` or `plan-replace` call submits: the plan as given,
+/// the planner order it answers and, for a replacement, the plan replaced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Submission<'a> {
+    /// The plan as given, for the judge to judge.
+    pub plan: &'a Value,
+    /// The planner order the plan answers.
+    pub work_order: &'a str,
+    /// The plan a replacement replaces, or none for a new plan.
+    pub replaces: Option<Replaces>,
+}
+
+impl Submission<'_> {
+    /// The submit's or the replacement's check under `policy`'s
+    /// `planning.phase_capacity`, then the lineage step under `policy`
+    /// (`recheck::judge`), recording nothing. A refusal or fault is the answer
+    /// to give.
+    pub fn judge<S: Ledger + Views + Payloads + ?Sized>(
+        &self,
+        store: &S,
+        project: &ProjectId,
+        policy: &EffectivePolicy,
+    ) -> Result<Checked, Value> {
+        let capacity = facts::capacity(policy);
+        let checked = match self.replaces {
+            None => check(store, project, self.plan, self.work_order, capacity),
+            Some(replaces) => replace::check(
+                store,
+                project,
+                self.plan,
+                self.work_order,
+                replaces,
+                capacity,
+            ),
+        }?;
+        recheck::judge(store, project, checked, policy)
+    }
+}
+
+/// Records `submission` for a served call through [`record_gated`] under
+/// `policy`, the policy `command`'s own policy step recorded, for `host` with
+/// the catalog `names`, its checker order, if any, as `id`. `checked` is
+/// [`Submission::judge`]'s result under `read`, the settings read before
+/// admission.
+///
+/// Admission and the policy step can read other settings than the earlier
+/// read, and the recording names the command's policy version, so what it
+/// records must come from that policy (D-09, D-14). When `read` and `policy`
+/// disagree on whether the plan gate is `off`, on the re-check scope or on
+/// `planning.phase_capacity`, the submission is judged again under `policy`
+/// first and a refusal is answered as it stands.
+#[allow(clippy::too_many_arguments)]
+pub fn record_served<S: Ledger + Views + Payloads>(
+    store: &S,
+    command: &Command,
+    submission: &Submission<'_>,
+    checked: &Checked,
+    read: &EffectivePolicy,
+    policy: &EffectivePolicy,
+    host: Host,
+    names: &AcceptedNames,
+    id: &str,
+) -> Value {
+    if judged_alike(read, policy) {
+        return record_gated(store, command, Some(checked), policy, host, names, id);
+    }
+    match submission.judge(store, &command.project, policy) {
+        Ok(again) => record_gated(store, command, Some(&again), policy, host, names, id),
+        Err(answer) => answer,
+    }
+}
+
+/// Whether a submission judged under `read` stands under `policy`: both
+/// `off` or neither, the same re-check scope and the same capacity.
+fn judged_alike(read: &EffectivePolicy, policy: &EffectivePolicy) -> bool {
+    let off = |policy: &EffectivePolicy| policy.plan_gate().0 == PlanGate::Off;
+    off(read) == off(policy)
+        && recheck::scope(read) == recheck::scope(policy)
+        && facts::capacity(read) == facts::capacity(policy)
+}
+
 /// The checker round a gated recording issues, prepared outside its
 /// transaction.
 enum Round {
@@ -1278,6 +1359,143 @@ pub(crate) mod tests {
         assert_eq!(answer["status"], "failed", "{answer}");
         assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
+    }
+
+    /// `plan` answering `order` judged under `read`, then recorded through
+    /// [`record_served`] with the command's `policy` for Claude Code with N0,
+    /// its checker order, if any, as `id`, under a command at policy version
+    /// `version` whose caller carries the order and its instructions, under
+    /// `request_id` at `at`. Gives the answer.
+    #[allow(clippy::too_many_arguments)]
+    fn served(
+        store: &SqliteStore,
+        plan: &Value,
+        order: &str,
+        read: &EffectivePolicy,
+        policy: &EffectivePolicy,
+        id: &str,
+        request_id: &str,
+        at: &str,
+        version: u64,
+    ) -> Value {
+        let submission = Submission {
+            plan,
+            work_order: order,
+            replaces: None,
+        };
+        let checked = submission
+            .judge(store, &project(), read)
+            .expect("the plan is judged under the earlier read");
+        let mut command = submit_command(order, &checked, request_id, at);
+        command.policy_version = version;
+        record_served(
+            store,
+            &command,
+            &submission,
+            &checked,
+            read,
+            policy,
+            Host::ClaudeCode,
+            &n0(),
+            id,
+        )
+    }
+
+    /// Store C with O, PL2 through the gated recording under P0 as C1, and
+    /// C1's return of FB recorded with V its revision.
+    fn lineage_to_v() -> (tempfile::TempDir, SqliteStore) {
+        use crate::planning::check_return::tests::{V, fb, gated, returned};
+        use crate::planning::checker::tests::C1;
+
+        let (dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = gated(&store, &pl2(), O, &p0(), C1, R2, T5);
+        assert_eq!(receipt["check"]["work_order"], C1, "{receipt}");
+        let back = returned(&store, C1, vec![fb()], &p0(), V, R3, T6, 5);
+        assert_eq!(back["revision"]["work_order"], V, "{back}");
+        (dir, store)
+    }
+
+    #[test]
+    fn a_submit_recorded_under_a_gate_its_policy_step_did_not_give_is_caught() {
+        use crate::planning::check_return::tests::V;
+        use crate::planning::checker::tests::{C1, C9};
+        use crate::refine::order::tests::issued;
+
+        // Off at the earlier read, on at the policy step.
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = served(&store, &pl1(), O, &poff(), &p0(), C1, R2, T5, 5);
+        assert_eq!(receipt["check"]["work_order"], C1, "{receipt}");
+        assert!(receipt.get("preview").is_none(), "{receipt}");
+
+        // On at the earlier read, off at the policy step.
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = served(&store, &pl1(), O, &p0(), &poff(), C1, R2, T5, 5);
+        assert_eq!(receipt["preview"], as_drafted(pl1()), "{receipt}");
+        assert!(receipt["set"].is_string(), "{receipt}");
+        assert!(receipt.get("check").is_none(), "{receipt}");
+        assert!(
+            issued(&store)
+                .iter()
+                .all(|event| event.payload["role"] != "checker")
+        );
+
+        // The scope the command's policy selects, under its version.
+        let (_dir, store) = lineage_to_v();
+        let receipt = served(&store, &pl2r(), V, &p0(), &pd(), C9, R4, T7, 6);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        let events = history(&store);
+        let issues = of_type(&events, "plan.check_issued");
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].payload["scope"], "diff");
+        assert_eq!(issues[0].payload["scope_policy_version"], 6);
+
+        // A revision judged under `off` has no lineage attached, so it is
+        // round 2 only when judged again.
+        let (_dir, store) = lineage_to_v();
+        let receipt = served(&store, &pl2r(), V, &poff(), &p0(), C9, R4, T7, 6);
+        assert_eq!(receipt["check"]["work_order"], C9, "{receipt}");
+        let events = history(&store);
+        let issues = of_type(&events, "plan.check_issued");
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].payload["round"], 2);
+        assert_eq!(issues[0].payload["scope"], "full");
+    }
+
+    #[test]
+    fn a_submit_recorded_under_a_capacity_its_policy_step_did_not_give_is_caught() {
+        use crate::planning::checker::tests::C1;
+        use crate::refine::order::tests::issued;
+
+        let (_dir, store) = store_c();
+        order_o(&store, R1);
+        // A capacity is at least 1, so plan 1 takes the phase to size 1 and
+        // PL1 would take it to 2.
+        activate_phase_1(&store, R2);
+        let file = crate::settings::file(
+            std::path::Path::new("/r/baley.toml"),
+            b"[planning]\nphase_capacity = 1\n".to_vec(),
+        );
+        let pcap = baley_core::policy::effective_policy(
+            baley_core::policy::Schema::standard(),
+            Some(Host::ClaudeCode),
+            None,
+            Some(&file),
+        )
+        .expect("the capacity is read");
+
+        let before = head(&store);
+        let refusal = served(&store, &pl1(), O, &p0(), &pcap, C1, R3, T5, 6);
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(refusal["code"], "over-capacity", "{refusal}");
+        assert_eq!(head(&store), before);
+        assert!(
+            issued(&store)
+                .iter()
+                .all(|event| event.payload["role"] != "checker")
+        );
     }
 
     #[test]
