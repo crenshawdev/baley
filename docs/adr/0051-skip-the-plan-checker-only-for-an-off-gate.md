@@ -15,7 +15,7 @@ The plan checker reviews a submitted plan before the owner sees it. [PLN-R16](..
 
 [ADR 0048](0048-port-what-cadence-hands-agents.md) makes Cadence the source of what Baley hands its agents, so the check steps of `bal-plan` are ported from the `check_gate` step of Cadence's `cadence-core/workflows/plan.md` at tag `v3.9.4`. That step has two ways round the check that PLN-R16 does not. "Skip when workflow.plan_check is false or `--skip-check` was passed" lets the session running the workflow pass a flag. "Empty or unmarked return -> report it, ask whether to proceed unchecked" lets a check that returned nothing end with the plan going on unchecked.
 
-ADR 0048 keeps a Cadence rule that contradicts only a design document and corrects the document; only an accepted ADR stands against a ported rule. PLN-R16 is a design requirement, so without an ADR those two rules would stand and PLN-R16 and Build 4's acceptance criteria would be corrected to match. The question is who may skip the checker, and what a check that produced nothing means.
+ADR 0048 keeps a Cadence rule that contradicts only a design document and corrects the document; only an accepted ADR stands against a ported rule. PLN-R16 is a design requirement, so without an ADR those two rules would stand and PLN-R16 would be corrected to match. The question is who may skip the checker, and what a check that produced nothing means.
 
 ## Decision drivers
 
@@ -25,7 +25,7 @@ ADR 0048 keeps a Cadence rule that contradicts only a design document and correc
 
 ## Considered options
 
-1. Port the session's skip and the ask, and correct PLN-R16 and the Build 4 criterion
+1. Port the session's skip and the ask, and correct PLN-R16
 2. Only the owner's effective `off` gate skips the checker
 
 ## Decision
@@ -42,13 +42,14 @@ A failed or empty checker return is a failed order, never a pass. A checker that
 
 ### Positive
 
-- The owner can read a plan's preview knowing the check ran, or that the owner's own setting turned it off.
-- Every draft that reaches the owner under a gate that is not `off` has a recorded result for its check.
+- A plan is approved unchecked only when it was submitted with the owner's own setting at `off`. Under any other gate, `baley plan approve` is refused until the check's last round has a recorded result.
+- `baley scope preview` prints every round returned, so the owner reads the findings before approving.
 - PLN-R16 and the code say the same thing, so the design keeps its wording.
 
 ### Negative
 
-- A checker that keeps failing holds the plan: the session can only retry, and the owner's way past it is to set the gate to `off`, or to wait. A session cannot get the plan in front of the owner to ask.
+- A checker that keeps failing holds the plan. The session can retry the order, or fail it and submit again, which starts a new check. The owner's way past it is to set the gate to `off` and have a session submit again, since a retry reads no gate and the held draft stays `check-unfinished`, or to wait. Baley gives a session no way to ask the owner to let the plan go on unchecked.
+- `baley scope preview` also answers while a check is unfinished and prints no line saying so. A draft with no round returned yet reads the same as one submitted with the gate at `off`, and it still names `baley plan approve`, which refuses it.
 - Baley's `bal-plan` differs from the Cadence step it was ported from in behaviour, not only in names, so a later port of that step has to keep these two drops.
 
 ### Follow-up
@@ -60,8 +61,8 @@ A failed or empty checker return is a failed order, never a pass. A checker that
 
 ### Option 1: port the session's skip and the ask
 
-`bal-plan` keeps Cadence's text as it stands, `plan-submit` gains a way to skip, and a session asks the owner whether to go on after an empty return. PLN-R16 and the Build 4 criterion are corrected to say so. This keeps the ported rule whole and gives a stuck check a way out. But an agent can bypass a gate the owner turned on, and because the ask reaches the owner through the session, the record could not show that the owner gave the answer. Fails the first two drivers, and the third when the session proceeds.
+`bal-plan` keeps Cadence's text as it stands, `plan-submit` gains a way to skip, and a session asks the owner whether to go on after an empty return. PLN-R16 is corrected to say so. This keeps the ported rule whole and gives a stuck check a way out. But an agent can bypass a gate the owner turned on, and because the ask reaches the owner through the session, the record could not show that the owner gave the answer. Fails the first two drivers, and the third when the session proceeds.
 
 ### Option 2: only the owner's effective `off` gate skips the checker (chosen)
 
-The skip is one setting the owner controls, read under each submit's own policy, and a check that produced nothing is retried until it produces something. Meets every driver. Costs the way out of a stuck check, which is now the owner's setting alone, and two listed differences from Cadence's step.
+The skip is one setting the owner controls, read under each submit's own policy, and a check that produced nothing is retried until it produces something. Meets every driver. Costs the way out of a stuck check, which now takes the owner's setting and a new submit, and two listed differences from Cadence's step.
