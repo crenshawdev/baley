@@ -6,26 +6,33 @@
 //! session reports could not launch or returned without a valid result.
 //! `work-order-retry` records the next attempt of a failed order as a new
 //! `work_order.issued`, its route resolved again under the current policy. A
-//! refusal records nothing. The `route` query on `baley_query` explains the
-//! route a role or an order runs under, and records nothing at all.
+//! retried checker order keeps its parent's inputs and so its binding, its
+//! result finding that binding through the chain's first order with no second
+//! `plan.check_issued`, and it runs only while the draft it checks is the
+//! phase's newest (D-10). A refusal records nothing. The `route` query on
+//! `baley_query` explains the route a role or an order runs under, and records
+//! nothing at all.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::path::Path;
 
 use baley_core::capture::is_blank;
+use baley_core::plan::{PLAN_KIND, phase_stream};
 use baley_core::policy::recorded::{
     POLICY_VIEW, PolicyJudgement, effective_payload, judge_policy, policy_key, recorded_policy,
 };
 use baley_core::policy::{AcceptedNames, CONFIG_UNAVAILABLE, EffectivePolicy, Host, Layer, Role};
+use baley_core::scope::{DRAFT_VIEW, STALE_DRAFT, draft_key};
 use baley_core::work_order::{
     ANSWERED, MATERIAL_UNAVAILABLE, NO_SUCH_WORK_ORDER, PENDING, Retry, RetryRefusal,
     START_ORDER_PENDING, START_SUBJECT, WORK_ORDER_NOT_FAILED, WORK_ORDER_NOT_PENDING,
     WORK_ORDER_RETRIED, WORK_ORDER_VIEW, judge_retry, subject_phase, subject_story, work_order_key,
 };
 use baley_store::{
-    Absence, Command, CommandKind, Document, Hash, InstructionEvidence, Ledger, ObservedDocument,
-    ProjectId, RETENTION_STREAM, RequestId, ServerCaller, StreamName, Views, request_digest,
+    Absence, Command, CommandKind, Decision, Document, Hash, InstructionEvidence, Ledger, Observed,
+    ObservedDocument, OutcomeKind, Payloads, ProjectId, RETENTION_STREAM, Recorded, RequestId,
+    ServerCaller, StaleInput, StoreError, StreamName, Transaction, Views, request_digest,
 };
 use baley_store_sqlite::SqliteStore;
 use schemars::JsonSchema;
@@ -43,12 +50,14 @@ use crate::mcp::prepare::{
     CHECKOUT_FACTS_UNAVAILABLE, LEDGER_UNAVAILABLE, Prepared, Stepped, WriteRequest,
     prepare_checked, prepare_settings_read,
 };
+use crate::planning::check_return::order_binding;
 use crate::planning::checker::{Refused, checker_absences, checker_order_pending, pending_checker};
 use crate::planning::order::{pending_planner, planner_absences, planner_order_pending};
 use crate::process::Process;
 use crate::refine::order::{
     analyzer_absences, analyzer_order_pending, pending_analyzer, refinement_state,
 };
+use crate::scope::approve::newest_query;
 use crate::scope::submit::{NOT_RECORDED_BUSY, start_once};
 use crate::work_order::fail::{self, Pending};
 use crate::work_order::issue::{self, Input, Issue, start_absences};
@@ -673,12 +682,16 @@ pub struct CheckedRetry {
     pub retry: Retry,
     /// The identities of the parent's instructions, in order.
     pub instructions: Vec<String>,
-    /// The parent's document and each earlier attempt's, and for an analyzer
-    /// order the documents its story's refinement state was read from, at the
-    /// sequence that last produced each.
+    /// The parent's document and each earlier attempt's, for an analyzer
+    /// order the documents its story's refinement state was read from, and
+    /// for a checker order the `phase_plan` document, at the sequence that
+    /// last produced each.
     pub documents: Vec<ObservedDocument>,
     /// The `retention` stream's version the releases were read up to.
     pub retention: u64,
+    /// For a checker order, the phase's newest plan draft the check read, by
+    /// digest and sequence, which the issue confirms.
+    pub newest_draft: Option<(Hash, u64)>,
 }
 
 /// A retry's check, run by preparation before admission and recording
@@ -700,8 +713,13 @@ pub struct CheckedRetry {
 /// `planner-order-pending` while another planner order of the phase is
 /// pending, so a phase keeps one live planner order (D-11), and then
 /// `checker-order-pending` while the phase's checker order is pending, since
-/// a blocker it returns issues the phase's revision order (D-07).
-pub fn retry_check<S: Ledger + Views + ?Sized>(
+/// a blocker it returns issues the phase's revision order (D-07). A phase's
+/// checker order is refused `stale-draft` at slot `work_order`, naming the
+/// newest draft, unless the draft its binding names is the phase's newest
+/// plan draft, so a check is not run again on a draft the owner can no longer
+/// approve (D-10), and then `planner-order-pending` while a planner order of
+/// the phase is pending, since a round-1 blocker's revision declares none.
+pub fn retry_check<S: Ledger + Views + Payloads + ?Sized>(
     store: &S,
     project: &ProjectId,
     id: &str,
@@ -774,6 +792,35 @@ pub fn retry_check<S: Ledger + Views + ?Sized>(
             return Err(checker_order_pending(phase, &order, Refused::Retry));
         }
     }
+    let mut newest_draft = None;
+    if let Some(phase) = checker_phase(&retry) {
+        let (binding, phase_plan) = order_binding(store, project, &parent.body, phase)?;
+        let newest = store
+            .find(
+                project,
+                DRAFT_VIEW,
+                &newest_query(PLAN_KIND, &phase_stream(phase)),
+            )
+            .map_err(|error| store_failed(&error, NOT_RECORDED_BUSY))?
+            .items
+            .first()
+            .and_then(draft_at)
+            .ok_or_else(order_unreadable)?;
+        if newest.0 != binding.plan_digest {
+            return Err(stale_checker_retry(id, newest.0));
+        }
+        let pending = pending_planner(store, project, phase)
+            .map_err(|error| store_failed(&error, NOT_RECORDED_BUSY))?;
+        if let Some(order) = pending {
+            return Err(planner_order_pending(
+                phase,
+                &order,
+                &format!("so no retry of {id} was issued"),
+            ));
+        }
+        documents.push(phase_plan);
+        newest_draft = Some(newest);
+    }
     let instructions = match parent.body.get("instructions") {
         Some(Value::Array(listed)) => listed
             .iter()
@@ -792,6 +839,7 @@ pub fn retry_check<S: Ledger + Views + ?Sized>(
         instructions,
         documents,
         retention: releases.version,
+        newest_draft,
     })
 }
 
@@ -812,6 +860,35 @@ fn planner_phase(retry: &Retry) -> Option<u32> {
     (retry.role == Role::Planner)
         .then(|| subject_phase(&retry.subject))
         .flatten()
+}
+
+/// The phase whose checker order `retry` re-issues, if it is one.
+fn checker_phase(retry: &Retry) -> Option<u32> {
+    (retry.role == Role::Checker)
+        .then(|| subject_phase(&retry.subject))
+        .flatten()
+}
+
+/// The digest and latest submission's sequence a `draft` document holds.
+fn draft_at(document: &Document) -> Option<(Hash, u64)> {
+    let body = &document.body;
+    let digest = body.get("digest").and_then(Value::as_str)?;
+    Some((Hash::from_hex(digest)?, body.get("seq")?.as_u64()?))
+}
+
+/// The refusal for a retry of checker order `id`, whose draft `newest`
+/// replaced.
+fn stale_checker_retry(id: &str, newest: Hash) -> Value {
+    let newest = newest.to_hex();
+    Refusal::new(
+        STALE_DRAFT,
+        format!(
+            "a newer plan draft, {newest}, replaced the draft checker work order {id} checks, so its check is not run again and no retry was issued"
+        ),
+    )
+    .slot("work_order")
+    .details(json!({"newest": newest}))
+    .value()
 }
 
 /// Order `id`'s document as a decision observes it.
@@ -891,9 +968,12 @@ fn retry_refused(id: &str, refusal: RetryRefusal) -> Value {
 /// retried start order also declares a start order's two absences, no
 /// pending start order and no start approval, so a start approved since the
 /// check makes it `ledger-busy` too, a retried analyzer order declares no
-/// pending analyzer order of its story, and a retried planner order no
-/// pending planner or checker order of its phase, so one issued since does
-/// the same.
+/// pending analyzer order of its story, and a retried planner or checker order
+/// no pending planner or checker order of its phase, so one issued since does
+/// the same. A retried checker order also confirms inside its transaction
+/// that the newest plan draft is still the one the check read, since a draft
+/// submitted since moves no document the check read once its own checker order
+/// has failed.
 pub fn issue_retry(
     store: &SqliteStore,
     command: &Command,
@@ -928,7 +1008,7 @@ pub fn issue_retry(
         start_absences()
     } else if let Some(story) = analyzer_story(retry) {
         analyzer_absences(story)
-    } else if let Some(phase) = planner_phase(retry) {
+    } else if let Some(phase) = planner_phase(retry).or_else(|| checker_phase(retry)) {
         let mut absences = planner_absences(phase);
         absences.extend(checker_absences(phase));
         absences
@@ -953,7 +1033,63 @@ pub fn issue_retry(
         documents: &checked.documents,
         further: &further,
     };
-    issue::answer(issue::record(store, command, Some(&issue)), store)
+    let recorded = match (checker_phase(retry), checked.newest_draft) {
+        (Some(phase), Some(newest)) => record_checker_retry(store, command, &issue, phase, newest),
+        _ => issue::record(store, command, Some(&issue)),
+    };
+    issue::answer(recorded, store)
+}
+
+/// Records `issue`, a retried checker order of phase `phase`, as
+/// `issue::record` records an order, once the phase's newest plan draft is
+/// confirmed to be `newest`.
+fn record_checker_retry(
+    store: &SqliteStore,
+    command: &Command,
+    issue: &Issue<'_>,
+    phase: u32,
+    newest: (Hash, u64),
+) -> Result<Recorded, StoreError> {
+    store.transact(command, &mut |tx| {
+        confirm_newest_draft(tx, phase, newest)?;
+        let mut receipt = Map::new();
+        receipt.insert("status".into(), json!("ok"));
+        receipt.extend(issue::issue_within(tx, issue, &command.recorded_at)?);
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: Value::Object(receipt),
+            sensitive: false,
+            observed: Observed {
+                absences: issue.absences.to_vec(),
+                documents: issue.documents.to_vec(),
+                ..Observed::default()
+            },
+            git: None,
+        })
+    })
+}
+
+/// The newest plan draft of phase `phase` is `newest`, by digest and
+/// sequence, never by time: two submissions can share a time.
+fn confirm_newest_draft(
+    tx: &mut dyn Transaction,
+    phase: u32,
+    newest: (Hash, u64),
+) -> Result<(), StoreError> {
+    let now = tx
+        .find(DRAFT_VIEW, &newest_query(PLAN_KIND, &phase_stream(phase)))?
+        .items
+        .first()
+        .and_then(draft_at);
+    if now != Some(newest) {
+        return Err(StoreError::Stale(StaleInput::Document {
+            view: DRAFT_VIEW.into(),
+            key: draft_key(newest.0),
+            seen: Some(newest.1),
+            now: now.map(|(_, seq)| seq),
+        }));
+    }
+    Ok(())
 }
 
 /// Serves one `work-order-retry` call for the session's `preparation`. The
@@ -2202,6 +2338,185 @@ pub(crate) mod tests {
             "operation",
             &json!({"set": later, "question": "q3"}),
         );
+        assert_eq!(head(&store), before);
+    }
+
+    /// C2b, the retry of the round-2 checker order C2.
+    const C2B: &str = "c2b0c2b0-2a2b-4c2d-8e2f-404142434445";
+    /// C3, a checker order of a later draft of phase 1.
+    const C3: &str = "c3c3c3c3-3a3b-4c3d-9e3f-404142434445";
+
+    /// The retry `checked` issued as `id` under P0 for Claude Code with N0,
+    /// under `request_id` at T8. Gives the answer.
+    fn retried_under_p0(
+        store: &SqliteStore,
+        checked: &CheckedRetry,
+        id: &str,
+        request_id: &str,
+    ) -> Value {
+        use crate::planning::fixtures::{n0, p0};
+        use crate::scope::fixtures::{T8, command};
+
+        let command = command(RETRY_COMMAND, request_id, 9, T8);
+        issue_retry(store, &command, checked, &p0(), Host::ClaudeCode, &n0(), id)
+    }
+
+    #[test]
+    fn a_recheck_retry_rebound_or_reading_the_current_draft_is_caught() {
+        use crate::planning::check_return::tests::{C2, V, c1_material, fw, lineage, returned};
+        use crate::planning::fixtures::*;
+        use crate::planning::order::tests::fail_by_hand;
+        use crate::planning::submit::tests::as_drafted;
+        use crate::refine::order::tests::{input_body, issued};
+        use crate::scope::fixtures::*;
+
+        let (_dir, store, _, _, _) = lineage(&pd(), 6);
+        let c2 = issued(&store)
+            .into_iter()
+            .find(|event| event.payload["id"] == C2)
+            .expect("C2 is issued");
+        fail_by_hand(&store, C2, R5);
+        let checked = retry_check(&store, &project(), C2).expect("C2 failed and nothing is live");
+        let receipt = retried_under_p0(&store, &checked, C2B, R6);
+        assert_eq!(receipt["status"], "ok", "{receipt}");
+        assert_eq!(receipt["work_order"], C2B, "{receipt}");
+
+        let c2b = issued(&store)
+            .into_iter()
+            .find(|event| event.payload["id"] == C2B)
+            .expect("C2b is issued");
+        assert_eq!(c2b.payload["request"], C2);
+        assert_eq!(c2b.payload["parent"], C2);
+        assert_eq!(c2b.payload["attempt"], 2);
+        assert_eq!(c2b.payload["role"], "checker");
+        assert_eq!(c2b.payload["inputs"], c2.payload["inputs"]);
+        assert_eq!(input_body(&store, &c2b, "original"), as_drafted(pl2()));
+        assert_eq!(input_body(&store, &c2b, "plan"), as_drafted(pl2r()));
+        let events = history(&store);
+        let issues = of_type(&events, "plan.check_issued");
+        assert_eq!(issues.len(), 1);
+        let material = issues[0].payload["material"].clone();
+
+        let back = returned(&store, C2B, vec![fw()], &p0(), V, R7, T9, 9);
+        assert_eq!(back["status"], "ok", "{back}");
+        assert_eq!(back["round"], 2, "{back}");
+        let events = history(&store);
+        let results = of_type(&events, "plan.checked");
+        assert_eq!(results.len(), 2);
+        let result = &results[1].payload;
+        assert_eq!(result["work_order"], C2B);
+        assert_eq!(result["scope"], "diff");
+        assert_eq!(result["scope_policy_version"], 6);
+        assert_eq!(result["material"], material);
+
+        // A fresh store, X2's body purged by the owner.
+        let (_dir, store, _, _, _) = lineage(&pd(), 6);
+        fail_by_hand(&store, C2, R5);
+        let gone = c1_material(&store)[0].body.hash;
+        purge_in(&store, &project(), gone, "the owner purged it");
+        let before = head(&store);
+        let refusal = retry_check(&store, &project(), C2).expect_err("the copy is purged");
+        assert_refused(
+            &refusal,
+            "material-unavailable",
+            "work_order",
+            &json!({"input": "original"}),
+        );
+        assert_eq!(head(&store), before);
+    }
+
+    /// Store C with O, then PL2 through the gated recording under P0 as C1,
+    /// failed by hand.
+    fn c1_failed() -> (tempfile::TempDir, SqliteStore) {
+        use crate::planning::check_return::tests::gated;
+        use crate::planning::checker::tests::C1;
+        use crate::planning::fixtures::*;
+        use crate::planning::order::tests::{O, fail_by_hand};
+        use crate::planning::submit::tests::order_o;
+        use crate::scope::fixtures::*;
+
+        let (dir, store) = store_c();
+        order_o(&store, R1);
+        let receipt = gated(&store, &pl2(), O, &p0(), C1, R2, T5);
+        assert_eq!(receipt["check"]["work_order"], C1, "{receipt}");
+        fail_by_hand(&store, C1, R3);
+        (dir, store)
+    }
+
+    #[test]
+    fn a_checker_retry_of_a_replaced_draft_is_caught() {
+        use crate::planning::check_return::tests::gated;
+        use crate::planning::checker::tests::C1;
+        use crate::planning::fixtures::*;
+        use crate::planning::order::tests::O;
+        use crate::scope::fixtures::*;
+
+        let (_dir, store) = c1_failed();
+        let replaced = gated(&store, &pl3(), O, &poff(), C3, R4, T6);
+        assert_eq!(replaced["status"], "ok", "{replaced}");
+        let before = head(&store);
+        let refusal = retry_check(&store, &project(), C1).expect_err("the draft is replaced");
+        assert_refused(
+            &refusal,
+            "stale-draft",
+            "work_order",
+            &json!({"newest": replaced["digest"]}),
+        );
+        assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_checker_retry_issued_over_a_draft_submitted_since_its_check_is_caught() {
+        use crate::planning::check_return::tests::gated;
+        use crate::planning::checker::tests::{C1, C9};
+        use crate::planning::fixtures::*;
+        use crate::planning::order::tests::{O, fail_by_hand};
+        use crate::scope::fixtures::*;
+
+        let (_dir, store) = c1_failed();
+        let checked = retry_check(&store, &project(), C1).expect("C1 checks the newest draft");
+        let submitted = gated(&store, &pl3(), O, &p0(), C3, R4, T6);
+        assert_eq!(submitted["check"]["work_order"], C3, "{submitted}");
+        fail_by_hand(&store, C3, R5);
+
+        let before = head(&store);
+        let answer = retried_under_p0(&store, &checked, C9, R6);
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
+        assert_eq!(head(&store), before);
+    }
+
+    #[test]
+    fn a_checker_retry_issued_beside_a_pending_planner_order_is_caught() {
+        use crate::planning::checker::tests::{C1, C9};
+        use crate::planning::order::tests::{O2, prepared};
+        use crate::scope::fixtures::*;
+
+        let order_o2 = |store: &SqliteStore, request_id: &str| {
+            let (command, o2) = prepared(store, &[1], O2, request_id, T7);
+            let receipt = crate::planning::order::issue(store, &command, &o2);
+            assert_eq!(receipt["status"], "ok", "{receipt}");
+        };
+
+        let (_dir, store) = c1_failed();
+        order_o2(&store, R4);
+        let before = head(&store);
+        let refusal = retry_check(&store, &project(), C1).expect_err("O2 is pending");
+        assert_refused(
+            &refusal,
+            "planner-order-pending",
+            "operation",
+            &json!({"work_order": O2}),
+        );
+        assert_eq!(head(&store), before);
+
+        let (_dir, store) = c1_failed();
+        let checked = retry_check(&store, &project(), C1).expect("no planner order is pending");
+        order_o2(&store, R4);
+        let before = head(&store);
+        let answer = retried_under_p0(&store, &checked, C9, R5);
+        assert_eq!(answer["status"], "failed", "{answer}");
+        assert_eq!(answer["code"], "ledger-busy", "{answer}");
         assert_eq!(head(&store), before);
     }
 }
