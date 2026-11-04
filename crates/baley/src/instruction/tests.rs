@@ -240,6 +240,11 @@ const SERVED_EVER: &[(&str, &str, &str)] = &[
         "6",
         "4a9f57bc22de3ae51a801e4ce2a1d572de20536b83acd555c4fcb80cb0dda17a",
     ),
+    (
+        "bal-plan",
+        "2",
+        "e91120957ab9d7678ceb18e68c62c8c5e7049c9d055d0c33b3fa958fd61fa7d3",
+    ),
 ];
 
 fn served() -> impl Iterator<Item = (&'static str, &'static Text)> {
@@ -1254,6 +1259,7 @@ fn a_plan_door_missing_a_step_it_owns_is_caught() {
         "work-order-fail",
         "work-order-retry",
         "plan-submit",
+        "plan-check-return",
         "bal-rounds",
         "Proposed split:",
         "over-capacity",
@@ -1275,7 +1281,6 @@ fn a_plan_door_naming_cadence_state_or_a_later_tasks_step_is_caught() {
         "STATE",
         "cursor",
         "PLAN.md",
-        "checker",
         "plan_check",
         "--gaps",
         "--inline",
@@ -1310,9 +1315,9 @@ fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
         panic!("bal-plan is served");
     };
     assert_eq!(entry.build, 4);
-    assert_eq!(text.version, "1");
+    assert_eq!(text.version, "2");
     let body = text.body;
-    // The members each call's served shape takes (D-04, D-08, D-13).
+    // The members each call's served shape takes (D-04, D-06, D-08, D-13).
     let phase_plan = call(body, "phase-plan");
     for member in [
         r#""request_id":"#,
@@ -1335,10 +1340,17 @@ fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
     ] {
         assert!(replace.contains(member), "{replace} lacks {member}");
     }
+    let check_return = call(body, "plan-check-return");
+    for member in [r#""request_id":"#, r#""work_order":"#, r#""findings":"#] {
+        assert!(
+            check_return.contains(member),
+            "{check_return} lacks {member}"
+        );
+    }
     let read = call(body, "plan-read");
     assert!(read.contains(r#""phase":"#), "{read}");
-    // Neither submission's shape nor the read's takes an instruction.
-    for refusing in [submit, replace, read] {
+    // No submission's shape, the return's or the read's takes an instruction.
+    for refusing in [submit, replace, check_return, read] {
         assert!(!refusing.contains("instruction"), "{refusing}");
     }
     for needle in [
@@ -1350,8 +1362,11 @@ fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
     ] {
         assert!(body.contains(needle), "the plan front door lacks {needle}");
     }
+    // `material-unavailable` is a refusal the text names, not an operation
+    // it calls unavailable.
+    let prose = body.replace("material-unavailable", "");
     for word in ["retired", "unavailable"] {
-        assert!(!body.contains(word), "the plan front door says {word}");
+        assert!(!prose.contains(word), "the plan front door says {word}");
     }
     // Every operation the text sends is served on its tool.
     let mut named = Vec::new();
@@ -1365,6 +1380,7 @@ fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
         "work-order-retry",
         "plan-submit",
         "plan-replace",
+        "plan-check-return",
     ];
     for name in applied {
         assert!(named.contains(&name), "the text sends no {name}");
@@ -1382,6 +1398,35 @@ fn a_bal_plan_text_naming_an_operation_shape_that_was_not_built_is_caught() {
             ),
             "{name} is not served on {}",
             tool.name()
+        );
+    }
+}
+
+#[test]
+fn a_plan_door_skipping_the_check_or_passing_an_empty_return_is_caught() {
+    // D-05: only the owner's `off` gate skips the checker, and a failed or
+    // empty return is a failed order. D-18: no rung climb and no warnings
+    // taken into the plan by the session. D-02: the exits from a refused
+    // re-check.
+    for needle in [
+        "plan-check-return",
+        r#""findings":"#,
+        "never a pass",
+        "checker-order-pending",
+        "third-round",
+        "recheck-truths-changed",
+        "material-unavailable",
+        "check-unfinished",
+    ] {
+        assert!(
+            plan::TEXT.contains(needle),
+            "the plan front door lacks {needle}"
+        );
+    }
+    for offered in ["--skip-check", "unchecked", "--attempt", "fold"] {
+        assert!(
+            !plan::TEXT.contains(offered),
+            "the plan front door offers {offered}"
         );
     }
 }
